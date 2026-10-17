@@ -139,7 +139,7 @@ Architecture details: [`docs/schema.md`](docs/schema.md).
 Regenerate `docs/img/readme-*.png` whenever the demo fixture changes —
 the easiest way is exporting through the app itself (Export → PNG).
 
-![2D editor with area badges](docs/img/readme-editor.png)
+![2D editor with area badges](docs/img/readme-hero.png)
 ![3D walk mode](docs/img/readme-viewer.png)
 
 ## Troubleshooting
