@@ -238,8 +238,8 @@
       "type": "bed",
       "roomId": "room-bed-nook",
       "position": [
-        7.3,
-        4.7
+        7.5,
+        4.5
       ],
       "rotationDeg": 90,
       "footprint": [
@@ -252,8 +252,8 @@
       "type": "bathtub",
       "roomId": "room-bed-nook",
       "position": [
-        6.1,
-        5.3
+        7.6,
+        4.05
       ],
       "rotationDeg": 0,
       "footprint": [
