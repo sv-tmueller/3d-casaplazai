@@ -1,10 +1,11 @@
+import type { Pt } from '../../src/editor/geom';
 /**
  * Unit tests for EditorStore: reducer commands, undo/redo, dirty flag.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EditorStore, emptyPlan } from '../../src/editor/store';
 
-const RECT_A = [[0, 0], [4, 0], [4, 3], [0, 3]];
+const RECT_A: Pt[] = [[0, 0], [4, 0], [4, 3], [0, 3]];
 
 function emptyState() {
   return emptyPlan();
@@ -55,7 +56,7 @@ describe('EditorStore basics', () => {
     for (let i = 0; i < 5; i++) {
       store.dispatch({
         type: 'drawRoom',
-        polygon: [[i * 10, 0], [(i + 1) * 10, 0], [(i + 1) * 10, 3], [i * 10, 3]],
+        polygon: [[i * 10, 0], [(i + 1) * 10, 0], [(i + 1) * 10, 3], [i * 10, 3]] as Pt[],
       });
     }
     const ids = store.getState().data.rooms.map((r) => r.id);
@@ -218,7 +219,7 @@ describe('undo/redo', () => {
     store2.dispatch({ type: 'drawRoom', polygon: RECT_A });
     store2.undo();
     expect(store2.canRedo()).toBe(true);
-    store2.dispatch({ type: 'drawRoom', polygon: [[10, 0], [12, 0], [12, 2], [10, 2]] });
+    store2.dispatch({ type: 'drawRoom', polygon: [[10, 0], [12, 0], [12, 2], [10, 2]] as Pt[] });
     expect(store2.canRedo()).toBe(false);
   });
 

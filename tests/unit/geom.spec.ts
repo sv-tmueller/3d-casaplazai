@@ -5,9 +5,12 @@ import { describe, expect, it } from 'vitest';
 import {
   centroid,
   clamp,
+  convexHull,
   distancePointSegment,
   nearestVertexWithin,
+  pointInPolygon,
   polygonsOverlapSAT,
+  projectPointOntoSegment,
   signedArea,
   snap,
   snapVec,
@@ -15,6 +18,7 @@ import {
   vecEq,
   vecScale,
   vecSub,
+  type Pt,
 } from '../../src/editor/geom';
 
 describe('vector basics', () => {
@@ -88,7 +92,7 @@ describe('distancePointSegment', () => {
 });
 
 describe('nearestVertexWithin', () => {
-  const verts = [
+  const verts: Pt[] = [
     [0, 0],
     [4, 0],
     [4, 4],
@@ -103,28 +107,66 @@ describe('nearestVertexWithin', () => {
   });
 });
 
+describe('projectPointOntoSegment', () => {
+  it('projects perpendicular feet and clamps to endpoints', () => {
+    expect(projectPointOntoSegment([1, 5], [0, 0], [2, 0])).toEqual([1, 0]);
+    expect(projectPointOntoSegment([-3, 0], [0, 0], [2, 0])).toEqual([0, 0]);
+    expect(projectPointOntoSegment([9, 1], [0, 0], [2, 0])).toEqual([2, 0]);
+  });
+});
+
+describe('pointInPolygon', () => {
+  const sq: Pt[] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+
+  it('inside/outside/boundary-adjacent', () => {
+    expect(pointInPolygon([2, 2], sq)).toBe(true);
+    expect(pointInPolygon([5, 2], sq)).toBe(false);
+    expect(pointInPolygon([-1, -1], sq)).toBe(false);
+  });
+
+  it('works for concave rings', () => {
+    const notch: Pt[] = [[0, 0], [4, 0], [4, 4], [3, 4], [3, 1], [1, 1], [1, 4], [0, 4]];
+    expect(pointInPolygon([2, 0.5], notch)).toBe(true);
+    expect(pointInPolygon([2, 3], notch)).toBe(false); // inside the notch
+  });
+});
+
+describe('convexHull', () => {
+  it('drops interior points and orders CCW', () => {
+    const pts: Pt[] = [[0, 0], [4, 0], [4, 4], [0, 4], [2, 2], [1, 1]];
+    const hull = convexHull(pts);
+    expect(hull).toHaveLength(4);
+    expect(signedArea(hull)).toBeGreaterThan(0);
+  });
+
+  it('handles triangle', () => {
+    const hull = convexHull([[0, 0], [4, 0], [0, 3]] as Pt[]);
+    expect(hull).toHaveLength(3);
+  });
+});
+
 describe('polygonsOverlapSAT', () => {
   it('detects separated rectangles', () => {
-    const a = [[0, 0], [2, 0], [2, 2], [0, 2]];
-    const b = [[5, 0], [7, 0], [7, 2], [5, 2]];
+    const a: Pt[] = [[0, 0], [2, 0], [2, 2], [0, 2]];
+    const b: Pt[] = [[5, 0], [7, 0], [7, 2], [5, 2]];
     expect(polygonsOverlapSAT(a, b)).toBe(false);
   });
 
   it('detects overlapping rectangles', () => {
-    const a = [[0, 0], [2, 0], [2, 2], [0, 2]];
-    const b = [[1, 1], [3, 1], [3, 3], [1, 3]];
+    const a: Pt[] = [[0, 0], [2, 0], [2, 2], [0, 2]];
+    const b: Pt[] = [[1, 1], [3, 1], [3, 3], [1, 3]];
     expect(polygonsOverlapSAT(a, b)).toBe(true);
   });
 
   it('touching edges do not count as overlap', () => {
-    const a = [[0, 0], [2, 0], [2, 2], [0, 2]];
-    const b = [[2, 0], [4, 0], [4, 2], [2, 2]];
+    const a: Pt[] = [[0, 0], [2, 0], [2, 2], [0, 2]];
+    const b: Pt[] = [[2, 0], [4, 0], [4, 2], [2, 2]];
     expect(polygonsOverlapSAT(a, b)).toBe(false);
   });
 
   it('handles triangles', () => {
-    const a = [[0, 0], [4, 0], [0, 3]];
-    const b = [[1, 1], [5, 1], [1, 4]];
+    const a: Pt[] = [[0, 0], [4, 0], [0, 3]];
+    const b: Pt[] = [[1, 1], [5, 1], [1, 4]];
     expect(polygonsOverlapSAT(a, b)).toBe(true);
   });
 });

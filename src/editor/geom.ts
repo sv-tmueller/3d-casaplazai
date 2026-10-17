@@ -96,6 +96,57 @@ export function nearestVertexWithin(
   return best;
 }
 
+/** Orthogonal projection of pt onto segment ab (clamped to the segment). */
+export function projectPointOntoSegment(pt: Pt, a: Pt, b: Pt): Pt {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return [a[0], a[1]];
+  const t = clamp(((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / lenSq, 0, 1);
+  return [a[0] + t * dx, a[1] + t * dy];
+}
+
+/** Ray-casting point-in-polygon test (works for concave rings). */
+export function pointInPolygon(pt: Pt, poly: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i += 1) {
+    const [xi, yi] = poly[i];
+    const [xj, yj] = poly[j];
+    const intersects =
+      yi > pt[1] !== yj > pt[1] &&
+      pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+/** Convex hull (Andrew monotone chain), CCW output, no collinear points. */
+export function convexHull(points: Pt[]): Pt[] {
+  if (points.length < 3) return points.slice();
+  const sorted = points.slice().sort((p, q) => (p[0] === q[0] ? p[1] - q[1] : p[0] - q[0]));
+  const cross = (o: Pt, a: Pt, b: Pt): number =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  const lower: Pt[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+  const upper: Pt[] = [];
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
 /**
  * Separating-Axis-Theorem overlap test between two CONVEX polygons.
  *
