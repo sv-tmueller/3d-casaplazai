@@ -49,8 +49,10 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     const b = mkBtn(label, extraCls);
     const hint = TOOL_HINTS[hintKey];
     if (hint) {
+      // Hint lives in `title` ONLY: an aria-label would REPLACE the
+      // button's accessible name (breaking getByRole('button', {name})
+      // locators in e2e specs and for screen-reader users).
       b.title = hint;
-      b.setAttribute('aria-label', `${label} — ${hint}`);
     }
     return b;
   };
