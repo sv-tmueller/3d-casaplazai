@@ -3,6 +3,7 @@
  * Package 5; this proves the mount-point wiring works end to end.
  */
 import { SCHEMA_VERSION } from '../shared/schema';
+import './../style.css';
 
 export function mountViewer(root: HTMLElement): void {
   root.textContent = '';

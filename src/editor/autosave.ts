@@ -34,6 +34,14 @@ export class AutosaveManager {
     this.persistPending();
   }
 
+  /**
+   * Persist synchronously NOW regardless of pending state (used by
+   * programmatic plan swaps, e.g. window.__casaplaza.loadPlan).
+   */
+  persistSync(plan: FloorplanData): void {
+    this.storage.setItem(AUTOSAVE_KEY, JSON.stringify(plan, null, 2));
+  }
+
   /** Drop the pending write without saving (e.g. plan invalidated). */
   stop(): void {
     if (this.timer !== null) {

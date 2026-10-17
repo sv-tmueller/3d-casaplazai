@@ -9,6 +9,7 @@ import { AutosaveManager } from './autosave';
 import {
   computeOverlaps,
   evaluateSnapCandidates,
+  finalizeRectangle,
   resizeHandleAt,
   roomAt,
   screenToWorld,
@@ -24,6 +25,7 @@ import { EditorStore, emptyPlan } from './store';
 import { vecAdd, vecSub } from './geom';
 
 const POLYGON_MIN_POINTS = 3;
+const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
 const INITIAL_SCALE = 80; // px per meter
 const ZOOM_STEP = 1.1;
 const MIN_ZOOM_SCALE = 12;
@@ -35,7 +37,7 @@ export function initEditorInteraction(
   autosave: AutosaveManager,
 ): void {
   const canvas = refs.canvas;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d'); // null in stub/happy-dom environments
   const cam: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
   let tool: ToolMode = 'select';
   let phase: InteractionPhase = { tag: 'idle' };
@@ -50,11 +52,12 @@ export function initEditorInteraction(
     canvas.style.height = `${rect.height}px`;
     canvas.width = Math.max(1, Math.round(rect.width * dpr));
     canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     repaint();
   }
 
   function repaint(): void {
+    if (!ctx) return; // stub environment: DOM/state still fully functional
     const rect = canvas.getBoundingClientRect();
     paintScene(ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId);
   }
@@ -158,6 +161,12 @@ export function initEditorInteraction(
       const cur = phase.tag === 'drawingPoly' ? phase : null;
       if (cur === null) {
         phase = { tag: 'drawingPoly', points: [worldPt], cursor: worldPt };
+      } else if (
+        dist(cur.points[0], worldPt) * cam.scale <= CLOSE_HIT_RADIUS_PX &&
+        cur.points.length >= POLYGON_MIN_POINTS
+      ) {
+        closePolygon();
+        return;
       } else {
         cur.points.push(worldPt);
         cur.cursor = worldPt;
@@ -188,6 +197,10 @@ export function initEditorInteraction(
       phase = { tag: 'idle' };
     }
   });
+
+  function dist(a: Pt, b: Pt): number {
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
 
   canvas.addEventListener('pointermove', (ev) => {
     const worldPt = evWorld(ev);
@@ -272,7 +285,26 @@ export function initEditorInteraction(
     repaint();
   }
 
-  canvas.addEventListener('pointerup', () => {
+  canvas.addEventListener('pointerup', (ev) => {
+    if (phase.tag === 'drawingRect' && ev.button === 0) {
+      const worldPt = evWorld(ev);
+      const minSide = Math.abs(worldPt[0] - phase.corner1[0]) * cam.scale;
+      const minSideY = Math.abs(worldPt[1] - phase.corner1[1]) * cam.scale;
+      if (Math.min(minSide, minSideY) < 2) {
+        // Degenerate sliver — ignore rather than create a hairline room.
+        phase = { tag: 'idle' };
+        repaint();
+        return;
+      }
+      const res = store.dispatch({
+        type: 'drawRoom',
+        polygon: finalizeRectangle(phase.corner1, worldPt),
+      });
+      if (!res.ok) flashMessage(refs, res.error);
+      phase = { tag: 'idle' };
+      repaint();
+      return;
+    }
     if (phase.tag === 'dragging' || phase.tag === 'resizing' || phase.tag === 'panning') {
       endDrag();
     }
