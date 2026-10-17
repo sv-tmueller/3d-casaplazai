@@ -1,0 +1,279 @@
+{
+  "schemaVersion": 1,
+  "units": "meters",
+  "wallHeight": 2.7,
+  "wallThickness": 0.24,
+  "rooms": [
+    {
+      "id": "room-living-room",
+      "name": "Living Room",
+      "polygon": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          5.4,
+          0.0
+        ],
+        [
+          5.4,
+          3.6
+        ],
+        [
+          0.0,
+          3.6
+        ]
+      ],
+      "floorTexture": "wood",
+      "wallsOverride": [
+        {
+          "segmentIndex": 2,
+          "height": 2.2
+        }
+      ]
+    },
+    {
+      "id": "room-kitchen",
+      "name": "Kitchen",
+      "polygon": [
+        [
+          5.4,
+          0.0
+        ],
+        [
+          8.6,
+          0.0
+        ],
+        [
+          8.6,
+          3.6
+        ],
+        [
+          5.4,
+          3.6
+        ]
+      ],
+      "floorTexture": "tile"
+    },
+    {
+      "id": "room-bed-nook",
+      "name": "Bed Nook",
+      "polygon": [
+        [
+          5.4,
+          3.6
+        ],
+        [
+          8.6,
+          3.6
+        ],
+        [
+          8.6,
+          5.8
+        ],
+        [
+          6.6,
+          5.8
+        ]
+      ],
+      "floorTexture": null
+    }
+  ],
+  "openings": [
+    {
+      "id": "door-front",
+      "roomId": "room-living-room",
+      "kind": "door",
+      "segmentIndex": 0,
+      "tCenter": 0.5,
+      "width": 0.95,
+      "sillHeight": 0.0,
+      "headHeight": 2.05
+    },
+    {
+      "id": "door-kitchen-shared",
+      "roomId": "room-living-room",
+      "kind": "door",
+      "segmentIndex": 1,
+      "tCenter": 0.55,
+      "width": 0.85,
+      "sillHeight": 0.0,
+      "headHeight": 2.05
+    },
+    {
+      "id": "door-kitchen-shared-mirror",
+      "roomId": "room-kitchen",
+      "kind": "door",
+      "segmentIndex": 3,
+      "tCenter": 0.45,
+      "width": 0.85,
+      "sillHeight": 0.0,
+      "headHeight": 2.05
+    },
+    {
+      "id": "door-bedroom",
+      "roomId": "room-kitchen",
+      "kind": "door",
+      "segmentIndex": 2,
+      "tCenter": 0.75,
+      "width": 0.85,
+      "sillHeight": 0.0,
+      "headHeight": 2.05
+    },
+    {
+      "id": "window-living-east",
+      "roomId": "room-living-room",
+      "kind": "window",
+      "segmentIndex": 2,
+      "tCenter": 0.4,
+      "width": 1.4,
+      "sillHeight": 0.9,
+      "headHeight": 2.3
+    },
+    {
+      "id": "window-living-west",
+      "roomId": "room-living-room",
+      "kind": "window",
+      "segmentIndex": 3,
+      "tCenter": 0.5,
+      "width": 1.4,
+      "sillHeight": 0.9,
+      "headHeight": 2.3
+    },
+    {
+      "id": "window-kitchen-north",
+      "roomId": "room-kitchen",
+      "kind": "window",
+      "segmentIndex": 2,
+      "tCenter": 0.35,
+      "width": 1.1,
+      "sillHeight": 1.0,
+      "headHeight": 2.3
+    },
+    {
+      "id": "window-bed-skylight",
+      "roomId": "room-bed-nook",
+      "kind": "window",
+      "segmentIndex": 1,
+      "tCenter": 0.5,
+      "width": 1.0,
+      "sillHeight": 1.2,
+      "headHeight": 2.4
+    }
+  ],
+  "furniture": [
+    {
+      "id": "fur-sofa-main",
+      "type": "sofa",
+      "roomId": "room-living-room",
+      "position": [
+        1.6,
+        0.65
+      ],
+      "rotationDeg": 0,
+      "footprint": [
+        2.2,
+        0.95
+      ]
+    },
+    {
+      "id": "fur-table-center",
+      "type": "table",
+      "roomId": "room-living-room",
+      "position": [
+        3.6,
+        1.9
+      ],
+      "rotationDeg": 0,
+      "footprint": [
+        1.4,
+        0.8
+      ]
+    },
+    {
+      "id": "fur-chair-left",
+      "type": "chair",
+      "roomId": "room-living-room",
+      "position": [
+        3.3,
+        2.6
+      ],
+      "rotationDeg": 20,
+      "footprint": [
+        0.48,
+        0.52
+      ]
+    },
+    {
+      "id": "fur-counter-strip",
+      "type": "counter",
+      "roomId": "room-kitchen",
+      "position": [
+        7.9,
+        0.42
+      ],
+      "rotationDeg": 0,
+      "footprint": [
+        1.2,
+        0.68
+      ]
+    },
+    {
+      "id": "fur-desk-narrow",
+      "type": "table",
+      "roomId": "room-kitchen",
+      "position": [
+        6.0,
+        0.5
+      ],
+      "rotationDeg": 0,
+      "footprint": [
+        0.6,
+        0.6
+      ]
+    },
+    {
+      "id": "fur-bed-double",
+      "type": "bed",
+      "roomId": "room-bed-nook",
+      "position": [
+        7.3,
+        4.7
+      ],
+      "rotationDeg": 90,
+      "footprint": [
+        1.6,
+        2.0
+      ]
+    },
+    {
+      "id": "fur-bathtub-corner",
+      "type": "bathtub",
+      "roomId": "room-bed-nook",
+      "position": [
+        6.1,
+        5.3
+      ],
+      "rotationDeg": 0,
+      "footprint": [
+        1.7,
+        0.75
+      ]
+    },
+    {
+      "id": "fur-toilet-halfbath",
+      "type": "toilet",
+      "roomId": "room-bed-nook",
+      "position": [
+        8.15,
+        5.35
+      ],
+      "rotationDeg": -90,
+      "footprint": [
+        0.38,
+        0.66
+      ]
+    }
+  ]
+}
