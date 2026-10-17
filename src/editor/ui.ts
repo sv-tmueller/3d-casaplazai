@@ -2,6 +2,7 @@
  * Toolbar/status/badge/message DOM for the editor pane. Kept dumb:
  * buildUi returns refs; controller.ts wires behavior.
  */
+import { FURNITURE_DEFAULTS } from './model/constants';
 
 export interface EditorDomRefs {
   toolbar: HTMLDivElement;
@@ -12,6 +13,10 @@ export interface EditorDomRefs {
   btnSelect: HTMLButtonElement;
   btnRect: HTMLButtonElement;
   btnPoly: HTMLButtonElement;
+  btnDoor: HTMLButtonElement;
+  btnWindow: HTMLButtonElement;
+  btnStamp: HTMLButtonElement;
+  palette: HTMLDivElement;
   btnUndo: HTMLButtonElement;
   btnRedo: HTMLButtonElement;
   btnDelete: HTMLButtonElement;
@@ -37,6 +42,14 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnSelect = mkBtn('Select', '');
   const btnRect = mkBtn('Rectangle', '');
   const btnPoly = mkBtn('Polygon', '');
+
+  // pkg 3 (issue #4): opening + furniture tools.
+  const sep2 = document.createElement('span');
+  sep2.className = 'toolbar-sep';
+  const btnDoor = mkBtn('Door', 'editor-door');
+  const btnWindow = mkBtn('Window', 'editor-window');
+  const btnStamp = mkBtn('Furnish', 'editor-stamp');
+
   const sep = document.createElement('span');
   sep.className = 'toolbar-sep';
   const btnUndo = mkBtn('Undo', 'editor-undo');
@@ -45,9 +58,22 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnDelete.disabled = true;
   btnUndo.disabled = true;
   btnRedo.disabled = true;
-  [btnSelect, btnRect, btnPoly, sep, btnUndo, btnRedo, btnDelete].forEach((el) =>
+  [
+    btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp, sep,
+    btnUndo, btnRedo, btnDelete,
+  ].forEach((el) =>
     toolbar.appendChild(el),
   );
+
+  // Furniture palette (visible only while the Furnish tool is armed).
+  const palette = document.createElement('div');
+  palette.className = 'editor-palette';
+  palette.hidden = true;
+  for (const [type, def] of Object.entries(FURNITURE_DEFAULTS)) {
+    const chip = mkBtn(def.label, 'palette-chip');
+    chip.dataset.stampType = type;
+    palette.appendChild(chip);
+  }
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'editor-canvas-wrap';
@@ -73,12 +99,13 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   statusBar.appendChild(status);
 
   canvasWrap.append(canvas, badge, msg);
-  pane.append(toolbar, canvasWrap, statusBar);
+  pane.append(toolbar, palette, canvasWrap, statusBar);
   parent.appendChild(pane);
 
   return {
     toolbar, canvas, badge, msg, status,
-    btnSelect, btnRect, btnPoly, btnUndo, btnRedo, btnDelete,
+    btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
+    btnUndo, btnRedo, btnDelete,
   };
 }
 

@@ -2,9 +2,23 @@
  * Canvas painter: grid, rooms, selection affordances, in-progress shapes.
  * All drawing happens in CSS-pixel space; world→screen via the camera.
  */
-import type { FloorplanData, Room } from '../shared/schema';
-import { finalizeRectangle, resizeHandlesOf, worldToScreen, type Camera, type InteractionPhase } from './controller';
+import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
+import {
+  finalizeRectangle,
+  resizeHandlesOf,
+  worldToScreen,
+  type Camera,
+  type GhostPreview,
+  type InteractionPhase,
+} from './controller';
 import type { Pt } from './geom';
+import { itemCorners } from './model/furniture';
+import { pointAtT, roomSegments, segmentNormal } from './model/openings';
+
+export interface SegHighlight {
+  roomId: string;
+  segIndex: number;
+}
 
 const BG = '#fafafa';
 const GRID_MINOR = '#ececec';
@@ -25,6 +39,8 @@ export function paintScene(
   plan: FloorplanData,
   phase: InteractionPhase,
   hoverRoomId: string | null,
+  ghost: GhostPreview | null = null,
+  segHighlight: SegHighlight | null = null,
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
@@ -36,6 +52,20 @@ export function paintScene(
     drawRoomShape(ctx, cam, room, isSelected(phase, room), hoverRoomId === room.id);
   }
 
+  // pkg 3 (issue #4): openings belong to rooms; draw AFTER room strokes so
+  // gaps/leaves read on top of the wall lines.
+  for (const room of plan.rooms) {
+    for (const op of plan.openings.filter((o) => o.roomId === room.id)) {
+      drawOpening(ctx, cam, room, op);
+    }
+  }
+
+  for (const f of plan.furniture) {
+    drawStamp(ctx, cam, f, phase.tag === 'idle' && false);
+  }
+
+  if (segHighlight) drawSegHighlight(ctx, cam, plan, segHighlight);
+  if (ghost) drawGhost(ctx, cam, ghost);
   drawInProgress(ctx, cam, phase);
 }
 
@@ -166,3 +196,152 @@ function drawInProgress(
 }
 
 export type { Pt };
+
+/* ==================== pkg 3 painters (issue #4) ===================== */
+
+const DOOR_LEAF = '#8b5a2b';
+const SWING_ARC = 'rgba(139, 90, 43, 0.35)';
+const WINDOW_GLASS = '#7ec8ff';
+const FURNITURE_FILL = '#cfd8dc';
+const FURNITURE_STROKE = '#546e7a';
+const GHOST_OK = 'rgba(46, 204, 113, 0.5)';
+const GHOST_BAD = 'rgba(231, 76, 60, 0.5)';
+const SEG_HIGHLIGHT = '#f1c40f';
+
+/** One opening row: gap + (door: jambs/leaf/swing arc | window: glass bar). */
+function drawOpening(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  room: Room,
+  op: FloorplanData['openings'][number],
+): void {
+  const seg = roomSegments(room)[op.segmentIndex];
+  if (!seg || seg.length === 0) return;
+
+  const half = op.width / (2 * seg.length);
+  const pStart = pointAtT(seg, Math.max(0, op.tCenter - half));
+  const pEnd = pointAtT(seg, Math.min(1, op.tCenter + half));
+  const a = worldToScreen(cam, pStart);
+  const b = worldToScreen(cam, pEnd);
+
+  if (op.kind === 'door') {
+    // Jambs: dark posts bracketing the gap.
+    ctx.strokeStyle = DOOR_LEAF;
+    ctx.lineWidth = 3;
+    for (const [ja, jb] of [
+      [pStart, pointAtT(seg, Math.max(0, op.tCenter - half - 0.04))] as const,
+      [pEnd, pointAtT(seg, Math.min(1, op.tCenter + half + 0.04))] as const,
+    ]) {
+      const jaS = worldToScreen(cam, ja);
+      const jbS = worldToScreen(cam, jb);
+      ctx.beginPath();
+      ctx.moveTo(jaS[0], jaS[1]);
+      ctx.lineTo(jbS[0], jbS[1]);
+      ctx.stroke();
+    }
+
+    // Leaf: perpendicular into the room from the hinge at pStart.
+    const norm = segmentNormal(seg);
+    const leafPx = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const tip: [number, number] = [a[0] + norm[0] * leafPx, a[1] + norm[1] * leafPx];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(tip[0], tip[1]);
+    ctx.stroke();
+
+    // Swing arc from leaf-tip sweeping to the far jamb.
+    const ang0 = Math.atan2(norm[1], norm[0]);
+    ctx.strokeStyle = SWING_ARC;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(a[0], a[1], leafPx, ang0, ang0 + Math.PI / 2);
+    ctx.stroke();
+  } else {
+    // Window: thick cyan glass bar spanning the cutout.
+    ctx.strokeStyle = WINDOW_GLASS;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
+}
+
+/** Rotated furniture rect + icon letter at its centroid. */
+function drawStamp(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  f: FurnitureItem,
+  selected: boolean,
+): void {
+  const corners = itemCorners(f).map((p) => worldToScreen(cam, p));
+  ctx.fillStyle = FURNITURE_FILL;
+  ctx.strokeStyle = selected ? '#e67e22' : FURNITURE_STROKE;
+  ctx.lineWidth = selected ? 3 : 1.5;
+  ctx.beginPath();
+  corners.forEach((p, i) => (i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1])));
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  const ctr = worldToScreen(cam, f.position);
+  ctx.fillStyle = '#37474f';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(f.type.charAt(0).toUpperCase(), ctr[0], ctr[1]);
+}
+
+/** Yellow glow over the wall segment currently attracting the tool. */
+function drawSegHighlight(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  plan: FloorplanData,
+  hl: SegHighlight,
+): void {
+  const room = plan.rooms.find((r) => r.id === hl.roomId);
+  if (!room) return;
+  const seg = roomSegments(room)[hl.segIndex];
+  if (!seg) return;
+  const sa = worldToScreen(cam, seg.a);
+  const sb = worldToScreen(cam, seg.b);
+  ctx.strokeStyle = SEG_HIGHLIGHT;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(sa[0], sa[1]);
+  ctx.lineTo(sb[0], sb[1]);
+  ctx.stroke();
+}
+
+/** Magnetic ghost: sliding opening band or translucent stamp rect. */
+function drawGhost(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  ghost: GhostPreview,
+): void {
+  ctx.save();
+  const color = ghost.valid ? GHOST_OK : GHOST_BAD;
+  if ((ghost.kind === 'door' || ghost.kind === 'window') && ghost.seg && ghost.t !== undefined) {
+    const w = ghost.width ?? 0.9;
+    const ps = pointAtT(ghost.seg, Math.max(0, ghost.t - w / (2 * ghost.seg.length)));
+    const pe = pointAtT(ghost.seg, Math.min(1, ghost.t + w / (2 * ghost.seg.length)));
+    const a = worldToScreen(cam, ps);
+    const b = worldToScreen(cam, pe);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = ghost.kind === 'door' ? 8 : 6;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  } else if (ghost.kind === 'stamp' && ghost.pos && ghost.footprint) {
+    const fp = ghost.footprint;
+    const tl = worldToScreen(cam, [ghost.pos[0] - fp[0] / 2, ghost.pos[1] - fp[1] / 2]);
+    const br = worldToScreen(cam, [ghost.pos[0] + fp[0] / 2, ghost.pos[1] + fp[1] / 2]);
+    ctx.fillStyle = color;
+    ctx.fillRect(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]);
+  }
+  ctx.restore();
+}
