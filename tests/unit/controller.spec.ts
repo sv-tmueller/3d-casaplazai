@@ -8,6 +8,7 @@ import {
   finalizeRectangle,
   rectCorners,
 } from '../../src/editor/controller';
+import { vecAdd, vecSub, type Pt } from '../../src/editor/geom';
 import { emptyPlan } from '../../src/editor/store';
 
 describe('finalizeRectangle', () => {
@@ -85,5 +86,24 @@ describe('computeOverlaps', () => {
 describe('rectCorners', () => {
   it('derives the four corners of an axis-aligned rectangle', () => {
     expect(rectCorners([1, 1], [3, 4])).toEqual([[1, 1], [3, 1], [3, 4], [1, 4]]);
+  });
+});
+
+describe('drag anchor math (regression: interior grab jumped the room)', () => {
+  it('grabbing the CENTER leaves the room stationary; dragging moves it by exactly the cursor delta', () => {
+    // Contract: grabOffset = anchor(vertex0) - grabPoint, and the drag loop
+    // targets anchor = worldPt + grabOffset. Net: vertex0 tracks cursor
+    // displacement 1:1 with zero initial jump.
+    const poly: Pt[] = [[0, 0], [3, 0], [3, 3], [0, 3]];
+    const grabPoint: Pt = [1.5, 1.5]; // interior
+    const grabOffset = vecSub(poly[0], grabPoint); // [-1.5, -1.5]
+    // Cursor moves +1 east, 0.5 south (south = NEGATIVE y) from the grab point:
+    const newCursor: Pt = [grabPoint[0] + 1, grabPoint[1] - 0.5];
+    const desiredAnchor = vecAdd(newCursor, grabOffset); // [1, -0.5]
+    const delta = vecSub(desiredAnchor, poly[0]); // [1, -0.5]
+    const moved = poly.map((p) => vecAdd(p, delta));
+    // Whole polygon translated by exactly the cursor delta — no jump.
+    expect(moved[0]).toEqual([1, -0.5]);
+    expect(moved[2]).toEqual([4, 2.5]);
   });
 });

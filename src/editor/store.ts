@@ -149,6 +149,23 @@ export class EditorStore {
 
     const snapshot =
       this._gestureBase !== null ? this._gestureBase : JSON.stringify(this._state.data);
+    // During an active gesture, mutate WITHOUT stacking: the gesture's
+    // single base snapshot is pushed once, at endGesture().
+    if (this._gestureBase !== null) {
+      const res =
+        cmd.type === 'moveRoom'
+          ? reduceMoveRoom(this._state, cmd)
+          : cmd.type === 'resizeRoom'
+            ? reduceResizeRoom(this._state, cmd)
+            : (() => {
+                throw new Error('non-streamable command inside gesture');
+              })();
+      if (!res.ok) return res;
+      this.dirty = true;
+      this.notify();
+      return res;
+    }
+
     const res =
       cmd.type === 'drawRoom'
         ? reduceDrawRoom(this._state, cmd)
@@ -177,8 +194,21 @@ export class EditorStore {
     if (this._gestureBase === null) this._gestureBase = JSON.stringify(this._state.data);
   }
 
+  /**
+   * Close a pointer gesture: collapse the whole gesture into ONE undo
+   * step by pushing its base snapshot (captured at beginGesture) if the
+   * gesture actually mutated anything.
+   */
   endGesture(): void {
+    const base = this._gestureBase;
     this._gestureBase = null;
+    if (base === null) return;
+    const current = JSON.stringify(this._state.data);
+    if (current !== base) {
+      this._undoStack.push(base);
+      if (this._undoStack.length > MAX_UNDO_DEPTH) this._undoStack.shift();
+      this._redoStack = [];
+    }
   }
 
   /** Roll the plan back one snapshot; returns false when nothing to undo. */

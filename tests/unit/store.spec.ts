@@ -254,3 +254,49 @@ describe('undo/redo', () => {
     expect(listener).toHaveBeenCalled();
   });
 });
+
+describe('gesture-batched undo (regression: drag flooded the stack)', () => {
+  it('a 40-frame drag costs exactly ONE undo step', () => {
+    const store2 = new EditorStore(emptyState());
+    store2.dispatch({ type: 'drawRoom', polygon: RECT_A });
+    const id = store2.getState().data.rooms[0].id;
+    const beforeDrags = JSON.stringify(store2.getState().data);
+
+    store2.beginGesture();
+    for (let f = 0; f < 40; f++) {
+      store2.dispatch({ type: 'moveRoom', roomId: id, delta: [0.1, 0] });
+    }
+    store2.endGesture();
+
+    // One undo returns to pre-drag state.
+    expect(store2.undo()).toBe(true);
+    expect(JSON.stringify(store2.getState().data)).toBe(beforeDrags);
+    expect(store2.undo()).toBe(true); // undoes the draw
+    expect(store2.undo()).toBe(false); // drained
+  });
+
+  it('a no-motion gesture (mousedown/up) costs ZERO undo steps', () => {
+    const store2 = new EditorStore(emptyState());
+    store2.dispatch({ type: 'drawRoom', polygon: RECT_A });
+    store2.beginGesture();
+    store2.endGesture(); // nothing dispatched inside
+
+    // Stack holds ONLY the draw: one undo drains to empty, then stops.
+    expect(store2.undo()).toBe(true);
+    expect(store2.getState().data.rooms).toHaveLength(0);
+    expect(store2.undo()).toBe(false);
+  });
+
+  it('gesture mutation invalidates redo at gesture end', () => {
+    const store2 = new EditorStore(emptyState());
+    store2.dispatch({ type: 'drawRoom', polygon: RECT_A });
+    store2.undo();
+    expect(store2.canRedo()).toBe(true);
+    store2.redo();
+    const gid = store2.getState().data.rooms[0].id;
+    store2.beginGesture();
+    store2.dispatch({ type: 'moveRoom', roomId: gid, delta: [1, 1] });
+    store2.endGesture();
+    expect(store2.canRedo()).toBe(false);
+  });
+});

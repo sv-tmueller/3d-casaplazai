@@ -209,7 +209,9 @@ export function initEditorInteraction(
         }
       }
       store.dispatch({ type: 'setSelection', roomId: clicked.id });
-      const grabOffset = vecSub(worldPt, clicked.polygon[0]);
+      // Offset from the grabbed POINT to the room's anchor vertex, so the
+      // vertex follows the cursor exactly (no teleport on first move).
+      const grabOffset = vecSub(clicked.polygon[0], worldPt);
       store.beginGesture();
       phase = { tag: 'dragging', grabOffset, selectedRoomId: clicked.id };
       canvas.setPointerCapture(ev.pointerId);
@@ -252,6 +254,8 @@ export function initEditorInteraction(
       const rid = phase.selectedRoomId;
       const room = store.getState().data.rooms.find((r) => r.id === rid);
       if (!room) return;
+      // Cursor's target for the anchor vertex = worldPt + grabOffset
+      // (grabOffset = anchor - grabPoint at pickup).
       const desiredAnchor = vecAdd(worldPt, phase.grabOffset);
       const sn = evaluateSnapCandidates(
         store.getState().data,
