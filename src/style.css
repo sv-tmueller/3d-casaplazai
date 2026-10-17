@@ -1,0 +1,123 @@
+/* CasaPlazaIA — global + editor pane styling */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1f2937;
+  background: #ffffff;
+}
+
+/* ------------------------------ editor pane ------------------------------ */
+
+.pane {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: #d1d5db;
+  margin: 0 4px;
+}
+
+.editor-btn {
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.editor-btn.active:not(:disabled) {
+  background: #dbeafe;
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.editor-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.editor-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.editor-canvas-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.editor-canvas {
+  position: absolute;
+  inset: 0;
+  outline: none;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.overlap-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 8%);
+}
+
+.inline-msg {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 10%);
+}
+
+.editor-statusbar {
+  flex: none;
+  font-size: 12px;
+  color: #64748b;
+  padding: 2px 4px;
+}
