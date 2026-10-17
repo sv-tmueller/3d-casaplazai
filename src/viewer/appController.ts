@@ -211,15 +211,10 @@ export class ViewerApp {
     }
     const rig = new WalkRig(this.canvas, adapted, spawn.x, spawn.y, spawn.yaw);
     rig.onUnlock(() => {
-      showHint(this.hud, 'Click to walk');
-      // Gentle auto-relure attempt AFTER the rig's cooldown expires;
-      // the rig itself refuses premature locks.
-      const retry = this.setTimeoutFn(() => {
-        if (this.phase === 'walk' && this.walkCam === rig && !rig.locked) {
-          rig.requestLock();
-        }
-      }, 1100);
-      this.disposers.push(() => clearTimeout(retry));
+      // ESC (or any unlock) RETURNS TO OVERVIEW per issue #6's AC
+      // ("ESC returns to orbit, lock released cleanly"). The prior
+      // auto-relock behavior trapped the user in walk mode.
+      void this.requestMode('overview');
     });
 
     // Canvas click re-attempt locking (cooldown-gated inside the rig).
