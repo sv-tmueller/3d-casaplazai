@@ -129,6 +129,9 @@ export class ViewerApp {
     this.refreshAdaptation(true);
     reflectMode(this.hud, 'overview');
     this.seatRig('overview');
+    // Publish the debug seams BEFORE the first RAF so a probe arriving
+    // between start() and frame one never observes them missing.
+    this.publishDebugSeams(this.liveCamera());
     this.startLoop();
     this.armDebouncePoll();
   }
