@@ -16,6 +16,18 @@ import {
   signedArea,
 } from './geom';
 import type { Pt } from './geom';
+import { OPENING_DEFAULTS, ROTATION_STEP_DEG } from './model/constants';
+import {
+  clampPoseIntoRoom,
+  judgeContainment,
+} from './model/furniture';
+import {
+  pointAtT,
+  roomSegments,
+  segmentNormal,
+  validateOpeningCandidate,
+  type SegmentInfo,
+} from './model/openings';
 export const GRID_M = 0.5; // meter grid pitch
 export const SNAP_TOL_PX = 8;
 
@@ -33,6 +45,7 @@ export type InteractionPhase =
   | { tag: 'drawingPoly'; points: Pt[]; cursor: Pt }
   | { tag: 'dragging'; grabOffset: Pt; selectedRoomId: string }
   | { tag: 'resizing'; vertexIndex: number; selectedRoomId: string }
+  | { tag: 'draggingFurniture'; furnitureId: string }
   | { tag: 'panning'; startX: number; startY: number };
 
 /* ----------------------------- Coordinate transforms ---------------------- */
@@ -169,3 +182,190 @@ export function ensureCCW(poly: Pt[]): Pt[] {
 }
 
 export { snapVec };
+
+/* ====================== pkg 3 additions (issue #4) ======================= */
+
+/**
+ * Extended tool set: door/window anchor to wall segments; stamp places
+ * furniture from the palette. Extends (not replaces) pkg 2's trio.
+ */
+export type Pkg3ToolMode = 'door' | 'window' | 'stamp';
+export type AnyToolMode = ToolMode | Pkg3ToolMode;
+
+export interface GhostPreview {
+  kind: 'door' | 'window' | 'stamp';
+  seg?: SegmentInfo;
+  t?: number;
+  width?: number;
+  footprint?: Pt;
+  rotationDeg?: number;
+  pos?: Pt;
+  valid: boolean;
+}
+
+/** Result of attempting a stamp drop at a world point. */
+export type DropOutcome =
+  | { verdict: 'ok' }
+  | { verdict: 'warn'; snappedTo: Pt }
+  | { verdict: 'rejected'; reason: 'NO_ROOM_AT_POINT' | 'ITEM_DOES_NOT_FIT' };
+
+/**
+ * Attempt to place a furniture stamp of `dims` centred at `pos`,
+ * hosted by whatever room contains that point. Enforces the prevent/
+ * warn arms of AC4 WITHOUT mutating anything — the caller translates
+ * the outcome into a command + message.
+ */
+export function attemptDrop(
+  plan: FloorplanData,
+  dims: Pt,
+  pos: Pt,
+  rotationDeg = 0,
+): DropOutcome {
+  const host = plan.rooms.find((r) => pointInPolygon(pos, r.polygon));
+  if (!host) return { verdict: 'rejected', reason: 'NO_ROOM_AT_POINT' };
+  const v = judgeContainment(pos, dims, rotationDeg, host);
+  if (v === 'ok') return { verdict: 'ok' };
+  const solved = clampPoseIntoRoom(pos, dims, rotationDeg, host);
+  return solved
+    ? { verdict: 'warn', snappedTo: solved }
+    : { verdict: 'rejected', reason: 'ITEM_DOES_NOT_FIT' };
+}
+
+/**
+ * Adjudicate a DRAG TARGET for an existing item. Judged against the
+ * item's CURRENT room as host: a drag fully outside yields 'rejected'
+ * → the shell snaps back to the item's last committed position.
+ */
+export function judgeMoveTarget(
+  plan: FloorplanData,
+  itemId: string,
+  target: Pt,
+): { verdict: 'ok' | 'warn' | 'rejected'; resolved: Pt } {
+  const item = plan.furniture.find((f) => f.id === itemId);
+  if (!item) return { verdict: 'rejected', resolved: target };
+  const host =
+    plan.rooms.find((r) => r.id === item.roomId) ??
+    plan.rooms.find((r) => pointInPolygon(target, r.polygon));
+  if (!host) return { verdict: 'rejected', resolved: item.position };
+  const v = judgeContainment(target, item.footprint, item.rotationDeg, host);
+  if (v === 'ok') return { verdict: 'ok', resolved: target };
+  const solved = clampPoseIntoRoom(target, item.footprint, item.rotationDeg, host);
+  if (solved) return { verdict: 'warn', resolved: solved };
+  return { verdict: 'rejected', resolved: item.position };
+}
+
+/** Advance rotation by one R-key step (mod 360, CCW). */
+export function nextRotation(current: number): number {
+  return (((current + ROTATION_STEP_DEG) % 360) + 360) % 360;
+}
+
+/**
+ * Validate a prospective opening commitment BEFORE dispatching. Wraps
+ * validateOpeningCandidate with the room's concrete segment length and
+ * adds the same-segment clash check. Reason codes feed the inline msg.
+ */
+export function validateOpeningDraft(
+  plan: FloorplanData,
+  roomId: string,
+  segmentIndex: number,
+  kind: 'door' | 'window',
+  tCenter: number,
+  width: number,
+  sillHeight: number,
+  headHeight: number,
+): string | null {
+  const room = plan.rooms.find((r) => r.id === roomId);
+  if (!room) return 'UNKNOWN_ROOM';
+  const a = room.polygon[segmentIndex];
+  const b = room.polygon[(segmentIndex + 1) % room.polygon.length];
+  if (!a || !b) return 'UNKNOWN_SEGMENT';
+  const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const err = validateOpeningCandidate({
+    kind,
+    segLen,
+    tCenter,
+    width,
+    sillHeight,
+    headHeight,
+  });
+  if (err) return err;
+  const clashes = plan.openings.some(
+    (o) =>
+      o.roomId === roomId &&
+      o.segmentIndex === segmentIndex &&
+      Math.abs(o.tCenter - tCenter) * segLen <
+        (o.width + width) / 2 - 1e-9,
+  );
+  return clashes ? 'CLASHES_EXISTING_OPENING' : null;
+}
+
+/** Friendly copy for the inline banner, keyed by validator reason code. */
+export function openingErrorMessage(code: string, kind: string): string {
+  switch (code) {
+    case 'WIDTH_POSITIVE':
+      return `${kind}: width must be greater than zero.`;
+    case 'OVERFLOW_START':
+    case 'OVERFLOW_END':
+      return `${kind} is wider than this wall segment — bounced.`;
+    case 'TOO_CLOSE_TO_CORNER':
+      return `${kind} must keep 0.05 m clear of the wall corners — bounced.`;
+    case 'WINDOW_SILL_TOO_LOW':
+      return 'Windows need a sill of at least 0.02 m.';
+    case 'HEAD_BELOW_SILL':
+      return 'Head height must exceed the sill height.';
+    case 'NEGATIVE_SILL':
+      return 'Sill height cannot be negative.';
+    case 'BAD_HEAD_HEIGHT':
+      return 'Head height must be positive.';
+    case 'CLASHES_EXISTING_OPENING':
+      return 'Another opening already occupies this part of the wall.';
+    case 'UNKNOWN_ROOM':
+    case 'UNKNOWN_SEGMENT':
+      return 'Cannot attach this opening to that wall.';
+    default:
+      return `${kind} rejected (${code}).`;
+  }
+}
+
+export const FURNITURE_REJECT_COPY =
+  'That piece does not fit anywhere in this room — placement cancelled.';
+export const MOVE_SNAP_BACK_COPY =
+  'Piece pulled outside the room — snapped back to its last valid spot.';
+export const DROP_WARN_ADJUSTED_COPY =
+  'Placed, but adjusted inward to stay inside the room.';
+export const MOVE_WARN_CLAMPED_COPY =
+  'Moved, but clamped to keep the piece inside the room.';
+
+/** Recompute the ghost segment info for a hovering opening-tool cursor. */
+export function openingGhostFor(
+  plan: FloorplanData,
+  roomId: string,
+  segIndex: number,
+  t: number,
+  kind: 'door' | 'window',
+): GhostPreview {
+  const room = plan.rooms.find((r) => r.id === roomId);
+  const seg = room ? roomSegments(room)[segIndex] : undefined;
+  if (!room || !seg) return { kind, valid: false };
+  const defs = OPENING_DEFAULTS[kind];
+  const err = validateOpeningDraft(
+    plan, roomId, segIndex, kind, t, defs.width, defs.sillHeight, defs.headHeight,
+  );
+  return { kind, seg, t, width: defs.width, valid: err === null };
+}
+
+/** Swing-arc geometry for rendering a committed door. */
+export function doorSwingGeometry(
+  seg: SegmentInfo,
+  tCenter: number,
+  width: number,
+): { hinge: Pt; angleRad: number; radiusPxPerMeterRadius: number; normal: Pt } {
+  const hinge = pointAtT(seg, Math.max(0, Math.min(1, tCenter - width / (2 * seg.length))));
+  const far = pointAtT(seg, Math.min(1, tCenter + width / (2 * seg.length)));
+  return {
+    hinge,
+    angleRad: Math.atan2(far[1] - hinge[1], far[0] - hinge[0]),
+    radiusPxPerMeterRadius: width,
+    normal: segmentNormal(seg),
+  };
+}
