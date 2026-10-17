@@ -205,6 +205,15 @@ export class EditorStore {
     this.dirty = false;
   }
 
+  /** Swap in a wholly different plan (autosave hydration); resets history. */
+  replaceAll(plan: FloorplanData): void {
+    this._state = { data: clone(plan), selectedId: null };
+    this._undoStack = [];
+    this._redoStack = [];
+    this.dirty = false;
+    this.notify();
+  }
+
   subscribe(fn: (s: EditorState) => void): () => void {
     this._listeners.add(fn);
     return () => {
