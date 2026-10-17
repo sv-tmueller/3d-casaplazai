@@ -54,4 +54,12 @@ const el = document.getElementById('root');
 if (el instanceof HTMLElement) {
   mountEditor(el);
   console.log(`[casa-plazaia] editor mounted, schema v${SCHEMA_VERSION}`);
+
+  // pkg 6 (issue #7): fade out the static loading splash once the
+  // editor is live (CSS-transition exit, then drop from the DOM).
+  const splash = document.getElementById('splash');
+  if (splash) {
+    splash.classList.add('leaving');
+    window.setTimeout(() => splash.remove(), 400);
+  }
 }
