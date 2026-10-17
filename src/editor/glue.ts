@@ -31,6 +31,12 @@ import { itemCorners } from './model/furniture';
 import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene } from './render';
+import { paintMeasurementBadges } from './render/measurementBadges';
+import { totalLivableAreaM2, formatTotal } from './measures';
+import { renderOffscreen, downloadExport, type ExportScale } from './export';
+import { openExportDialog } from './exportDialog';
+import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
+import { closeHelpModal, toggleHelpModal } from './helpModal';
 import { EditorStore, emptyPlan } from './store';
 import { snapVec, vecAdd, vecSub } from './geom';
 
@@ -78,6 +84,9 @@ export function initEditorInteraction(
       ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId,
       ghost, hoverSeg,
     );
+    // pkg 6 (issue #7): measurement badges painted on TOP of the scene
+    // so they ride pan/zoom and appear in exports.
+    paintMeasurementBadges(ctx, cam, store.getState().data);
   }
 
   function snapToleranceWorld(): number {
@@ -117,6 +126,10 @@ export function initEditorInteraction(
     if (store.canUndo()) parts.push('undo ↺');
     if (store.canRedo()) parts.push('redo ↻');
     refs.status.textContent = parts.join(' · ');
+    // pkg 6 (issue #7): livable-area total + contextual tool hint.
+    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(st.data));
+    const hint = toolHint(tool) || GLOBAL_TOOL_HINT;
+    refs.status.title = hint;
   }
 
   function refreshBadgeAndButtons(): void {
@@ -189,6 +202,46 @@ export function initEditorInteraction(
   refs.btnRedo.addEventListener('click', () => {
     store.redo();
   });
+
+  /* ---------- pkg 6 (issue #7): export + help ---------- */
+
+  /**
+   * Offscreen re-render for export: draws the plan with the LIVE camera
+   * settings into a scratch 2D context at the requested pixel density.
+   * Badges included (white-bg composite handled by renderOffscreen).
+   */
+  function exportPainterFactory(scale: ExportScale) {
+    return (ctx: CanvasRenderingContext2D, w: number, h: number): void => {
+      const scaledCam: Camera = { ...cam, scale: cam.scale * scale };
+      paintScene(ctx, w, h, scaledCam, store.getState().data, { tag: 'idle' }, null);
+      paintMeasurementBadges(ctx, scaledCam, store.getState().data);
+    };
+  }
+
+  async function runExportFlow(): Promise<void> {
+    const choice = await openExportDialog(refs.btnExport);
+    if (!choice) return;
+    const rect = refs.canvas.getBoundingClientRect();
+    try {
+      const result = await renderOffscreen(
+        exportPainterFactory(choice.scale),
+        rect.width,
+        rect.height,
+        choice,
+      );
+      downloadExport(result);
+      flashMessage(refs, `Exported ${result.filename} (${result.width}\u00D7${result.height}).`);
+    } catch (err) {
+      flashMessage(refs, `Export failed: ${(err as Error).message}`);
+    }
+  }
+  refs.btnExport.addEventListener('click', () => {
+    void runExportFlow();
+  });
+
+  refs.btnHelp.addEventListener('click', () => toggleHelpModal());
+  initShortcuts();
+  window.addEventListener('beforeunload', closeHelpModal, { once: true });
 
   /**
    * Delete routes by WHAT is selected: furniture stamp → deleteFurniture,

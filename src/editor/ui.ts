@@ -3,6 +3,7 @@
  * buildUi returns refs; controller.ts wires behavior.
  */
 import { FURNITURE_DEFAULTS } from './model/constants';
+import { TOOL_HINTS } from './polish';
 
 export interface EditorDomRefs {
   toolbar: HTMLDivElement;
@@ -10,6 +11,9 @@ export interface EditorDomRefs {
   badge: HTMLDivElement;
   msg: HTMLDivElement;
   status: HTMLSpanElement;
+  statusTotal: HTMLSpanElement;
+  btnExport: HTMLButtonElement;
+  btnHelp: HTMLButtonElement;
   btnSelect: HTMLButtonElement;
   btnRect: HTMLButtonElement;
   btnPoly: HTMLButtonElement;
@@ -39,16 +43,45 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     return b;
   };
 
-  const btnSelect = mkBtn('Select', '');
-  const btnRect = mkBtn('Rectangle', '');
-  const btnPoly = mkBtn('Polygon', '');
+  // Issue #7: every tool button advertises its purpose via tooltip +
+  // aria-label sourced from the TOOL_HINTS registry.
+  const mkHintedBtn = (label: string, hintKey: string, extraCls = ''): HTMLButtonElement => {
+    const b = mkBtn(label, extraCls);
+    const hint = TOOL_HINTS[hintKey];
+    if (hint) {
+      // Hint lives in `title` ONLY: an aria-label would REPLACE the
+      // button's accessible name (breaking getByRole('button', {name})
+      // locators in e2e specs and for screen-reader users).
+      b.title = hint;
+    }
+    return b;
+  };
+
+  const btnSelect = mkHintedBtn('Select', 'select');
+  const btnRect = mkHintedBtn('Rectangle', 'rectangle');
+  const btnPoly = mkHintedBtn('Polygon', 'polygon');
 
   // pkg 3 (issue #4): opening + furniture tools.
   const sep2 = document.createElement('span');
   sep2.className = 'toolbar-sep';
-  const btnDoor = mkBtn('Door', 'editor-door');
-  const btnWindow = mkBtn('Window', 'editor-window');
-  const btnStamp = mkBtn('Furnish', 'editor-stamp');
+  const btnDoor = mkHintedBtn('Door', 'door', 'editor-door');
+  const btnWindow = mkHintedBtn('Window', 'window', 'editor-window');
+  const btnStamp = mkHintedBtn('Furnish', 'stamp', 'editor-stamp');
+
+  // pkg 6 (issue #7): export + help buttons.
+  const sep3 = document.createElement('span');
+  sep3.className = 'toolbar-sep';
+  const btnExport = mkBtn('Export', 'editor-export');
+  btnExport.title = 'Download the plan as a PNG or JPEG image.';
+  btnExport.setAttribute(
+    'aria-label',
+    'Export — Download the plan as a PNG or JPEG image.',
+  );
+  btnExport.setAttribute('data-testid', 'btn-export');
+  const btnHelp = mkBtn('? Help', 'editor-help');
+  btnHelp.title = 'Keyboard shortcuts';
+  btnHelp.setAttribute('aria-label', 'Keyboard shortcuts');
+  btnHelp.setAttribute('data-testid', 'btn-help');
 
   const sep = document.createElement('span');
   sep.className = 'toolbar-sep';
@@ -60,7 +93,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnRedo.disabled = true;
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp, sep,
-    btnUndo, btnRedo, btnDelete,
+    btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -96,14 +129,19 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   statusBar.className = 'editor-statusbar';
   const status = document.createElement('span');
   status.className = 'editor-status';
-  statusBar.appendChild(status);
+  const statusTotal = document.createElement('span');
+  statusTotal.className = 'editor-status-total';
+  statusTotal.setAttribute('data-testid', 'status-total');
+  statusTotal.textContent = 'Total: 0.0 m\u00B2';
+  statusBar.append(status, statusTotal);
 
   canvasWrap.append(canvas, badge, msg);
   pane.append(toolbar, palette, canvasWrap, statusBar);
   parent.appendChild(pane);
 
   return {
-    toolbar, canvas, badge, msg, status,
+    toolbar, canvas, badge, msg, status, statusTotal,
+    btnExport, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
     btnUndo, btnRedo, btnDelete,
   };

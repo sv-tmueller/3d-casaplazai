@@ -1,6 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
-const PORT = 4173;
+// Unique port + strictPort defeats the preview-squatting hazard (advisor
+// port-hygiene ruling: stray servers from other worktrees poisoned e2e runs).
+const PORT = 4199;
 
 export default defineConfig({
   testDir: './e2e',
@@ -9,9 +11,9 @@ export default defineConfig({
   reporter: [['line']],
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
   webServer: {
-    command: 'npm run preview',
+    command: 'npm run preview -- --port 4199 --strictPort',
     port: PORT,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
   use: {

@@ -260,3 +260,165 @@ body {
   white-space: pre;
 }
 
+
+/* --------------------- pkg 6 (issue #7) additions ------------------------ */
+
+.editor-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.editor-status-total {
+  font-weight: 700;
+  color: #1d4ed8;
+  font-variant-numeric: tabular-nums;
+}
+
+.help-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(15 23 42 / 40%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.help-modal-panel {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 18px 22px;
+  min-width: 340px;
+  max-width: 92vw;
+  max-height: 86vh;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 25%);
+}
+
+.help-modal-panel h2 {
+  font-size: 16px;
+  margin-bottom: 10px;
+}
+
+.help-modal-table td {
+  padding: 4px 10px 4px 0;
+  font-size: 13px;
+}
+
+.help-modal-table .help-keys {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #1d4ed8;
+}
+
+.help-modal-footer {
+  margin-top: 12px;
+  text-align: right;
+}
+
+.export-dialog-root {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.export-dialog-panel {
+  position: absolute;
+  left: var(--exp-anchor-x, 50%);
+  top: calc(var(--exp-anchor-y, 60%) + 6px);
+  transform: translateX(calc(-100% + 40px));
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 20%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.export-dialog-panel h3 {
+  font-size: 14px;
+}
+
+.export-fieldset {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 10px 8px;
+  display: flex;
+  gap: 12px;
+}
+
+.export-fieldset legend {
+  font-size: 11px;
+  color: #64748b;
+  padding: 0 4px;
+}
+
+.export-fieldset label {
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.export-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Loading splash (index.html static markup; removed by editor mount). */
+.loading-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  color: #334155;
+  font-family: system-ui, sans-serif;
+  transition: opacity 0.25s ease;
+}
+
+.loading-splash.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-splash-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.loading-splash-bar {
+  width: 160px;
+  height: 4px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.loading-splash-bar::after {
+  content: "";
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  animation: splash-slide 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes splash-slide {
+  from { transform: translateX(-30%); }
+  to { transform: translateX(190%); }
+}
