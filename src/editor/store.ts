@@ -69,7 +69,9 @@ function reduceDrawRoom(st: EditorState, cmd: { polygon: Pt[]; name?: string }):
 
   const room: Room = {
     id: makeId('room'),
-    name: cmd.name ?? '',
+    // Pkg 1's validator requires non-empty names; unnamed drawn rooms get a
+    // sequential default so autosave->reload hydration never discards them.
+    name: cmd.name != null && cmd.name.trim() !== '' ? cmd.name : `Room ${st.data.rooms.length + 1}`,
     polygon: ccw,
     floorTexture: null,
   };
