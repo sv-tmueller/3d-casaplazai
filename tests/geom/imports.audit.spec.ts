@@ -64,7 +64,10 @@ describe('imports audit — src/geom purity', () => {
     },
   );
 
-  it('package has no three dependency recorded', () => {
+  it('records three only for the viewer — src/geom stays three-free', () => {
+    // Updated for pkg 5: the viewer legitimately depends on three, but
+    // the COMPILER subtree (src/geom) must still never import it — that
+    // invariant is enforced by the source scans above, not the manifest.
     const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
@@ -75,6 +78,6 @@ describe('imports audit — src/geom purity', () => {
       ...(pkg.peerDependencies ?? {}),
       ...(pkg.devDependencies ?? {}),
     };
-    expect(Object.keys(all)).not.toContain('three');
+    expect(Object.keys(all)).toContain('three');
   });
 });

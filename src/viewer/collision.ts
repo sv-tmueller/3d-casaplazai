@@ -154,8 +154,6 @@ export function moveDisc(
   boxes: readonly CollisionBox[],
   _radius: number,
 ): MoveOutcome {
-  const stepDt = Math.max(dt, 0);
-
   let px = startX;
   let py = startY;
   let cvx = vx;
@@ -190,7 +188,6 @@ export function moveDisc(
       // Free path: consume the entire remaining displacement.
       px += dxRem;
       py += dyRem;
-      remainingDt = 0;
       break;
     }
 
