@@ -4,7 +4,7 @@
  * ViewerApp polls that bridge on the debounced cadence. Proves the
  * pkg-1 mount contract end to end with the real 3D pipeline.
  */
-import './../../style.css';
+import './../style.css';
 import { mountEditor } from '../editor/main';
 import { ViewerApp } from './appController';
 

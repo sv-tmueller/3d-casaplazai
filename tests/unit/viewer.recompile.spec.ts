@@ -54,7 +54,7 @@ interface Harness {
 
 function boot(initial: FloorplanData): Harness {
   const bridges: DataBridge[] = [{ getData: () => initial }];
-  let current = 0;
+  const current = 0;
   const bridgeAt = (): DataBridge | undefined => bridges[current];
 
   const timers: Array<{ at: number; cb: () => void }> = [];

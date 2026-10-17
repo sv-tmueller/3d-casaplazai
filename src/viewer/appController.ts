@@ -369,9 +369,40 @@ export class ViewerApp {
       if (this.renderer && this.sceneRoot && camera) {
         this.renderer.render(this.sceneRoot.scene, camera);
       }
+      this.publishDebugSeams(camera);
       this.rafCancel = this.scheduleTick(pump) ?? null;
     };
     this.rafCancel = this.scheduleTick(pump) ?? null;
+  }
+
+  /**
+   * Test/e2e seams (sanctioned by advisor decision: pkg 6 may rely on a
+   * small camera getter). Published each frame; nulls when inactive.
+   */
+  private publishDebugSeams(camera: Camera | null): void {
+    const w = window as unknown as Record<string, unknown>;
+    if (camera) {
+      w.__viewerCam = () => ({
+        posX: camera.position.x,
+        posY: camera.position.y,
+        posZ: camera.position.z,
+        eyeY: camera.position.y,
+      });
+    }
+    w.__viewerStats = () => ({
+      meshCount: this.countMeshes(),
+      slotCount: this.sceneRoot?.meshes.length ?? 0,
+      furnitureMeshCount: 0, // adapter emits collisions only, no furniture meshes
+    });
+  }
+
+  private countMeshes(): number {
+    if (!this.sceneRoot) return 0;
+    let n = 0;
+    this.sceneRoot.scene.traverse((obj) => {
+      if ((obj as { isMesh?: boolean }).isMesh === true) n++;
+    });
+    return n;
   }
 
   private liveCamera(): Camera | null {
