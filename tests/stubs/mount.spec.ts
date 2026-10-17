@@ -19,6 +19,12 @@ describe('entry stubs mount without crashing', () => {
     const root = document.getElementById('root')!;
     mountViewer(root);
     expect(root.children.length).toBeGreaterThan(0);
-    expect((root.firstElementChild as HTMLElement)?.dataset.screen).toBe('viewer');
+    // The viewer entry nests panes under a .stage wrapper; the pane
+    // contract is positional (any descendant), not first-child.
+    const pane = root.querySelector<HTMLElement>(
+      'section[data-screen="viewer"]',
+    );
+    expect(pane).not.toBeNull();
+    expect(pane?.dataset.screen).toBe('viewer');
   });
 });
