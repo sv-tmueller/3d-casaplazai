@@ -635,6 +635,14 @@ export function initEditorInteraction(
       return;
     }
     if (ev.key === 'Escape') {
+      // Abandoning an in-flight furniture drag MUST close the gesture,
+      // else the leaked _gestureBase makes later atomic commands throw
+      // ("non-streamable command inside gesture").
+      if (phase.tag === 'draggingFurniture') {
+        draggingFurnitureId = null;
+        endDrag();
+        return;
+      }
       phase = { tag: 'idle' };
       repaint();
       return;

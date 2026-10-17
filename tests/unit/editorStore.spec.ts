@@ -470,3 +470,33 @@ describe('reducer purity / store plumbing', () => {
     expect(store.getState().selectedId).toBe('kitchen');
   });
 });
+function planWithFurniture(): FloorplanData {
+  const p = plan();
+  p.furniture = [{
+    id: 'fx1', type: 'chair', roomId: 'living',
+    position: [2, 2], rotationDeg: 0, footprint: [0.45, 0.45],
+  }];
+  return p;
+}
+
+describe('escape-abandoned furniture drag (regression: stuck gesture base)', () => {
+  it('endGesture after abandoned drag restores normal atomic dispatch', () => {
+    const store = new EditorStore(planWithFurniture());
+    const fid = store.getState().data.furniture[0].id;
+    store.markSaved();
+
+    // Simulate the glue's abandon path: beginGesture, mutate, then
+    // endGesture WITHOUT committing further (what Escape now triggers).
+    store.beginGesture();
+    store.dispatch({ type: 'moveFurniture', furnitureId: fid, position: [2.5, 2] as Vec2 });
+    store.endGesture();
+
+    // A subsequent ATOMIC command must not throw.
+    expect(() =>
+      store.dispatch({ type: 'addOpening', opening: {
+        id: 'ox-regress', kind: 'door', roomId: 'living',
+        segmentIndex: 1, tCenter: 0.5, width: 0.9, sillHeight: 0, headHeight: 2.05,
+      } } as never),
+    ).not.toThrow();
+  });
+});
