@@ -142,6 +142,11 @@ export class ViewerApp {
     void this.swapModes(next);
   }
 
+  /** Test/observability seam: signature of the currently ACCEPTED plan. */
+  public currentSignature(): string | null {
+    return this.lastAcceptedSignature;
+  }
+
   private viewMode(): ViewMode {
     return this.phase === 'walk' ? 'walk' : 'overview';
   }
