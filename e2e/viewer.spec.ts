@@ -16,6 +16,23 @@ const BEDROOM_DOOR = { x: 6.2, y: 3.6 }; // kitchen seg2 reversed: 8.6 − 0.75 
 async function boot(page: Page): Promise<void> {
   await page.goto('/viewer');
   await page.locator('.viewer-gl-canvas').waitFor();
+  // Seed the demo apartment through the editor bridge (the editor boots
+  // empty; the viewer rightly refuses to render an empty plan).
+  const demo = await import('node:fs/promises');
+  const raw = await demo.readFile('demo/demo-apartment.json', 'utf8');
+  await page.evaluate((planJson) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__casaplaza.loadPlan(JSON.parse(planJson));
+  }, raw);
+  // Wait for the first poll cycle to accept + compose the scene.
+  await page.waitForFunction(
+    () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = (window as any).__viewerStats?.();
+      return typeof s === 'object' && s !== null && s.meshCount > 0;
+    },
+    { timeout: 15_000 },
+  );
   // Allow the first RAF + poll cycle to compose the scene.
   await page.waitForFunction(
     () => {
@@ -130,7 +147,7 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
     await page.locator('.viewer-gl-canvas').waitFor();
     await page.waitForTimeout(1500);
     const overlay = await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="perf-overlay"]');
+      const el = document.querySelector('[data-testid="hud-perf-panel"]');
       return el !== null ? el.textContent : null;
     });
     expect(overlay).toBeTruthy();
