@@ -122,6 +122,7 @@ export class EditorStore {
   private _undoStack: string[] = [];
   private _redoStack: string[] = [];
   private _listeners = new Set<(s: EditorState) => void>();
+  private _gestureBase: string | null = null;
   public dirty = false;
 
   constructor(initial: FloorplanData) {
@@ -144,7 +145,8 @@ export class EditorStore {
       return selRes;
     }
 
-    const snapshot = JSON.stringify(this._state.data);
+    const snapshot =
+      this._gestureBase !== null ? this._gestureBase : JSON.stringify(this._state.data);
     const res =
       cmd.type === 'drawRoom'
         ? reduceDrawRoom(this._state, cmd)
@@ -162,6 +164,19 @@ export class EditorStore {
     this.dirty = true;
     this.notify();
     return res;
+  }
+
+  /**
+   * Batch consecutive mutations into ONE undo step (an ongoing pointer
+   * drag streams moveRoom/resizeRoom frames). Call beginGesture() on
+   * pointerdown and endGesture() on pointerup/cancel.
+   */
+  beginGesture(): void {
+    if (this._gestureBase === null) this._gestureBase = JSON.stringify(this._state.data);
+  }
+
+  endGesture(): void {
+    this._gestureBase = null;
   }
 
   /** Roll the plan back one snapshot; returns false when nothing to undo. */

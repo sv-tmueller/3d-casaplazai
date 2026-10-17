@@ -10,6 +10,7 @@ import {
   computeOverlaps,
   evaluateSnapCandidates,
   finalizeRectangle,
+  GRID_M,
   resizeHandleAt,
   roomAt,
   screenToWorld,
@@ -22,7 +23,7 @@ import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene } from './render';
 import { EditorStore, emptyPlan } from './store';
-import { vecAdd, vecSub } from './geom';
+import { snapVec, vecAdd, vecSub } from './geom';
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -64,6 +65,20 @@ export function initEditorInteraction(
 
   function snapToleranceWorld(): number {
     return SNAP_TOL_PX / cam.scale;
+  }
+
+  /**
+   * Full snap policy: magnetize to foreign room geometry first; fall
+   * back to the 0.5 m grid when nothing attracts within tolerance.
+   */
+  function snapPoint(worldPt: Pt, excludeIds: string[] = []): Pt {
+    const geo = evaluateSnapCandidates(
+      store.getState().data,
+      worldPt,
+      snapToleranceWorld(),
+      excludeIds,
+    );
+    return geo.snapped ? geo.point : snapVec(worldPt, GRID_M);
   }
 
   /* ---------- pointer helpers ---------- */
@@ -152,7 +167,8 @@ export function initEditorInteraction(
     const worldPt = evWorld(ev);
 
     if (tool === 'rectangle') {
-      phase = { tag: 'drawingRect', corner1: worldPt, cursor: worldPt };
+      // Snap the anchor corner to grid/foreign geometry like any other gesture.
+      phase = { tag: 'drawingRect', corner1: snapPoint(worldPt), cursor: snapPoint(worldPt) };
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
@@ -160,7 +176,8 @@ export function initEditorInteraction(
     if (tool === 'polygon') {
       const cur = phase.tag === 'drawingPoly' ? phase : null;
       if (cur === null) {
-        phase = { tag: 'drawingPoly', points: [worldPt], cursor: worldPt };
+        const first = snapPoint(worldPt);
+        phase = { tag: 'drawingPoly', points: [first], cursor: first };
       } else if (
         dist(cur.points[0], worldPt) * cam.scale <= CLOSE_HIT_RADIUS_PX &&
         cur.points.length >= POLYGON_MIN_POINTS
@@ -168,8 +185,10 @@ export function initEditorInteraction(
         closePolygon();
         return;
       } else {
-        cur.points.push(worldPt);
-        cur.cursor = worldPt;
+        // Snap at COMMIT time so stored geometry matches the snapped preview.
+        const pushed = snapPoint(worldPt);
+        cur.points.push(pushed);
+        cur.cursor = pushed;
       }
       repaint();
       return;
@@ -183,6 +202,7 @@ export function initEditorInteraction(
       if (st.selectedId === clicked.id) {
         const handle = resizeHandleAt(worldPt, clicked, snapToleranceWorld());
         if (handle !== null) {
+          store.beginGesture();
           phase = { tag: 'resizing', vertexIndex: handle, selectedRoomId: clicked.id };
           canvas.setPointerCapture(ev.pointerId);
           return;
@@ -190,6 +210,7 @@ export function initEditorInteraction(
       }
       store.dispatch({ type: 'setSelection', roomId: clicked.id });
       const grabOffset = vecSub(worldPt, clicked.polygon[0]);
+      store.beginGesture();
       phase = { tag: 'dragging', grabOffset, selectedRoomId: clicked.id };
       canvas.setPointerCapture(ev.pointerId);
     } else {
@@ -216,19 +237,13 @@ export function initEditorInteraction(
     }
 
     if (phase.tag === 'drawingRect') {
-      phase = { ...phase, cursor: worldPt };
+      phase = { ...phase, cursor: snapPoint(worldPt) };
       repaint();
       return;
     }
 
     if (phase.tag === 'drawingPoly') {
-      const sn = evaluateSnapCandidates(
-        store.getState().data,
-        worldPt,
-        snapToleranceWorld(),
-        [],
-      );
-      phase = { ...phase, cursor: sn.point };
+      phase = { ...phase, cursor: snapPoint(worldPt) };
       repaint();
       return;
     }
@@ -281,13 +296,14 @@ export function initEditorInteraction(
   });
 
   function endDrag(): void {
+    store.endGesture();
     phase = { tag: 'idle' };
     repaint();
   }
 
   canvas.addEventListener('pointerup', (ev) => {
     if (phase.tag === 'drawingRect' && ev.button === 0) {
-      const worldPt = evWorld(ev);
+      const worldPt = snapPoint(evWorld(ev));
       const minSide = Math.abs(worldPt[0] - phase.corner1[0]) * cam.scale;
       const minSideY = Math.abs(worldPt[1] - phase.corner1[1]) * cam.scale;
       if (Math.min(minSide, minSideY) < 2) {
