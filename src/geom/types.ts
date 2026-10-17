@@ -6,7 +6,7 @@
  * directly; no DOM or THREE types appear anywhere in src/geom.
  */
 
-import type { FloorplanData, Vec2 } from '../shared/schema';
+import type { Vec2 } from '../shared/schema';
 
 /** Axis-aligned bounding box in 2D (xy plane), inclusive corners. */
 export interface Aabb {
