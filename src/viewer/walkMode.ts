@@ -1,20 +1,28 @@
 /**
- * Walk rig (issue #6): PointerLockControls mouse-look plus physics-
- * driven locomotion. Key intents feed a smoothed acceleration which
+ * Walk rig (issue #6): pointer-locked mouse-look plus physics-driven
+ * locomotion. Key intents feed a smoothed acceleration which
  * integrates through `moveDiscStepped` (player-radius-expanded AABBs
- * from the adapter). The scene is AUTHORED Z-UP (floors [x, y, 0],
- * walls extruded on +z) but three.js cameras are Y-up, so the rig
- * converts on the seams: plan-space (x, y) ↔ world-space (x, z↑, y)
- * and the eye height lifts the camera above the ground plane.
+ * from the adapter).
  *
- * Unlock handling: ESC (or any unlock) fires PLC's 'unlock' event,
- * reported to the controller ONCE per episode; a short cooldown then
- * suppresses accidental instant re-locks while the 'Click to walk'
- * affordance invites the user back in.
+ * AXIS CONVENTION (bug-history note): the scene is AUTHORED Z-UP
+ * (floors [x, y, 0], walls extruded on +z) — the same convention the
+ * orbit overview rig already uses (ortho camera hovers at z=120
+ * looking down). three.js's stock PointerLockControls hardcodes a
+ * Y-up euler ('YXZ' pitch on camera.rotation.x), which fights a Z-up
+ * camera: after the eye-height fix the view stared at the floor /
+ * spun wildly. We therefore keep PLC-style POINTER-LOCK plumbing
+ * (lock / unlock / cooldown UX) but roll our OWN Z-up look math:
+ *   yaw   = rotation about world +Z (mouse X)
+ *   pitch = rotation about the camera-local right axis (mouse Y)
+ * composed as quaternion multiply — no euler order traps.
+ *
+ * Unlock handling: ESC (or any unlock) fires the pointerlockchange
+ * event, reported to the controller ONCE per episode; a short
+ * cooldown then suppresses accidental instant re-locks while the
+ * 'Click to walk' affordance invites the user back in.
  */
 
-import { PerspectiveCamera, Vector3 } from 'three';
-import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
+import { PerspectiveCamera, Quaternion, Vector3 } from 'three';
 
 import { moveDiscStepped } from './collision';
 import {
@@ -25,6 +33,9 @@ import {
   VIEWER_PLAYER_RADIUS,
 } from './types';
 import type { AdaptedScene, CameraRig, ViewMode } from './types';
+
+/** Mouse sensitivity: radians of yaw/pitch per CSS pixel. */
+const LOOK_SENSITIVITY = 0.0024;
 
 /** Pitch limits for mouse-look (±85° feels right indoors). */
 export const CAM_PITCH_LIMIT_RAD = (85 * Math.PI) / 180;
@@ -65,8 +76,12 @@ const MAX_FRAME_DT = 0.1;
 /** One unlocked-pointer episode reported to the controller. */
 export type UnlockListener = () => void;
 
-/** Scratch vectors reused per frame (allocation discipline). */
+/** Scratch vectors/quaternions reused per frame (allocation discipline). */
 const FWD_SCRATCH = new Vector3();
+const Q_YAW_SCRATCH = new Quaternion();
+const Q_PITCH_SCRATCH = new Quaternion();
+const AXIS_Z = new Vector3(0, 0, 1);
+const LOCAL_RIGHT = new Vector3(1, 0, 0);
 
 /** Aspect ratio of a canvas, safe against zero-sized elements. */
 function aspectOf(canvas: HTMLCanvasElement): number {
@@ -76,28 +91,51 @@ function aspectOf(canvas: HTMLCanvasElement): number {
 }
 
 /**
- * Aim the camera along a plan-space yaw WITHOUT engaging PLC: plan yaw
- * measures CCW from +X in plan space; through the Z-up→Y-up mapping the
- * world forward becomes (cos yaw · x̂, 0, sin yaw · ŷ_plan).
+ * Lay the camera FLAT in the Z-up world and aim it along a plan-space
+ * yaw. A stock three.js camera looks along its local −Z; in a Z-up
+ * world "level gaze" means local −Z lies IN the XY plane and local +Y
+ * points UP (+Z world). Recipe: rotate −90° about local X (tips the
+ * forward from "down" to "north"), then rotate about WORLD Z by the
+ * yaw. Premultiplication applies the world-Z rotation OUTSIDE the
+ * tipping rotation — the correct order.
  */
 function seedYaw(camera: PerspectiveCamera, yawRad: number): void {
-  camera.rotation.order = 'YXZ';
-  camera.rotation.y = -yawRad;
-  camera.rotation.x = 0;
-  camera.updateProjectionMatrix();
+  // Tip +90° about local X: forward (0,0,−1) → +Y (north), camera-up
+  // (0,1,0) → +Z (world up — the −90° variant pointed up DOWN, flipping
+  // the image vertically: ceiling at the bottom of the screen).
+  const layFlat = new Quaternion().setFromAxisAngle(
+    new Vector3(1, 0, 0),
+    Math.PI / 2,
+  );
+  // Positive plan yaw = CCW from +X (east). North = yaw π/2, so spinning
+  // CLOCKWISE from north by (π/2 − yaw) lands on the yaw direction:
+  // equivalently rotate about world Z by (yaw − π/2).
+  const spin = new Quaternion().setFromAxisAngle(AXIS_Z, yawRad - Math.PI / 2);
+  camera.quaternion.copy(spin.multiply(layFlat));
 }
 
 /**
  * Walk-mode camera rig. Owns a perspective camera seated at
- * (discX, EYE_HEIGHT, discY) in world coords; the disc slides in PLAN
- * space under the collision resolver and is lifted back into world
- * space each frame.
+ * (discX, discY, EYE_HEIGHT) in Z-up world coords; the disc slides in
+ * PLAN space under the collision resolver and is lifted back into
+ * world space each frame.
  */
 export class WalkRig implements CameraRig {
   public readonly mode: ViewMode = 'walk';
 
   public readonly camera: PerspectiveCamera;
-  public readonly controls: PointerLockControls;
+
+  /**
+   * Pointer-lock surface shim. Stock PointerLockControls couples its
+   * euler math with locking; we need only the locking. This minimal
+   * adapter exposes lock()/unlock()/isLocked/event wiring directly on
+   * the canvas, so the rest of the app keeps speaking the same verbs.
+   */
+  public readonly controls: {
+    lock(): void;
+    unlock(): void;
+    readonly isLocked: boolean;
+  };
 
   /** Plan-space disc position (meters). */
   private posX: number;
@@ -143,11 +181,33 @@ export class WalkRig implements CameraRig {
     this.applyDiscToCamera();
     seedYaw(this.camera, yawRad);
 
-    this.controls = new PointerLockControls(this.camera, canvas);
-    this.controls.maxPolarAngle = Math.PI / 2 + CAM_PITCH_LIMIT_RAD;
-    this.controls.pointerSpeed = 1;
+    const ownerDoc = canvas.ownerDocument;
+    this.controls = {
+      lock: () => void canvas.requestPointerLock(),
+      unlock: () => {
+        if (ownerDoc.pointerLockElement === canvas) ownerDoc.exitPointerLock();
+      },
+      get isLocked(): boolean {
+        return ownerDoc.pointerLockElement === canvas;
+      },
+    };
 
-    this.controls.addEventListener('unlock', () => this.notifyUnlock());
+    const onPointerLockChange = (): void => {
+      if (!this.controls.isLocked) this.notifyUnlock();
+    };
+    ownerDoc.addEventListener('pointerlockchange', onPointerLockChange);
+    this.disposers.push(() =>
+      ownerDoc.removeEventListener('pointerlockchange', onPointerLockChange),
+    );
+
+    const onMouseMove = (ev: MouseEvent): void => {
+      if (!this.controls.isLocked) return;
+      this.applyLook(ev.movementX, ev.movementY);
+    };
+    ownerDoc.addEventListener('mousemove', onMouseMove);
+    this.disposers.push(() =>
+      ownerDoc.removeEventListener('mousemove', onMouseMove),
+    );
 
     this.bindKeys();
   }
@@ -173,14 +233,48 @@ export class WalkRig implements CameraRig {
     return { x: this.posX, y: this.posY };
   }
 
+  /** Current smoothed plan-space velocity (diagnostic/e2e seam). */
+  public get velocity(): { x: number; y: number } {
+    return { x: this.velX, y: this.velY };
+  }
+
   /** True while pointer lock is engaged. */
   public get locked(): boolean {
     return this.controls.isLocked;
   }
 
-  /** Seat the world camera from the plan-space disc pose. */
+  /** Seat the world camera from the plan-space disc pose.
+   * WORLD IS Z-UP (floors at z=0, ceilings at z=wallHeight): the eye
+   * height belongs on the THIRD coordinate (z). Position is reset
+   * every frame; the LOOK orientation is owned by the quaternion
+   * (applyLook/seedYaw), never clobbered here.
+   */
   private applyDiscToCamera(): void {
-    this.camera.position.set(this.posX, EYE_HEIGHT, this.posY);
+    this.camera.position.set(this.posX, this.posY, EYE_HEIGHT);
+  }
+
+  /** Z-up mouse-look: yaw about world +Z, pitch about local right. */
+  private applyLook(dxPx: number, dyPx: number): void {
+    const cam = this.camera;
+
+    // Yaw about the WORLD up axis (premultiply = outside current pose).
+    Q_YAW_SCRATCH.setFromAxisAngle(AXIS_Z, -dxPx * LOOK_SENSITIVITY);
+    cam.quaternion.premultiply(Q_YAW_SCRATCH);
+
+    // Pitch about the camera's local right axis (= local +X, since the
+    // camera was laid flat: local X stays in the ground plane).
+    const forward = new Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const horizLen = Math.hypot(forward.x, forward.y);
+    const curPitch = Math.atan2(forward.z, horizLen);
+    const wanted = curPitch - dyPx * LOOK_SENSITIVITY;
+    const applied = Math.max(
+      -CAM_PITCH_LIMIT_RAD,
+      Math.min(CAM_PITCH_LIMIT_RAD, wanted),
+    ) - curPitch;
+    if (Math.abs(applied) > 1e-9) {
+      Q_PITCH_SCRATCH.setFromAxisAngle(LOCAL_RIGHT, applied);
+      cam.quaternion.multiply(Q_PITCH_SCRATCH);
+    }
   }
 
   /** Bind WASD/arrow intents + shift sprint; released keys decay out. */
@@ -222,30 +316,31 @@ export class WalkRig implements CameraRig {
     // Desired heading in PLAN space derives from the camera's world
     // forward projected onto the ground plane.
     const forward = this.camera.getWorldDirection(FWD_SCRATCH);
-    const flen = Math.hypot(forward.x, forward.z);
+    const flen = Math.hypot(forward.x, forward.y);
     const normFx = flen > 1e-6 ? forward.x / flen : 0;
-    const normFz = flen > 1e-6 ? forward.z / flen : 0;
-    // Right = forward rotated −90° about world up.
-    const rx = -normFz;
-    const rz = normFx;
+    const normFy = flen > 1e-6 ? forward.y / flen : 0;
+    // Right = forward rotated +90° (clockwise seen from above, since
+    // plan yaw is CCW-positive): north (0,1) → east (1,0).
+    const rx = normFy;
+    const ry = -normFx;
 
     let ix = 0;
     let iy = 0;
     if (this.fwd) {
       ix += normFx;
-      iy += normFz;
+      iy += normFy;
     }
     if (this.back) {
       ix -= normFx;
-      iy -= normFz;
+      iy -= normFy;
     }
     if (this.right) {
       ix += rx;
-      iy += rz;
+      iy += ry;
     }
     if (this.left) {
       ix -= rx;
-      iy -= rz;
+      iy -= ry;
     }
     const ilen = Math.hypot(ix, iy);
     if (ilen > 1e-6) {

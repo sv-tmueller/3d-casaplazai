@@ -167,10 +167,10 @@ export function buildViewerScene(adapted: AdaptedScene): BuiltScene {
   lightGroup.name = 'lights';
   scene.add(lightGroup);
 
-  const hemi = new HemisphereLight(SKY_COLOR, GROUND_COLOR, 1.05);
+  const hemi = new HemisphereLight(SKY_COLOR, GROUND_COLOR, 1.35);
   lightGroup.add(hemi);
 
-  const sun = new DirectionalLight(SUN_COLOR, 1.6);
+  const sun = new DirectionalLight(SUN_COLOR, 2.1);
   sun.castShadow = true;
   sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
   fitShadowFrustum(sun, adapted.bounds);
