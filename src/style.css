@@ -18,6 +18,28 @@ body {
   background: #ffffff;
 }
 
+/* Issue #54 (Pkg 3): shared design tokens. Consumed by the toolbar,
+   palette chips and viewer HUD so both panes stay visually in sync. */
+:root {
+  --accent: #2563eb;
+  --accent-ink: #1d4ed8;
+  --accent-soft: #dbeafe;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-border: #fecaca;
+  --border: #cbd5e1;
+  --border-soft: #e2e8f0;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --text: #1f2937;
+  --text-muted: #64748b;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 8%);
+  --shadow-md: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
 /* ------------------------------ editor pane ------------------------------ */
 
 .pane {
@@ -38,33 +60,85 @@ body {
 
 .toolbar-sep {
   width: 1px;
-  height: 20px;
-  background: #d1d5db;
-  margin: 0 4px;
+  height: 22px;
+  background: var(--border-soft);
+  margin: 0 8px;
+  border-radius: 1px;
+  flex: none;
 }
 
 .editor-btn {
-  padding: 4px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.2;
   cursor: pointer;
   font-size: 13px;
+  transition: background 0.12s ease, border-color 0.12s ease,
+    color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.editor-btn.active:not(:disabled) {
-  background: #dbeafe;
-  border-color: #2563eb;
-  color: #1d4ed8;
+.editor-btn-icon {
+  flex: none;
+  display: block;
+}
+
+.editor-btn-label {
+  white-space: nowrap;
 }
 
 .editor-btn:hover:not(:disabled) {
-  background: #f1f5f9;
+  background: var(--surface-alt);
+  border-color: #94a3b8;
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-btn:active:not(:disabled) {
+  background: #e2e8f0;
+  box-shadow: none;
+  transform: translateY(1px);
+}
+
+.editor-btn.active:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  font-weight: 600;
+}
+
+.editor-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .editor-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Issue #54: destructive action gets a danger treatment. */
+.editor-delete:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.editor-delete:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Issue #54: palette chips reuse .editor-btn — keep them compact. */
+.palette-chip {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
 }
 
 .editor-canvas-wrap {
@@ -463,3 +537,61 @@ body {
 .hud-reticle[hidden] {
   display: none;
 }
+
+/* --------------------- pkg 3 (issue #54) facelift ------------------------ */
+
+/* Statusbar typography synced with the toolbar refresh. */
+.editor-statusbar {
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+.editor-status-total {
+  color: var(--accent-ink);
+}
+
+/* Viewer HUD adopts the shared tokens (CSS-only; hud.ts untouched). */
+.hud-toggle {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.hud-toggle:hover {
+  border-color: #94a3b8;
+}
+
+.hud-btn-walking {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.hud-hint {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.hud-toast {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.hud-toast-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.hud-perf-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
