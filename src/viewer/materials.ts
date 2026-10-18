@@ -232,8 +232,66 @@ export function repeatsFor(meters: number): number {
 
 /** Build the diffuse material for a bucket slot. */
 export function buildMaterial(
-  slot: 'wall' | 'ceiling' | TextureKind,
+  slot:
+    | 'wall'
+    | 'ceiling'
+    | TextureKind
+    | 'glass'
+    | 'windowFrame'
+    | 'furn-wood'
+    | 'furn-fabric'
+    | 'furn-porcelain'
+    | 'furn-laminate',
 ): MeshStandardMaterial {
+  if (slot === 'glass') {
+    // Translucent pane: pale blue, cheap transparency, no depth write
+    // (avoids sorting artifacts against wall rims). Must NOT cast
+    // shadows — sceneBuilder only enables castShadow for 'wall'.
+    const mat = new MeshStandardMaterial({
+      color: new Color('#aac8dd'),
+      transparent: true,
+      opacity: 0.25,
+      depthWrite: false,
+      roughness: 0.15,
+      metalness: 0,
+    });
+    return mat;
+  }
+  if (slot === 'windowFrame') {
+    return new MeshStandardMaterial({
+      color: new Color('#3a3f44'),
+      roughness: 0.6,
+      metalness: 0.1,
+    });
+  }
+  if (slot === 'furn-wood') {
+    return new MeshStandardMaterial({
+      map: getTexture('wood'),
+      roughness: 0.7,
+      metalness: 0,
+    });
+  }
+  if (slot === 'furn-fabric') {
+    return new MeshStandardMaterial({
+      color: new Color('#7a8ba0'),
+      roughness: 0.95,
+      metalness: 0,
+    });
+  }
+  if (slot === 'furn-porcelain') {
+    return new MeshStandardMaterial({
+      color: new Color('#f4f4f0'),
+      roughness: 0.25,
+      metalness: 0,
+    });
+  }
+  if (slot === 'furn-laminate') {
+    return new MeshStandardMaterial({
+      color: new Color('#c8b89a'),
+      roughness: 0.55,
+      metalness: 0,
+    });
+  }
   if (slot === 'wall') {
     const mat = new MeshStandardMaterial({
       map: getTexture('wall'),

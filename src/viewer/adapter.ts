@@ -16,8 +16,9 @@
 import {
   type CompiledScene,
   type MeshBuffer,
+  windowPaneRects,
 } from '../geom';
-import type { Room } from '../shared/schema';
+import type { Opening, Room } from '../shared/schema';
 import type {
   AdaptedScene,
   CollisionBox,
@@ -100,6 +101,8 @@ function avgCoordinate(positions: Float32Array, axis: number): number {
 export function adaptScene(
   compiled: CompiledScene,
   roomsById: ReadonlyMap<string, Room>,
+  openings?: Opening[],
+  wallThickness = 0.24,
 ): AdaptedScene {
   const wallBufs: MeshBuffer[] = [];
   const ceilBufs: MeshBuffer[] = [];
@@ -142,6 +145,26 @@ export function adaptScene(
   }
   pushBucket('ceiling', ceilBufs);
   pushBucket('wall', dedupeWalls(wallBufs));
+
+  // ---- Window dressing (issue #19): glass panes + frames -------------
+  // Emitted AFTER the wall bucket; doors are skipped entirely by
+  // windowPaneRects. Undefined openings ⇒ no new buckets (legacy
+  // callers keep their exact shape).
+  const dressGlass: MeshBuffer[] = [];
+  const dressFrames: MeshBuffer[] = [];
+  if (openings && openings.length > 0) {
+    const panes = windowPaneRects(planFromRooms(roomsById, openings));
+    const thickness = wallThickness;
+    for (const pane of panes) {
+      dressGlass.push(buildGlassQuad(pane));
+      dressFrames.push(...buildFrameSlabs(pane, thickness));
+    }
+  }
+  pushBucket('glass', dressGlass);
+  pushBucket('windowFrame', dressFrames);
+  // Dressing tris participate in the scene-wide count (e2e parity).
+  for (const buf of dressGlass) triangleCount += buf.indices.length / 3;
+  for (const buf of dressFrames) triangleCount += buf.indices.length / 3;
 
   const collisions: CollisionBox[] = compiled.collisions.map((c) => ({
     minX: c.minX,
@@ -194,3 +217,139 @@ export function sceneHasNaN(bucketPositions: Iterable<Float32Array>): boolean {
   }
   return false;
 }
+
+/* -------------------- window dressing (issue #19) ----------------------- */
+
+/**
+ * Minimal plan-shaped view for `windowPaneRects`: it only reads
+ * `openings` and the polygons of rooms hosting windows.
+ */
+function planFromRooms(
+  roomsById: ReadonlyMap<string, Room>,
+  openings: Opening[],
+): Parameters<typeof windowPaneRects>[0] {
+  const hostedIds = new Set(openings.map((o) => o.roomId));
+  return {
+    rooms: [...roomsById.values()]
+      .filter((r) => hostedIds.has(r.id))
+      .map((r) => ({ ...r })),
+    openings,
+  } as Parameters<typeof windowPaneRects>[0];
+}
+
+/** Build ONE glass quad filling the pane rect (2 triangles). */
+function buildGlassQuad(pane: {
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+  zBottom: number;
+  zTop: number;
+}): MeshBuffer {
+  const [[bx, by], [jx, jy]] = [pane.corners[0], pane.corners[1]];
+  const verts = [
+    bx, by, pane.zBottom,
+    jx, jy, pane.zBottom,
+    jx, jy, pane.zTop,
+    bx, by, pane.zTop,
+  ];
+  return {
+    positions: new Float32Array(verts),
+    // Quad fan: (0,1,2),(0,2,3) — both facets exist implicitly because
+    // sceneBuilder sets DoubleSide on every material.
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  };
+}
+
+/**
+ * Build FOUR thin frame slabs ringing the pane hole, inset INSIDE the
+ * wall thickness (members ~FRAME_MEMBER_M thick), each overlapping the
+ * hole edge slightly (FRAME_OVERLAP_M) so no coplanar z-fighting with
+ * the wall rims occurs.
+ */
+function buildFrameSlabs(pane: {
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+  zBottom: number;
+  zTop: number;
+}, thickness: number): MeshBuffer[] {
+  const MEMBER = FRAME_MEMBER_M;
+  const OVER = FRAME_OVERLAP_M;
+
+  const [[bx, by], [jx, jy]] = [pane.corners[0], pane.corners[1]];
+
+  // Tangential (along-wall) + normal (through-wall) unit vectors.
+  const wx = jx - bx;
+  const wy = jy - by;
+  const wLen = Math.hypot(wx, wy) || 1;
+  const ux = wx / wLen;
+  const uy = wy / wLen;
+  // Through-wall normal: rotate tangent 90°.
+  const nx = -uy;
+  const ny = ux;
+
+  const halfThick = thickness / 2;
+  // Frames occupy the INNER portion of the wall thickness, leaving
+  // OUTER_THICK of the outer skin uncovered on each side.
+  const OUTER_THICK = 0.04;
+  const innerHalf = Math.max(0.01, halfThick - OUTER_THICK);
+
+  const slabs: MeshBuffer[] = [];
+
+  /** Prism from tangential span [ta,tb] × normal span [na,nb] × z span. */
+  const prism = (
+    ta: number, tb: number,
+    na: number, nb: number,
+    za: number, zb: number,
+  ): MeshBuffer => {
+    const px = (t: number, n: number): [number, number] => [
+      bx + ux * t + nx * n,
+      by + uy * t + ny * n,
+    ];
+    const v = (t: number, n: number, z: number): number[] => {
+      const [qx, qy] = px(t, n);
+      return [qx, qy, z];
+    };
+    // 8 corners: (t,n) grid × z extremes.
+    const c00a = v(ta, na, za);
+    const c10a = v(tb, na, za);
+    const c11a = v(tb, nb, za);
+    const c01a = v(ta, nb, za);
+    const c00b = v(ta, na, zb);
+    const c10b = v(tb, na, zb);
+    const c11b = v(tb, nb, zb);
+    const c01b = v(ta, nb, zb);
+    const positions = new Float32Array([
+      ...c00a, ...c10a, ...c11a, ...c01a,
+      ...c00b, ...c10b, ...c11b, ...c01b,
+    ]);
+    const indices = new Uint32Array([
+      // bottom
+      0, 1, 2, 0, 2, 3,
+      // top
+      4, 6, 5, 4, 7, 6,
+      // sides
+      0, 4, 5, 0, 5, 1,
+      1, 5, 6, 1, 6, 2,
+      2, 6, 7, 2, 7, 3,
+      3, 7, 4, 3, 4, 0,
+    ]);
+    return { positions, indices };
+  };
+
+  const zBot = pane.zBottom;
+  const zTop = pane.zTop;
+  // Tangential coords measured from BL corner (t=0) to BR (t=wLen).
+
+  // LEFT member: hugs the hole's left edge, extends inward (overlap).
+  slabs.push(prism(-OVER, MEMBER, -innerHalf, innerHalf, zBot - OVER, zTop + OVER));
+  // RIGHT member: hugs the right edge.
+  slabs.push(prism(wLen - MEMBER, wLen + OVER, -innerHalf, innerHalf, zBot - OVER, zTop + OVER));
+  // BOTTOM member: spans between the side members.
+  slabs.push(prism(MEMBER - OVER, wLen - MEMBER + OVER, -innerHalf, innerHalf, zBot - OVER, zBot + MEMBER));
+  // TOP member: ditto at head height.
+  slabs.push(prism(MEMBER - OVER, wLen - MEMBER + OVER, -innerHalf, innerHalf, zTop - MEMBER, zTop + OVER));
+
+  return slabs;
+}
+
+/** Frame member thickness, meters (slim dark border). */
+const FRAME_MEMBER_M = 0.05;
+/** Frame overlap onto the hole edge, meters (anti-z-fighting). */
+const FRAME_OVERLAP_M = 0.008;

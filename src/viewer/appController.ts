@@ -266,7 +266,12 @@ export class ViewerApp {
     try {
       const validated = parseValidatedPlan(plan);
       const compiled = compilePlan(validated);
-      const adapted = adaptScene(compiled, roomsById(validated));
+      const adapted = adaptScene(
+        compiled,
+        roomsById(validated),
+        validated.openings,
+        validated.wallThickness,
+      );
 
       if (sceneHasNaN(adapted.buckets.map((b) => b.positions))) {
         throw new Error('compiled scene contains NaN coordinates');
@@ -445,7 +450,28 @@ export class ViewerApp {
       meshCount: this.countMeshes(),
       slotCount: this.sceneRoot?.meshes.length ?? 0,
       furnitureMeshCount: 0, // adapter emits collisions only, no furniture meshes
+      // Glass arrives as ONE merged bucket (draw-call budget); the
+      // meaningful window-parity figure is the QUAD count.
+      glassQuadCount: this.countSlotQuads('glass'),
     });
+  }
+
+  /** Count triangles/6 within meshes whose userData.slot matches. */
+  private countSlotQuads(slot: string): number {
+    if (!this.sceneRoot) return 0;
+    let quads = 0;
+    this.sceneRoot.scene.traverse((obj) => {
+      const mesh = obj as {
+        isMesh?: boolean;
+        userData?: { slot?: string };
+        geometry?: { index?: { count: number } | null };
+      };
+      if (mesh.isMesh === true && mesh.userData?.slot === slot) {
+        const idx = mesh.geometry?.index;
+        if (idx) quads += idx.count / 6;
+      }
+    });
+    return quads;
   }
 
   private countMeshes(): number {

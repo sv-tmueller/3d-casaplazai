@@ -44,7 +44,7 @@ async function boot(page: Page): Promise<void> {
 }
 
 test.describe.serial('viewer + walk mode (issue #6)', () => {
-  test('boots: meshes composed, >=3 material slots, no furniture meshes', async ({
+  test('boots: meshes composed, >=3 material slots, glass panes match windows', async ({
     page,
   }) => {
     await boot(page);
@@ -56,7 +56,16 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
     if (stats !== null) {
       expect(stats.meshCount).toBeGreaterThan(0);
       expect(stats.slotCount).toBeGreaterThanOrEqual(3);
-      expect(stats.furnitureMeshCount).toBe(0);
+      // Window dressing (issue #19): one glass mesh per window opening,
+      // derived from the fixture at runtime (never hardcoded).
+      const demoRaw = await import('node:fs/promises');
+      const plan = JSON.parse(
+        await demoRaw.readFile('demo/demo-apartment.json', 'utf8'),
+      );
+      const windows = plan.openings.filter(
+        (o: { kind: string }) => o.kind === 'window',
+      ).length;
+      expect(stats.glassQuadCount).toBe(windows);
     } else {
       await expect(page.locator('[data-testid="hud-mode-toggle"]')).toBeVisible();
     }
