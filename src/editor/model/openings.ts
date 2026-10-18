@@ -396,3 +396,70 @@ export function groupedPairs(plan: FloorplanData): Opening[][] {
   }
   return groups;
 }
+
+/* ------------------------------------------------------------------ *
+ * Drag-time helpers (issue #61) — pure, no DOM, no store            *
+ * ------------------------------------------------------------------ */
+
+/**
+ * Ids of the structural twin GROUP of an opening: the row itself plus
+ * every row paired to it by `groupedPairs` (the other face of the same
+ * physical cut on a shared wall). Returns just `{openingId}` when the
+ * row is unpaired. Used to keep the dragged pair out of its OWN clash
+ * set — otherwise every drag frame would flag the twin (architect trap
+ * for issue #61).
+ */
+export function openingTwinIds(plan: FloorplanData, openingId: string): Set<string> {
+  const ids = new Set<string>([openingId]);
+  for (const group of groupedPairs(plan)) {
+    if (group.some((o) => o.id === openingId)) {
+      for (const o of group) ids.add(o.id);
+      return ids;
+    }
+  }
+  return ids;
+}
+
+/**
+ * Clamp a drag parameter t so the cutout keeps EDGE_MARGIN_M clear of
+ * BOTH corners of a segment of length `segLen`. Inverts to t ∈
+ * [margin/L + w/2L, 1 − margin/L − w/2L]; a wall too short to host the
+ * cutout collapses to t = 0.5 (the fit validator then rejects it).
+ */
+export function clampTForDrag(segLen: number, width: number, t: number): number {
+  if (!(segLen > 0)) return 0.5;
+  const half = width / 2 / segLen;
+  const margin = EDGE_MARGIN_M / segLen;
+  const lo = margin + half;
+  const hi = 1 - margin - half;
+  if (lo > hi) return 0.5;
+  return Math.min(hi, Math.max(lo, t));
+}
+
+/**
+ * Self/twin-aware clash test for a DRAGGED opening (issue #61). True
+ * when the cutout at `tCenter` overlaps a DIFFERENT opening row of the
+ * SAME room/segment — the dragged row and its structural twin
+ * (`openingTwinIds`) are excluded, so a lone pair sliding along its own
+ * shared wall never red-flags itself. Pure — geometry only.
+ */
+export function openingDragClash(
+  plan: FloorplanData,
+  openingId: string,
+  tCenter: number,
+): boolean {
+  const dragged = plan.openings.find((o) => o.id === openingId);
+  if (!dragged) return false;
+  const room = plan.rooms.find((r) => r.id === dragged.roomId);
+  if (!room) return false;
+  const seg = roomSegments(room)[dragged.segmentIndex];
+  if (!seg || seg.length === 0) return false;
+  const excluded = openingTwinIds(plan, openingId);
+  const cand: Opening = { ...dragged, tCenter };
+  return plan.openings.some(
+    (o) =>
+      !excluded.has(o.id) &&
+      o.roomId === dragged.roomId &&
+      openingsOverlap(o, cand, seg.length),
+  );
+}

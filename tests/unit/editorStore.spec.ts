@@ -644,3 +644,65 @@ describe('resizeRoom dispatch (#53)', () => {
     expect(livingPoly(store)).toEqual(before);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Issue #61: moveOpening streams inside a gesture (whitelist)        *
+ * ------------------------------------------------------------------ */
+
+describe('gesture-streamed moveOpening (issue #61)', () => {
+  function doorStore(): { store: EditorStore; ids: [string, string] } {
+    const store = newStore();
+    store.dispatch({
+      type: 'addOpening',
+      roomId: 'living',
+      segmentIndex: 1,
+      tCenter: 0.55,
+      ...DOOR_BASE,
+    });
+    const ids = store.getState().data.openings.map((o) => o.id) as [string, string];
+    return { store, ids };
+  }
+
+  it('streams moveOpening without throwing "non-streamable"', () => {
+    const { store, ids } = doorStore();
+    store.beginGesture();
+    expect(() =>
+      store.dispatch({
+        type: 'moveOpening',
+        openingId: ids[0],
+        tCenter: 0.6,
+        syncPair: true,
+      }),
+    ).not.toThrow();
+    store.endGesture();
+  });
+
+  it('N streamed frames collapse to ONE undo step that restores both rows', () => {
+    const { store, ids } = doorStore();
+    const before = store.getState().data.openings.map((o) => o.tCenter);
+    store.beginGesture();
+    for (const t of [0.4, 0.45, 0.5, 0.55, 0.6]) {
+      store.dispatch({ type: 'moveOpening', openingId: ids[0], tCenter: t, syncPair: true });
+    }
+    store.endGesture();
+    // Twin stays in lockstep: both rows moved in one gesture.
+    const after = store.getState().data.openings;
+    expect(after).toHaveLength(2);
+    expect(after[0].tCenter).toBeCloseTo(0.6, 6);
+    // ONE undo restores the pre-gesture positions of BOTH rows.
+    expect(store.undo()).toBe(true);
+    expect(store.getState().data.openings.map((o) => o.tCenter)).toEqual(before);
+    // The NEXT undo is the addOpening step (not another drag frame), which
+    // proves the N streamed frames formed exactly one history entry.
+    expect(store.undo()).toBe(true);
+    expect(store.getState().data.openings).toHaveLength(0);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('an engaged-but-unstreamed gesture leaves no undo step', () => {
+    const store = newStore();
+    store.beginGesture();
+    store.endGesture(); // endGesture is a no-op when nothing changed
+    expect(store.canUndo()).toBe(false);
+  });
+});
