@@ -32,6 +32,10 @@ export interface HudHandles {
   fade: HTMLDivElement;
   toasts: HTMLDivElement;
   perfPanel: HTMLPreElement | null;
+  /** Centered walk-entry prompt (issue #30); hidden unless unlocked-walk. */
+  walkOverlay: HTMLDivElement;
+  /** Subtle center reticle shown while pointer-locked in walk mode. */
+  walkReticle: HTMLDivElement;
 }
 
 /** Callback invoked when the user toggles Walk/Overview. */
@@ -68,9 +72,45 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   toasts.dataset.testid = 'hud-toasts';
 
   root.append(bar, fade, toasts);
+
+  // Walk-entry affordances (issue #30): a prominent click prompt and a
+  // subtle reticle, both hidden by default; setWalkAffordances toggles.
+  const walkOverlay = document.createElement('div');
+  walkOverlay.className = 'hud-walk-overlay';
+  walkOverlay.dataset.testid = 'walk-entry-overlay';
+  walkOverlay.textContent = 'Click to walk';
+  walkOverlay.hidden = true;
+
+  const walkReticle = document.createElement('div');
+  walkReticle.className = 'hud-reticle';
+  walkReticle.dataset.testid = 'walk-reticle';
+  walkReticle.hidden = true;
+
+  root.append(walkOverlay, walkReticle);
   hostPane.appendChild(root);
 
-  return { root, toggleBtn, fade, toasts, perfPanel: null };
+  return {
+    root,
+    toggleBtn,
+    fade,
+    toasts,
+    perfPanel: null,
+    walkOverlay,
+    walkReticle,
+  };
+}
+
+/**
+ * Toggle the walk-entry affordances (issue #30): the centered overlay is
+ * up while walk mode is seated but unlocked; the reticle appears once
+ * pointer lock is held. One setter — no new callback machinery.
+ */
+export function setWalkAffordances(
+  handles: HudHandles,
+  state: { overlay: boolean; reticle: boolean },
+): void {
+  handles.walkOverlay.hidden = !state.overlay;
+  handles.walkReticle.hidden = !state.reticle;
 }
 
 /** Reflect the CURRENT mode on the toggle (shows the OTHER mode's name). */
