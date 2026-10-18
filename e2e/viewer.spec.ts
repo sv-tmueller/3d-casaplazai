@@ -173,16 +173,22 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
       await page.waitForTimeout(120);
       await page.keyboard.up('KeyS');
     }
-    await page.waitForTimeout(400);
+    // HARD latch: a seam regression must fail loud, not pass vacuously.
+    await page.waitForFunction(
+      () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const c = (window as any).__viewerCam?.() ?? null;
+        return c !== null && typeof c.discY === 'number';
+      },
+      { timeout: 10_000 },
+    );
     const cam = await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (window as any).__viewerCam?.() ?? null;
     });
-    if (cam !== null && typeof cam.discY === 'number') {
-      // Flush pin at the expanded boundary (±1 cm tolerance).
-      expect(cam.discY).toBeLessThanOrEqual(1.675 + 0.01);
-      expect(cam.discY).toBeGreaterThan(1.0); // actually traveled south
-    }
+    // Flush pin at the expanded boundary (±1 cm tolerance).
+    expect(cam!.discY).toBeLessThanOrEqual(1.675 + 0.01);
+    expect(cam!.discY).toBeGreaterThan(1.0); // actually traveled south
   });
 
   test('ESC returns to orbit and releases pointer lock', async ({ page }) => {

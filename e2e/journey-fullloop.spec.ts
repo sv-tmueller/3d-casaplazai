@@ -159,13 +159,6 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     [...document.querySelectorAll('.hud-toast')].map((t) => t.textContent),
   );
-  const hydrated = await page.evaluate(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__casaplaza.getData(),
-  );
-  console.log('HYDRATED_OPENINGS', JSON.stringify(hydrated.openings));
-  console.log('HYDRATED_FURNITURE', JSON.stringify(hydrated.furniture));
-  console.log('HYDRATED_ROOMS', hydrated.rooms.length);
   expect(
     spawnOk,
     `disc=(${(cam as { discX?: number }).discX},${(cam as { discY?: number }).discY}) toasts=${toastsSeen.join(' | ')}`,
