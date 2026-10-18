@@ -243,6 +243,19 @@ export class WalkRig implements CameraRig {
     return this.controls.isLocked;
   }
 
+  /**
+   * TEST-ONLY: face the rig along a plan-space yaw (radians, CCW from
+   * +X, so north = π/2) by seeding the camera quaternion. Exists solely
+   * for e2e steering (issue #27): headless pointer lock is unreliable,
+   * so the spec sets yaw directly instead of synthesizing mouse deltas.
+   * No gameplay path calls this — runtime yaw is owned by applyLook.
+   * The camera is laid flat and reseated at eye height every frame, so
+   * the seeded yaw persists across update() ticks.
+   */
+  public setYaw(yawRad: number): void {
+    seedYaw(this.camera, yawRad);
+  }
+
   /** Seat the world camera from the plan-space disc pose.
    * WORLD IS Z-UP (floors at z=0, ceilings at z=wallHeight): the eye
    * height belongs on the THIRD coordinate (z). Position is reset
