@@ -24,7 +24,12 @@ export const AUTOSAVE_DEBOUNCE_MS = 300;
 /** Undo-history cap (per advisor decision #3, applies to snapshots). */
 export const UNDO_STACK_CAP = 100;
 
-/** Max tolerance for paired-opening world-interval agreement, meters. */
+/**
+ * Tolerance for deciding two things are "the same physical wall",
+ * meters. Covers both paired-opening world-interval agreement and the
+ * vertex/segment pairing (<1 cm) that lets a shared wall drawn a few
+ * millimeters off still emit its mirrored companion row.
+ */
 export const PAIR_TOLERANCE_M = 0.01;
 
 /** Sensible default footprints [extentA, extentB] in meters. */

@@ -199,8 +199,18 @@ export interface PairRowSpec {
   tCenter: number;
 }
 
+/**
+ * Near-coincident vertex test for shared-wall pairing (issue #36).
+ * Uses PAIR_TOLERANCE_M so a wall drawn a few millimeters off still
+ * pairs — the SAME tolerance the store's vertsCoincide() applies, so
+ * derivePairRows() and the reducer agree on what "the same physical
+ * wall" means.
+ */
 function near(a: Vec2, b: Vec2): boolean {
-  return Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+  return (
+    Math.abs(a[0] - b[0]) < PAIR_TOLERANCE_M &&
+    Math.abs(a[1] - b[1]) < PAIR_TOLERANCE_M
+  );
 }
 
 /** Complementary tCenter for reversed traversal, clamped into [0,1]. */
