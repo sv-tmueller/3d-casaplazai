@@ -159,6 +159,17 @@ export function adaptScene(
       dressGlass.push(buildGlassQuad(pane));
       dressFrames.push(...buildFrameSlabs(pane, thickness));
     }
+    // ---- Door frames (issue #37) -------------------------------------
+    // Doors reuse the EXISTING windowFrame slot (charcoal #3a3f44) — the
+    // slot doc tolerates it; no new slot / materials / types edits. Door
+    // members are wider (DOOR_MEMBER_M) and slabs are deduped by xyz
+    // centroid so a doorway carved from BOTH adjoining rooms (the demo's
+    // living↔kitchen shared door) emits one set instead of two
+    // coincident, z-fighting sets.
+    const doorSlabs = doorRects(roomsById, openings).flatMap((rect) =>
+      buildFrameSlabs(rect, thickness, DOOR_MEMBER_M),
+    );
+    dressFrames.push(...dedupeWalls(doorSlabs));
   }
   pushBucket('glass', dressGlass);
   pushBucket('windowFrame', dressFrames);
@@ -355,8 +366,8 @@ function buildFrameSlabs(pane: {
   corners: [[number, number], [number, number], [number, number], [number, number]];
   zBottom: number;
   zTop: number;
-}, thickness: number): MeshBuffer[] {
-  const MEMBER = FRAME_MEMBER_M;
+}, thickness: number, member: number = FRAME_MEMBER_M): MeshBuffer[] {
+  const MEMBER = member;
   const OVER = FRAME_OVERLAP_M;
 
   const [[bx, by], [jx, jy]] = [pane.corners[0], pane.corners[1]];
@@ -438,5 +449,53 @@ function buildFrameSlabs(pane: {
 
 /** Frame member thickness, meters (slim dark border). */
 const FRAME_MEMBER_M = 0.05;
+/** Wider member for door casings, meters (issue #37). */
+const DOOR_MEMBER_M = 0.07;
 /** Frame overlap onto the hole edge, meters (anti-z-fighting). */
 const FRAME_OVERLAP_M = 0.008;
+
+/**
+ * Door-hole rectangle per `kind:'door'` opening (issue #37): same
+ * segment/tCenter math as `windowPaneRects` (geom/windowpanes.ts), but
+ * doors are selected instead of windows and the vertical span runs
+ * `sillHeight` (0) → `headHeight`. Local to the adapter: geom/ is
+ * outside Pkg 2's ownership.
+ */
+function doorRects(
+  roomsById: ReadonlyMap<string, Room>,
+  openings: Opening[],
+): Array<{
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+  zBottom: number;
+  zTop: number;
+}> {
+  const rects: ReturnType<typeof doorRects> = [];
+  for (const opening of openings) {
+    if (opening.kind !== 'door') continue;
+    const room = roomsById.get(opening.roomId);
+    if (!room) continue;
+    const poly = room.polygon;
+    const n = poly.length;
+    const idx = opening.segmentIndex;
+    if (n === 0 || idx < 0 || idx >= n) continue;
+    const a = poly[idx];
+    const b = poly[(idx + 1) % n];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len === 0) continue;
+    const ux = dx / len;
+    const uy = dy / len;
+    const centerDist = opening.tCenter * len;
+    const s0 = centerDist - opening.width / 2;
+    const s1 = centerDist + opening.width / 2;
+    const bl: [number, number] = [a[0] + ux * s0, a[1] + uy * s0];
+    const br: [number, number] = [a[0] + ux * s1, a[1] + uy * s1];
+    rects.push({
+      corners: [bl, br, [br[0], br[1]], [bl[0], bl[1]]],
+      zBottom: opening.sillHeight,
+      zTop: opening.headHeight,
+    });
+  }
+  return rects;
+}
