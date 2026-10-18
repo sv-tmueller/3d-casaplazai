@@ -746,6 +746,15 @@ export function initEditorInteraction(
   function handleOpeningDrag(ev: PointerEvent, worldPt: Pt): void {
     const d = dragOpening;
     if (!d) return;
+    // Reviewer should-fix (#61): a stale candidate (pointer released off-canvas
+    // before engage, capture only taken at engage) must not arm a button-less
+    // drag on the next hover — tear it down instead.
+    if ((ev.buttons & 1) === 0) {
+      dragOpening = null;
+      ghost = null;
+      repaint();
+      return;
+    }
     if (!d.engaged) {
       const s = evPos(ev);
       if (dist(s, d.startXY) < OPENING_DRAG_THRESHOLD_PX) return;
