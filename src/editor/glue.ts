@@ -8,18 +8,22 @@ import { validateFloorplan } from '../shared/schema';
 import { AutosaveManager } from './autosave';
 import {
   attemptDrop,
+  classifyCorner,
   computeOverlaps,
   evaluateSnapCandidates,
   finalizeRectangle,
   GRID_M,
+  HANDLE_HIT_PX,
   judgeMoveTarget,
   nextRotation,
   openingErrorMessage,
   resizeHandleAt,
+  resizeHandlesOf,
   roomAt,
   screenToWorld,
   SNAP_TOL_PX,
   validateOpeningDraft,
+  worldToScreen,
   type AnyToolMode,
   type Camera,
   type GhostPreview,
@@ -146,6 +150,8 @@ export function initEditorInteraction(
   let tool: AnyToolMode = 'select';
   let phase: InteractionPhase = { tag: 'idle' };
   let hoverRoomId: string | null = null;
+  /** Issue #53: index of the resize handle under the cursor, if any. */
+  let hoverHandle: number | null = null;
   // pkg 3 (issue #4):
   let stampType: string = 'bed';
   let ghost: GhostPreview | null = null;
@@ -170,7 +176,7 @@ export function initEditorInteraction(
     const rect = canvas.getBoundingClientRect();
     paintScene(
       ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId,
-      ghost, hoverSeg, store.getState().selectedId,
+      ghost, hoverSeg, hoverHandle, store.getState().selectedId,
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
@@ -179,6 +185,15 @@ export function initEditorInteraction(
 
   function snapToleranceWorld(): number {
     return SNAP_TOL_PX / cam.scale;
+  }
+
+  /**
+   * Issue #53: resize-handle grab radius in world units. Decoupled from
+   * snapToleranceWorld() so a coarse, zoom-stable click target is used
+   * for BOTH handle picking (pointerdown) and hover classification.
+   */
+  function handleToleranceWorld(): number {
+    return HANDLE_HIT_PX / cam.scale;
   }
 
   /**
@@ -382,6 +397,17 @@ export function initEditorInteraction(
   // Read-only debug seam for e2e: main.ts's __casaplaza bridge is out of
   // Pkg 2's grant, so the camera is exposed from glue instead.
   (window as unknown as { __editorCam?: () => Camera }).__editorCam = () => ({ ...cam });
+
+  // Issue #53 read-only seam: screen-space resize-handle centres of the
+  // currently-selected room (empty when nothing is selected). Same
+  // precedent as __editorCam — lets e2e assert handle count + aim grabs.
+  (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles = () => {
+    const st = store.getState();
+    if (st.selectedId === null) return [];
+    const room = st.data.rooms.find((r) => r.id === st.selectedId);
+    if (!room) return [];
+    return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
+  };
 
 
 
@@ -624,7 +650,7 @@ export function initEditorInteraction(
     if (clicked) {
       // Priority: resize handle on ALREADY-selected room > begin drag > plain select.
       if (st.selectedId === clicked.id) {
-        const handle = resizeHandleAt(worldPt, clicked, snapToleranceWorld());
+        const handle = resizeHandleAt(worldPt, clicked, handleToleranceWorld());
         if (handle !== null) {
           store.beginGesture();
           phase = { tag: 'resizing', vertexIndex: handle, selectedRoomId: clicked.id };
@@ -748,26 +774,43 @@ export function initEditorInteraction(
       const rid = phase.selectedRoomId;
       const room = store.getState().data.rooms.find((r) => r.id === rid);
       if (!room) return;
-      const sn = evaluateSnapCandidates(
-        store.getState().data,
-        worldPt,
-        snapToleranceWorld(),
-        [rid],
-      );
+      // Issue #53: route the dragged vertex through the SAME snap policy
+      // as draw-time (snapPoint = foreign geometry, else 0.5 m grid), so
+      // corner drags snap identically to how they were drawn.
       store.dispatch({
         type: 'resizeRoom',
         roomId: rid,
         vertexIndex: vid,
-        newPos: sn.point,
+        newPos: snapPoint(worldPt, [rid]),
       });
       repaint();
       return;
     }
 
-    // idle: hover highlight
-    const hit = roomAt(worldPt, store.getState().data);
+    // idle: hover highlight + cursor affordance (issue #53).
+    const prevHandle = hoverHandle;
+    const st = store.getState();
+    const selId = st.selectedId;
+    const selRoom = selId !== null ? st.data.rooms.find((r) => r.id === selId) : undefined;
+    if (tool === 'select' && selRoom) {
+      const handleIdx = resizeHandleAt(worldPt, selRoom, handleToleranceWorld());
+      if (handleIdx !== null) {
+        hoverHandle = handleIdx;
+        canvas.style.cursor = classifyCorner(selRoom.polygon[handleIdx], selRoom) ?? 'default';
+      } else if (roomAt(worldPt, st.data)?.id === selId) {
+        hoverHandle = null;
+        canvas.style.cursor = 'move';
+      } else {
+        hoverHandle = null;
+        canvas.style.cursor = 'default';
+      }
+    } else {
+      hoverHandle = null;
+      canvas.style.cursor = '';
+    }
+    const hit = roomAt(worldPt, st.data);
     const hid = hit?.id ?? null;
-    if (hid !== hoverRoomId) {
+    if (hid !== hoverRoomId || prevHandle !== hoverHandle) {
       hoverRoomId = hid;
       repaint();
     }

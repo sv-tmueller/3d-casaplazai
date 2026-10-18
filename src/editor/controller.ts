@@ -30,6 +30,14 @@ import {
 } from './model/openings';
 export const GRID_M = 0.5; // meter grid pitch
 export const SNAP_TOL_PX = 8;
+/**
+ * Issue #53: grab tolerance for a resize handle, in SCREEN pixels.
+ * Deliberately decoupled from SNAP_TOL_PX — picking a handle is a coarse
+ * click target (~12 px feels comfortable at any zoom), while draw-time
+ * snap tolerance is a finer magnet. Convert to world units at the call
+ * site with `HANDLE_HIT_PX / cam.scale`.
+ */
+export const HANDLE_HIT_PX = 12;
 
 export interface Camera {
   originX: number;
@@ -173,6 +181,36 @@ export function resizeHandleAt(
 /** Vertex positions of the selected room, for painting resize handles. */
 export function resizeHandlesOf(room: Room): Pt[] {
   return room.polygon.map((p) => [p[0], p[1]] as Pt);
+}
+
+/** Diagonal-resize CSS cursors (issue #53). */
+export type ResizeCursor = 'nwse-resize' | 'nesw-resize';
+
+/**
+ * Classify which diagonal a vertex drags along, using the room's
+ * axis-aligned bbox centre. NW/SE corners (main diagonal) -> nwse-resize;
+ * NE/SW corners (anti-diagonal) -> nesw-resize. Returns null for a
+ * degenerate corner sitting on the centre column/row. Pure — unit spec'd.
+ */
+export function classifyCorner(vertex: Pt, room: Room): ResizeCursor | null {
+  const poly = room.polygon;
+  if (poly.length === 0) return null;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of poly) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  const dx = vertex[0] - (minX + maxX) / 2;
+  const dy = vertex[1] - (minY + maxY) / 2;
+  const prod = dx * dy;
+  if (prod < 0) return 'nwse-resize';
+  if (prod > 0) return 'nesw-resize';
+  return null;
 }
 
 /* ------------------------------ Winding util ------------------------------ */

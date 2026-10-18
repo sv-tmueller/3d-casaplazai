@@ -592,3 +592,55 @@ describe('double replaceAll is idempotent (regression: double-loadPlan)', () => 
     expect(store.getState().data).toStrictEqual(demo);
   });
 });
+
+/* --------------- issue #53: resizeRoom dispatch + undo regression ---------- */
+
+describe('resizeRoom dispatch (#53)', () => {
+  const livingPoly = (store: EditorStore): number[][] =>
+    store.getState().data.rooms.find((r) => r.id === 'living')!.polygon;
+
+  it('atomic resize changes the vertex then undo restores it', () => {
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    // living vertex 1 is (5,0) — the SE corner of the rectangle.
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 1,
+      newPos: [6.5, 0],
+    });
+    expect(res.ok).toBe(true);
+    expect(livingPoly(store)[1]).toEqual([6.5, 0]);
+    // Bounding-box width grew from 5 to 6.5 m.
+    expect(Math.max(...livingPoly(store).map((p) => p[0]))).toBeCloseTo(6.5);
+    expect(store.undo()).toBe(true);
+    expect(livingPoly(store)).toEqual(before);
+  });
+
+  it('gesture-streamed resize is ONE undo step (drag frames collapse)', () => {
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    store.beginGesture();
+    store.dispatch({ type: 'resizeRoom', roomId: 'living', vertexIndex: 2, newPos: [5, 4.5] });
+    store.dispatch({ type: 'resizeRoom', roomId: 'living', vertexIndex: 2, newPos: [5, 5] });
+    store.endGesture();
+    expect(livingPoly(store)[2]).toEqual([5, 5]);
+    expect(store.undo()).toBe(true);
+    expect(livingPoly(store)).toEqual(before);
+    // One gesture = one undo entry, so no further undo is available.
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('rejects an out-of-range vertex index without mutating', () => {
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 99,
+      newPos: [0, 0],
+    });
+    expect(res.ok).toBe(false);
+    expect(livingPoly(store)).toEqual(before);
+  });
+});
