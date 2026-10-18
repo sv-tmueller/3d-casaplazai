@@ -9,7 +9,7 @@
  * dispose chain (renderer → scene graph → HUD → listeners → timers).
  */
 
-import { WebGLRenderer, type Camera } from 'three';
+import { PerspectiveCamera, Vector3, WebGLRenderer, type Camera } from 'three';
 
 import { compilePlan, parseValidatedPlan } from '../geom';
 import type { FloorplanData, Room } from '../shared/schema';
@@ -27,7 +27,12 @@ import {
 } from './hud';
 import { OrbitRig } from './orbitMode';
 import { solveSpawn, SpawnFailureError } from './spawn';
-import { buildViewerScene, disposeObject, paintSky } from './sceneBuilder';
+import {
+  buildViewerScene,
+  configureRenderer,
+  disposeObject,
+  paintSky,
+} from './sceneBuilder';
 import {
   RECOMPILE_DEBOUNCE_MS,
   type AdaptedScene,
@@ -353,6 +358,17 @@ export class ViewerApp {
   /* --------------------------------- loop ----------------------------------- */
 
   private startLoop(): void {
+    // Size the renderer ONCE to the canvas's laid-out CSS size, then keep
+    // it synced on resize. Without this the drawing buffer stays at the
+    // canvas default (300x150) and the picture stretches/blanks.
+    if (this.renderer) {
+      configureRenderer(this.renderer);
+      this.resizeRenderer();
+    }
+    const ro = new ResizeObserver(() => this.resizeRenderer());
+    ro.observe(this.canvas);
+    this.disposers.push(() => ro.disconnect());
+
     const pump = (now: number): void => {
       if (this.disposed) return;
       if (this.lastFrameTime < 0) this.lastFrameTime = now;
@@ -373,6 +389,25 @@ export class ViewerApp {
     this.rafCancel = this.scheduleTick(pump) ?? null;
   }
 
+  /** Sync the drawing buffer to the canvas's current CSS box. */
+  private resizeRenderer(): void {
+    if (!this.renderer) return;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w > 0 && h > 0) {
+      this.renderer.setSize(w, h, false);
+      for (const rig of [this.orbitCam, this.walkCam]) {
+        if (rig && 'camera' in rig) {
+          const cam = rig.camera as PerspectiveCamera & { aspect?: number };
+          if (cam.isPerspectiveCamera) {
+            cam.aspect = w / h;
+            cam.updateProjectionMatrix();
+          }
+        }
+      }
+    }
+  }
+
   /**
    * Test/e2e seams (sanctioned by advisor decision: pkg 6 may rely on a
    * small camera getter). Published each frame; nulls when inactive.
@@ -380,12 +415,31 @@ export class ViewerApp {
   private publishDebugSeams(camera: Camera | null): void {
     const w = window as unknown as Record<string, unknown>;
     if (camera) {
-      w.__viewerCam = () => ({
-        posX: camera.position.x,
-        posY: camera.position.y,
-        posZ: camera.position.z,
-        eyeY: camera.position.y,
-      });
+      const walk = this.walkCam;
+      w.__viewerCam = () => {
+        const fwd = new Vector3(0, 0, -1).applyQuaternion(
+          camera.quaternion,
+        );
+        return {
+          posX: camera.position.x,
+          posY: camera.position.y,
+          posZ: camera.position.z,
+          eyeY: camera.position.z,
+          fwdX: fwd.x,
+          fwdY: fwd.y,
+          fwdZ: fwd.z,
+          // Walk diagnostics: plan-space disc + velocity (movement proof).
+          ...(walk
+            ? {
+                discX: walk.discPosition.x,
+                discY: walk.discPosition.y,
+                velX: walk.velocity.x,
+                velY: walk.velocity.y,
+                locked: walk.locked,
+              }
+            : {}),
+        };
+      };
     }
     w.__viewerStats = () => ({
       meshCount: this.countMeshes(),

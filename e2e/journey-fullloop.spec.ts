@@ -121,8 +121,8 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const c = (window as any).__viewerCam();
       // plan-X = world X, plan-Y = world Z (Z-up conversion)
-      const px = c.posX;
-      const py = c.posZ;
+      const px = c.discX;
+      const py = c.discY;
       for (const room of p.rooms) {
         const poly = room.polygon;
         let inside = false;
