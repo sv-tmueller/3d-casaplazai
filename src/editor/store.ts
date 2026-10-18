@@ -9,7 +9,14 @@
  */
 import type { FloorplanData, Opening, Room, Vec2 } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
-import { PAIR_TOLERANCE_M } from './model/constants';
+import {
+  mirrorT,
+  overlapHosts,
+  pointAtT,
+  roomSegments,
+  sharedWallOverlap,
+  type SegmentInfo,
+} from './model/openings';
 
 export type Pt = Vec2;
 
@@ -195,61 +202,54 @@ function reduceSetSelection(st: EditorState, cmd: { roomId: string | null }): Di
 /* --------------------- pkg 3 reducer internals (issue #4) ------------------ */
 
 /**
- * Coincident-vertex comparator used for shared-wall pairing. Tolerance
- * defaults to PAIR_TOLERANCE_M so a wall drawn a few millimeters off
- * still pairs (issue #36); it is the SAME tolerance the model layer's
- * derivePairRows() uses, keeping emission, mutate, undo and select in
- * agreement.
+ * Tolerant geometric predicate for shared-wall pairing (issues #36/#41):
+ * a candidate segment pairs with the host when it is COLLINEAR within
+ * PAIR_TOLERANCE_M (perpendicular distance from the host's line — a wall
+ * drawn a few millimeters off still pairs) AND the collinear overlap
+ * hosts the cutout. Complement-only mirroring is replaced by PROJECTION
+ * of the door's world point onto the partner segment, which handles
+ * staggered (partially overlapping, different-length) walls and both
+ * traversal directions. Returns the mirror tCenter, or null when the
+ * partner cannot host this cut (honest single-cut).
  */
-function vertsCoincide(
-  p: Vec2 | undefined,
-  q: Vec2 | undefined,
-  tol: number = PAIR_TOLERANCE_M,
-): boolean {
-  return (
-    !!p &&
-    !!q &&
-    Math.abs(p[0] - q[0]) < tol &&
-    Math.abs(p[1] - q[1]) < tol
-  );
+function pairMirrorT(
+  seg: SegmentInfo,
+  cand: SegmentInfo,
+  tCenter: number,
+  width: number,
+): number | null {
+  const ov = sharedWallOverlap(seg, cand);
+  if (!ov) return null;
+  const half = width / 2;
+  const cutLo = tCenter * seg.length - half;
+  const cutHi = tCenter * seg.length + half;
+  if (!overlapHosts(ov, cutLo, cutHi)) return null;
+  return mirrorT(seg, pointAtT(seg, tCenter), cand);
 }
 
-/** Segment (a,b) of a room in traversal order; undefined when out of range. */
-function roomSegment(room: Room, segmentIndex: number): { a: Vec2; b: Vec2 } | undefined {
-  const a = room.polygon[segmentIndex];
-  const b = room.polygon[(segmentIndex + 1) % room.polygon.length];
-  if (!a || !b) return undefined;
-  return { a, b };
+/** SegmentInfo view of one room segment (length included), or undefined. */
+function segInfo(room: Room, segmentIndex: number): SegmentInfo | undefined {
+  return roomSegments(room)[segmentIndex];
 }
 
 /**
  * Find the paired twin of an opening: another opening of the SAME KIND
- * whose room holds a coincident (co- or reversely-directed) copy of the
- * same wall segment. Structural (geometry-based) so it agrees with the
- * model layer's derivePairRows()/groupedPairs().
+ * whose room holds a collinear-overlapping copy of this wall segment
+ * able to host the same cutout. Structural (geometry-based) so it agrees
+ * with the model layer's derivePairRows()/groupedPairs().
  */
 function findPartner(plan: FloorplanData, opening: Opening): Opening | undefined {
   const room = plan.rooms.find((r) => r.id === opening.roomId);
-  const seg = room ? roomSegment(room, opening.segmentIndex) : undefined;
+  const seg = room ? segInfo(room, opening.segmentIndex) : undefined;
   if (!room || !seg) return undefined;
   return plan.openings.find((o) => {
     if (o.id === opening.id || o.kind !== opening.kind) return false;
     const oroom = plan.rooms.find((r) => r.id === o.roomId);
     if (!oroom) return false;
-    const oseg = roomSegment(oroom, o.segmentIndex);
+    const oseg = segInfo(oroom, o.segmentIndex);
     if (!oseg) return false;
-    const rev = vertsCoincide(oseg.a, seg.b) && vertsCoincide(oseg.b, seg.a);
-    const fwd = vertsCoincide(oseg.a, seg.a) && vertsCoincide(oseg.b, seg.b);
-    return rev || fwd;
+    return pairMirrorT(seg, oseg, opening.tCenter, opening.width) !== null;
   });
-}
-
-/**
- * Mirror tCenter for a reversely-traversed partner segment: the same
- * PHYSICAL point measured from the partner's own segment start.
- */
-function complementT(t: number): number {
-  return Math.min(1, Math.max(0, 1 - t));
 }
 
 function reduceAddOpening(
@@ -258,7 +258,7 @@ function reduceAddOpening(
 ): DispatchResult {
   const room = st.data.rooms.find((r) => r.id === cmd.roomId);
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
-  const seg = roomSegment(room, cmd.segmentIndex);
+  const seg = segInfo(room, cmd.segmentIndex);
   if (!seg) return { ok: false, error: `segmentIndex ${cmd.segmentIndex} out of range` };
 
   const base: Opening = {
@@ -274,21 +274,21 @@ function reduceAddOpening(
   st.data.openings.push(base);
 
   // Two-row shared-door convention: emit the mirror row for every OTHER
-  // room sharing this wall segment, atomically in the same transaction.
+  // room whose wall is collinear-overlapping with this one and can host
+  // the cutout, atomically in the same transaction (issue #41: pairing is
+  // overlap-based, the mirror tCenter comes from projecting the door's
+  // world point onto that partner segment).
   for (const other of st.data.rooms) {
     if (other.id === room.id) continue;
-    for (let si = 0; si < other.polygon.length; si += 1) {
-      const oseg = roomSegment(other, si);
-      if (!oseg) continue;
-      const rev = vertsCoincide(oseg.a, seg.b) && vertsCoincide(oseg.b, seg.a);
-      const fwd = vertsCoincide(oseg.a, seg.a) && vertsCoincide(oseg.b, seg.b);
-      if (!(rev || fwd)) continue;
+    for (const oseg of roomSegments(other)) {
+      const t = pairMirrorT(seg, oseg, cmd.tCenter, cmd.width);
+      if (t === null) continue;
       st.data.openings.push({
         ...base,
         id: makeId(cmd.kind),
         roomId: other.id,
-        segmentIndex: si,
-        tCenter: rev ? complementT(cmd.tCenter) : cmd.tCenter,
+        segmentIndex: oseg.index,
+        tCenter: t,
       });
     }
   }
@@ -311,12 +311,16 @@ function reduceMutateOpening(
     if (partner) {
       if ('tCenter' in fields) {
         const room = st.data.rooms.find((r) => r.id === target.roomId);
-        const seg = room ? roomSegment(room, target.segmentIndex) : undefined;
+        const seg = room ? segInfo(room, target.segmentIndex) : undefined;
         const proom = st.data.rooms.find((r) => r.id === partner.roomId);
-        const pseg = proom ? roomSegment(proom, partner.segmentIndex) : undefined;
-        const rev =
-          !!seg && !!pseg && vertsCoincide(pseg.a, seg.b) && vertsCoincide(pseg.b, seg.a);
-        partner.tCenter = rev ? complementT(fields.tCenter!) : fields.tCenter!;
+        const pseg = proom ? segInfo(proom, partner.segmentIndex) : undefined;
+        const t =
+          seg && pseg
+            ? pairMirrorT(seg, pseg, target.tCenter, target.width)
+            : null;
+        // Keep the partner put when the moved cut no longer fits the
+        // partner's overlap (honest single-cut wins over a bogus pair).
+        if (t !== null) partner.tCenter = t;
       }
       for (const key of ['width', 'sillHeight', 'headHeight'] as const) {
         if (key in fields) partner[key] = fields[key]!;
