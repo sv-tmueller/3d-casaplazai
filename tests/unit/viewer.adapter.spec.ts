@@ -8,7 +8,6 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compilePlan,
-  countTriangles,
   countVertices,
   parseValidatedPlan,
 } from '../../src/geom';
@@ -29,8 +28,21 @@ describe('adaptScene — demo fixture parity', () => {
   const compiled = compilePlan(demoRaw);
   const adapted = adaptScene(compiled, roomsById(demoRaw));
 
-  it('preserves total triangle count across buckets', () => {
-    expect(adapted.triangleCount).toBe(countTriangles(compiled));
+  it('advertised triangleCount equals the sum over emitted buckets', () => {
+    // AC regression (issue #28): demo fixture + openings. The count must
+    // reflect what was actually emitted — dedupe drops applied, furniture
+    // included. Dynamic expectation from the returned buckets, no constant.
+    const withDressing = adaptScene(
+      compiled,
+      roomsById(demoRaw),
+      demoRaw.openings,
+    );
+    const bucketTris = withDressing.buckets.reduce(
+      (sum, b) => sum + b.indices.length / 3,
+      0,
+    );
+    expect(bucketTris).toBeGreaterThan(0);
+    expect(withDressing.triangleCount).toBe(bucketTris);
   });
 
   it('bucket positions hold exactly the compiled vertex payload', () => {

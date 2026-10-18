@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compilePlan,
-  countTriangles,
   parseValidatedPlan,
 } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
@@ -126,7 +125,15 @@ describe('adaptScene — backward compatibility', () => {
         (b) => b.slot === 'glass' || b.slot === 'windowFrame',
       ),
     ).toBe(false);
-    expect(adaptedLegacy.triangleCount).toBe(countTriangles(compiled));
+    // Issue #28: the advertised count is the sum over emitted buckets
+    // (dedupe drops + furniture included), not the compiler's pre-dedupe
+    // shell total — so assert the identity, not countTriangles(compiled).
+    expect(adaptedLegacy.triangleCount).toBe(
+      adaptedLegacy.buckets.reduce(
+        (sum, b) => sum + b.indices.length / 3,
+        0,
+      ),
+    );
   });
 
   it('doors-only plan contributes no glass/frame geometry', () => {
