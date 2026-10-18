@@ -1,8 +1,9 @@
 /**
- * Window-dress adapter spec (issue #19): glass + frame buckets emitted
- * per window opening, doors contribute nothing, triangle accounting
+ * Window-dress adapter spec (issue #19, amended #37): glass + frame
+ * buckets emitted per window opening; doors now contribute frame slabs
+ * (issue #37) into the same windowFrame bucket; triangle accounting
  * stays consistent, and the backward-compat guard holds (no openings
- * ⇒ no new buckets).
+ * param ⇒ no new buckets).
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,6 +26,34 @@ function roomsById(plan: FloorplanData): Map<string, Room> {
   return new Map(plan.rooms.map((r) => [r.id, r]));
 }
 
+/**
+ * AMENDED (#37): the shared `windowFrame` bucket now also carries door
+ * slabs, so the frame totals must be derived from the fixture rather
+ * than pinned. A "unique doorway" = one rounded hole-centre; the demo
+ * carves its living↔kitchen door from both rooms (2 openings, 1 hole).
+ */
+function uniqueDoorwayCount(plan: FloorplanData): number {
+  const byId = new Map(plan.rooms.map((r) => [r.id, r] as const));
+  const centers = new Set<string>();
+  for (const o of plan.openings) {
+    if (o.kind !== 'door') continue;
+    const room = byId.get(o.roomId);
+    if (!room) continue;
+    const a = room.polygon[o.segmentIndex];
+    const b = room.polygon[(o.segmentIndex + 1) % room.polygon.length];
+    if (!a || !b) continue;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len === 0) continue;
+    const d = o.tCenter * len;
+    centers.add(
+      `${(a[0] + (dx / len) * d).toFixed(3)},${(a[1] + (dy / len) * d).toFixed(3)}`,
+    );
+  }
+  return centers.size;
+}
+
 describe('adaptScene — window dressing buckets (demo)', () => {
   const compiled = compilePlan(demo);
   const adapted = adaptScene(compiled, roomsById(demo), demo.openings);
@@ -41,10 +70,13 @@ describe('adaptScene — window dressing buckets (demo)', () => {
     expect(glass.indices.length / 6).toBe(4);
   });
 
-  it('frame bucket holds 4 prism slabs per window (16 slabs = 192 tris)', () => {
+  it('frame bucket holds 4 slabs per window + 4 per unique doorway', () => {
     const frames = adapted.buckets.find((b) => b.slot === 'windowFrame')!;
-    // Each slab is a 12-triangle prism; 4 slabs x 4 windows = 192 tris.
-    expect(frames.indices.length / 3).toBe(16 * 12);
+    // AMENDED (#37): runtime-derived, no pin. 4 slabs/window +
+    // 4 slabs/unique doorway, each slab a 12-triangle prism.
+    const windows = demo.openings.filter((o) => o.kind === 'window').length;
+    const doorways = uniqueDoorwayCount(demo);
+    expect(frames.indices.length / 3).toBe((4 * windows + 4 * doorways) * 12);
   });
 
   it('glass panes sit exactly in the carved holes (east window)', () => {
@@ -91,11 +123,16 @@ describe('adaptScene — window dressing buckets (demo)', () => {
     }
   });
 
-  it('adds glass+frame tris to triangleCount beyond the wall baseline', () => {
+  it('adds glass+window+door frame tris to triangleCount beyond the wall baseline', () => {
     const baseline = adaptScene(compiled, roomsById(demo));
     expect(adapted.triangleCount).toBeGreaterThan(baseline.triangleCount);
-    // Exactly +4 glass quads (8 tris) + 16 frame prisms (192 tris).
-    expect(adapted.triangleCount - baseline.triangleCount).toBe(200);
+    // AMENDED (#37): runtime-derived delta, no pin.
+    //   glass: 2 tris/pane
+    //   frames: 12 tris/slab × (4 slabs/window + 4 slabs/unique doorway)
+    const windows = demo.openings.filter((o) => o.kind === 'window').length;
+    const doorways = uniqueDoorwayCount(demo);
+    const expected = 2 * windows + (4 * windows + 4 * doorways) * 12;
+    expect(adapted.triangleCount - baseline.triangleCount).toBe(expected);
   });
 
   it('counts match the plan-derived window count (runtime derivation)', () => {
@@ -136,17 +173,21 @@ describe('adaptScene — backward compatibility', () => {
     );
   });
 
-  it('doors-only plan contributes no glass/frame geometry', () => {
+  it('doors-only plan emits door frames but no glass (issue #37)', () => {
     const doorsOnly: FloorplanData = {
       ...demo,
       openings: demo.openings.filter((o) => o.kind === 'door'),
     };
     const compiled = compilePlan(doorsOnly);
     const adapted = adaptScene(compiled, roomsById(doorsOnly), doorsOnly.openings);
-    expect(
-      adapted.buckets.some(
-        (b) => b.slot === 'glass' || b.slot === 'windowFrame',
-      ),
-    ).toBe(false);
+    // Doors draw no glass…
+    expect(adapted.buckets.some((b) => b.slot === 'glass')).toBe(false);
+    // …but they DO contribute frames (4 slabs per unique doorway) to the
+    // shared windowFrame bucket. AMENDED (#37): previously asserted empty.
+    const frames = adapted.buckets.find((b) => b.slot === 'windowFrame');
+    expect(frames).toBeDefined();
+    expect(frames!.indices.length / 3).toBe(
+      4 * uniqueDoorwayCount(doorsOnly) * 12,
+    );
   });
 });
