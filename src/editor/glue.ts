@@ -59,9 +59,81 @@ export function openingCommitNotice(
   return rowsAfter - rowsBefore === 1 ? 'Opening pierces only this wall' : null;
 }
 
+/**
+ * Issue #46 (Pkg 2 nav): pure camera math, kept here so it is unit
+ * testable without a canvas (same precedent as openingCommitNotice).
+ */
+
+const NEUTRAL_CAMERA: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
+
+function clampScale(scale: number): number {
+  return Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, scale));
+}
+
+interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Axis-aligned world bbox over every room vertex and every furniture
+ * footprint corner. Null when the plan holds no geometry at all.
+ */
+function planBounds(plan: FloorplanData): Bounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const acc = (p: Pt): void => {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  };
+  for (const room of plan.rooms) for (const p of room.polygon) acc(p);
+  for (const f of plan.furniture) for (const p of itemCorners(f)) acc(p);
+  return minX === Infinity ? null : { minX, minY, maxX, maxY };
+}
+
+/**
+ * Camera framing the whole plan inside a w×h CSS-pixel viewport, with
+ * FIT_MARGIN breathing room and the bbox midpoint parked on the canvas
+ * centre. Missing or zero-extent geometry yields the neutral boot camera
+ * (no division by zero).
+ */
+export function computeFitCamera(plan: FloorplanData, w: number, h: number): Camera {
+  const b = planBounds(plan);
+  if (b === null || !(w > 0) || !(h > 0)) return { ...NEUTRAL_CAMERA };
+  const bw = b.maxX - b.minX;
+  const bh = b.maxY - b.minY;
+  if (!(bw > 0) || !(bh > 0)) return { ...NEUTRAL_CAMERA };
+  const scale = clampScale(Math.min(w / bw, h / bh) * (1 - FIT_MARGIN));
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  return { originX: cx - (w / 2) / scale, originY: cy + (h / 2) / scale, scale };
+}
+
+/**
+ * Zoom about the canvas midpoint: the world point under the centre stays
+ * put, so the buttons read as a viewport zoom rather than a pan. Clamped
+ * to the shared MIN/MAX zoom scales.
+ */
+export function zoomAboutCenter(cam: Camera, factor: number, w: number, h: number): Camera {
+  const scale = clampScale(cam.scale * factor);
+  const center = screenToWorld(cam, [w / 2, h / 2]);
+  return { originX: center[0] - (w / 2) / scale, originY: center[1] + (h / 2) / scale, scale };
+}
+
 const ZOOM_STEP = 1.1;
-const MIN_ZOOM_SCALE = 12;
-const MAX_ZOOM_SCALE = 480;
+export const MIN_ZOOM_SCALE = 12;
+export const MAX_ZOOM_SCALE = 480;
+
+/** Button zoom step — deliberately distinct from the wheel's 1.1 (#46). */
+export const ZOOM_BUTTON_STEP = 1.2;
+/** Fraction of the viewport left clear around the fitted plan bbox (#46). */
+export const FIT_MARGIN = 0.1;
 
 export function initEditorInteraction(
   refs: EditorDomRefs,
@@ -278,6 +350,38 @@ export function initEditorInteraction(
     store.dispatch({ type: 'deleteRoom', roomId: sel });
   }
   refs.btnDelete.addEventListener('click', () => routeDelete());
+
+  /* ---------- pkg 2 (issue #46): center + zoom buttons ---------- */
+
+  /** Viewport extent in CSS pixels (canvas is DPR-scaled internally). */
+  function viewportSize(): { w: number; h: number } {
+    const rect = canvas.getBoundingClientRect();
+    return { w: rect.width, h: rect.height };
+  }
+
+  function applyCamera(next: Camera): void {
+    cam.originX = next.originX;
+    cam.originY = next.originY;
+    cam.scale = next.scale;
+    repaint();
+  }
+
+  refs.btnCenter.addEventListener('click', () => {
+    const { w, h } = viewportSize();
+    applyCamera(computeFitCamera(store.getState().data, w, h));
+  });
+  refs.btnZoomIn.addEventListener('click', () => {
+    const { w, h } = viewportSize();
+    applyCamera(zoomAboutCenter(cam, ZOOM_BUTTON_STEP, w, h));
+  });
+  refs.btnZoomOut.addEventListener('click', () => {
+    const { w, h } = viewportSize();
+    applyCamera(zoomAboutCenter(cam, 1 / ZOOM_BUTTON_STEP, w, h));
+  });
+
+  // Read-only debug seam for e2e: main.ts's __casaplaza bridge is out of
+  // Pkg 2's grant, so the camera is exposed from glue instead.
+  (window as unknown as { __editorCam?: () => Camera }).__editorCam = () => ({ ...cam });
 
 
 

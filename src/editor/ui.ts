@@ -24,6 +24,9 @@ export interface EditorDomRefs {
   btnUndo: HTMLButtonElement;
   btnRedo: HTMLButtonElement;
   btnDelete: HTMLButtonElement;
+  btnCenter: HTMLButtonElement;
+  btnZoomIn: HTMLButtonElement;
+  btnZoomOut: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -83,6 +86,20 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnHelp.setAttribute('aria-label', 'Keyboard shortcuts');
   btnHelp.setAttribute('data-testid', 'btn-help');
 
+  // pkg 2 (issue #46): 2D navigation — center + zoom buttons. Hints live
+  // in `title` only (an aria-label would replace the accessible name).
+  const sep4 = document.createElement('span');
+  sep4.className = 'toolbar-sep';
+  const btnCenter = mkBtn('Center', 'editor-center');
+  btnCenter.title = 'Fit the whole plan inside the viewport.';
+  btnCenter.setAttribute('data-testid', 'btn-center');
+  const btnZoomIn = mkBtn('Zoom in', 'editor-zoom-in');
+  btnZoomIn.title = 'Zoom in around the canvas centre.';
+  btnZoomIn.setAttribute('data-testid', 'btn-zoom-in');
+  const btnZoomOut = mkBtn('Zoom out', 'editor-zoom-out');
+  btnZoomOut.title = 'Zoom out around the canvas centre.';
+  btnZoomOut.setAttribute('data-testid', 'btn-zoom-out');
+
   const sep = document.createElement('span');
   sep.className = 'toolbar-sep';
   const btnUndo = mkBtn('Undo', 'editor-undo');
@@ -94,6 +111,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
+    sep4, btnCenter, btnZoomIn, btnZoomOut,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -144,6 +162,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnExport, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
     btnUndo, btnRedo, btnDelete,
+    btnCenter, btnZoomIn, btnZoomOut,
   };
 }
 
