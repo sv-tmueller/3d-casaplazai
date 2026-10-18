@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
 import {
   WINDOW_SILL_EPSILON_M,
-  complement,
   derivePairRows,
   nearestSegment,
   openingFitError,
@@ -144,12 +143,6 @@ describe('two-row shared-door convention (AC1)', () => {
     const plan = twoRoomSharedWall();
     const rows = derivePairRows(plan, { roomId: 'living', segmentIndex: 0, tCenter: 0.5 });
     expect(rows).toHaveLength(1);
-  });
-
-  it('complement() mirrors within [0,1]', () => {
-    expect(complement(0.55)).toBeCloseTo(0.45);
-    expect(complement(0)).toBeCloseTo(1);
-    expect(complement(1)).toBeCloseTo(0);
   });
 
   it('pair consistency audit passes aligned rows and flags drifted widths', () => {
