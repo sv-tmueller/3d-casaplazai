@@ -30,6 +30,11 @@ const HOVER_STROKE = '#60a5fa';
 const PREVIEW_STROKE = '#111827';
 const HANDLE_FILL = '#ffffff';
 const HANDLE_STROKE = '#d97706';
+const HANDLE_HOVER_FILL = '#d97706';
+const HANDLE_HOVER_STROKE = '#7c2d12';
+/** Issue #53: base handle side (px); hovered handle grows for emphasis. */
+const HANDLE_SIZE_PX = 10;
+const HANDLE_HOVER_SIZE_PX = 14;
 
 export function paintScene(
   ctx: CanvasRenderingContext2D,
@@ -41,6 +46,7 @@ export function paintScene(
   hoverRoomId: string | null,
   ghost: GhostPreview | null = null,
   segHighlight: SegHighlight | null = null,
+  hoverHandle: number | null = null,
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
@@ -49,7 +55,14 @@ export function paintScene(
   drawGrid(ctx, cssW, cssH, cam);
 
   for (const room of plan.rooms) {
-    drawRoomShape(ctx, cam, room, isSelected(phase, room), hoverRoomId === room.id);
+    drawRoomShape(
+      ctx,
+      cam,
+      room,
+      isSelected(phase, room),
+      hoverRoomId === room.id,
+      hoverHandle,
+    );
   }
 
   // pkg 3 (issue #4): openings belong to rooms; draw AFTER room strokes so
@@ -123,6 +136,7 @@ function drawRoomShape(
   room: Room,
   selected: boolean,
   hovered: boolean,
+  hoverHandle: number | null = null,
 ): void {
   const scrPts = room.polygon.map((p) => worldToScreen(cam, p));
   ctx.beginPath();
@@ -149,13 +163,18 @@ function drawRoomShape(
   }
 
   if (selected) {
-    for (const hp of resizeHandlesOf(room)) {
-      const s = worldToScreen(cam, hp);
-      ctx.fillStyle = HANDLE_FILL;
-      ctx.strokeStyle = HANDLE_STROKE;
-      ctx.lineWidth = 1.5;
+    const handles = resizeHandlesOf(room);
+    for (let i = 0; i < handles.length; i += 1) {
+      const s = worldToScreen(cam, handles[i]);
+      // Issue #53: hover emphasis — the dragged/hovered handle grows and
+      // inverts its fill so it reads as the grabbed target.
+      const emph = hoverHandle === i;
+      const half = (emph ? HANDLE_HOVER_SIZE_PX : HANDLE_SIZE_PX) / 2;
+      ctx.fillStyle = emph ? HANDLE_HOVER_FILL : HANDLE_FILL;
+      ctx.strokeStyle = emph ? HANDLE_HOVER_STROKE : HANDLE_STROKE;
+      ctx.lineWidth = emph ? 2 : 1.5;
       ctx.beginPath();
-      ctx.rect(s[0] - 4, s[1] - 4, 8, 8);
+      ctx.rect(s[0] - half, s[1] - half, half * 2, half * 2);
       ctx.fill();
       ctx.stroke();
     }
