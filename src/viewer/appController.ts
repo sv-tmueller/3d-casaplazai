@@ -21,6 +21,7 @@ import {
   PerfOverlay,
   playFade,
   reflectMode,
+  setWalkAffordances,
   showHint,
   toast,
   type HudHandles,
@@ -155,6 +156,20 @@ export class ViewerApp {
     this.refreshAdaptation(true);
     reflectMode(this.hud, 'overview');
     this.seatRig('overview');
+
+    // Issue #30: controller-level pointer-lock watcher. On lock the walk
+    // entry prompt gives way to the reticle; the unlock side is handled
+    // by the rig's onUnlock→overview path (which clears both).
+    const onLockChange = (): void => {
+      if (this.phase !== 'walk' || !this.walkCam) return;
+      if (this.walkCam.locked) {
+        setWalkAffordances(this.hud, { overlay: false, reticle: true });
+      }
+    };
+    document.addEventListener('pointerlockchange', onLockChange);
+    this.disposers.push(() =>
+      document.removeEventListener('pointerlockchange', onLockChange),
+    );
     // Publish the debug seams BEFORE the first RAF so a probe arriving
     // between start() and frame one never observes them missing.
     this.publishDebugSeams(this.liveCamera());
@@ -207,11 +222,25 @@ export class ViewerApp {
       this.rig = this.walkCam;
       this.phase = 'walk';
       showHint(this.hud, 'Click to walk');
+      // Issue #30: prompt for entry; reticle comes up on lock.
+      setWalkAffordances(this.hud, { overlay: true, reticle: false });
+      // The Walk-button click is a user gesture, so try to lock straight
+      // away. If the browser defers/refuses, the promise throws (or the
+      // call no-ops) and the overlay stays up — graceful fallback to the
+      // existing canvas-click re-lock flow below.
+      try {
+        this.walkCam.requestLock();
+      } catch {
+        /* lock refused/deferred: overlay remains the entry affordance */
+      }
     } else {
       this.orbitCam = this.makeOrbitRig(adapted);
       this.rig = this.orbitCam;
       this.phase = 'overview';
       showHint(this.hud, '');
+      // Leaving walk clears both affordances (toggling out is not an
+      // unlock event, so the pointerlockchange path cannot cover it).
+      setWalkAffordances(this.hud, { overlay: false, reticle: false });
     }
     reflectMode(this.hud, this.phase as ViewMode);
   }
@@ -240,6 +269,7 @@ export class ViewerApp {
       // ESC (or any unlock) RETURNS TO OVERVIEW per issue #6's AC
       // ("ESC returns to orbit, lock released cleanly"). The prior
       // auto-relock behavior trapped the user in walk mode.
+      setWalkAffordances(this.hud, { overlay: false, reticle: false });
       void this.requestMode('overview');
     });
 
