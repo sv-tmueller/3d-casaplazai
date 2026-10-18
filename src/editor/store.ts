@@ -22,10 +22,11 @@ export type Pt = Vec2;
 
 /**
  * Payload kinds eligible for intra-gesture streaming (no snapshot
- * spam). Empty for pkg 3: furniture drags commit ONE atomic command
- * per pointerup (judgeMoveTarget verdict), so no opening/furniture
- * payload streams inside a gesture today. Rooms stream via their
- * dedicated moveRoom/resizeRoom handlers in dispatch().
+ * spam). Furniture drags commit ONE atomic command per pointerup
+ * (judgeMoveTarget verdict); ROOM drags stream moveRoom/resizeRoom and
+ * pkg 3 (issue #61) OPENING drags stream moveOpening with syncPair so
+ * the twin row follows in lockstep — all three stream via their
+ * dedicated handlers in dispatch(). Everything else commits atomically.
  */
 
 export type Command =
@@ -478,7 +479,14 @@ export class EditorStore {
               ? reduceMoveFurniture(this._state, cmd.furnitureId, cmd.position)
               : cmd.type === 'rotateFurniture'
                 ? reduceRotateFurniture(this._state, cmd.furnitureId, cmd.rotationDeg)
-                : (() => {
+                : cmd.type === 'moveOpening'
+                  ? reduceMutateOpening(
+                      this._state,
+                      cmd.openingId,
+                      { tCenter: cmd.tCenter },
+                      cmd.syncPair === true,
+                    )
+                  : (() => {
                     throw new Error(
                       `non-streamable command "${cmd.type}" inside gesture`,
                     );
