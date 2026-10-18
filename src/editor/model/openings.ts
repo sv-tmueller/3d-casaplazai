@@ -110,6 +110,43 @@ export function pointAtT(seg: SegmentInfo, t: number): Vec2 {
   ];
 }
 
+/**
+ * Hit-test an opening under a world point (issue #52, pkg 1).
+ *
+ * For every opening, resolve its room + segment (`op.segmentIndex`) and
+ * reject it when the click lies farther than `tol` (default
+ * WALL_PICK_RADIUS_M, reusing nearestSegment semantics) from that
+ * segment. Otherwise reject it when the projected parameter falls
+ * outside its cutout span: |t − tCenter| · segLen > width/2 + ε. Among
+ * the survivors the CLOSEST one wins (ties broken by list order), so a
+ * click near a shared corner still picks the intended row. Pure —
+ * geometry only, no DOM, no store.
+ */
+export function openingAt(
+  worldPt: Vec2,
+  plan: FloorplanData,
+  tol: number = WALL_PICK_RADIUS_M,
+): Opening | null {
+  let best: Opening | null = null;
+  let bestSq = Infinity;
+  for (const op of plan.openings) {
+    const room = plan.rooms.find((r) => r.id === op.roomId);
+    if (!room) continue;
+    const seg = roomSegments(room)[op.segmentIndex];
+    if (!seg || seg.length === 0) continue;
+    const sq = sqDistToSegment(worldPt[0], worldPt[1], seg.a, seg.b);
+    if (sq > tol * tol) continue;
+    const t = projectOntoSegment(worldPt, seg);
+    const along = Math.abs(t - op.tCenter) * seg.length;
+    if (along > op.width / 2 + 1e-9) continue;
+    if (sq < bestSq) {
+      bestSq = sq;
+      best = op;
+    }
+  }
+  return best;
+}
+
 /* ------------------------------------------------------------------ *
  * Fit rules                                                          *
  * ------------------------------------------------------------------ */
