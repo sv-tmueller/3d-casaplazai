@@ -3,6 +3,7 @@
  * buildUi returns refs; controller.ts wires behavior.
  */
 import { FURNITURE_DEFAULTS } from './model/constants';
+import { iconMarkup, type IconKey } from './icons';
 import { TOOL_HINTS } from './polish';
 
 export interface EditorDomRefs {
@@ -38,18 +39,35 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   toolbar.className = 'editor-toolbar';
   toolbar.setAttribute('role', 'toolbar');
 
-  const mkBtn = (label: string, extraCls: string): HTMLButtonElement => {
+  // Issue #54 (Pkg 3): buttons may carry an inline SVG icon. The icon is
+  // APPENDED (aria-hidden) alongside a <span> holding the label, so the
+  // accessible name stays the label text (e2e getByRole names depend on
+  // this — never replace the text node).
+  const mkBtn = (
+    label: string,
+    extraCls: string,
+    icon?: IconKey,
+  ): HTMLButtonElement => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `editor-btn ${extraCls}`.trim();
-    b.textContent = label;
+    if (icon) b.innerHTML = iconMarkup(icon);
+    const span = document.createElement('span');
+    span.className = 'editor-btn-label';
+    span.textContent = label;
+    b.appendChild(span);
     return b;
   };
 
   // Issue #7: every tool button advertises its purpose via tooltip +
   // aria-label sourced from the TOOL_HINTS registry.
-  const mkHintedBtn = (label: string, hintKey: string, extraCls = ''): HTMLButtonElement => {
-    const b = mkBtn(label, extraCls);
+  const mkHintedBtn = (
+    label: string,
+    hintKey: string,
+    extraCls = '',
+    icon?: IconKey,
+  ): HTMLButtonElement => {
+    const b = mkBtn(label, extraCls, icon);
     const hint = TOOL_HINTS[hintKey];
     if (hint) {
       // Hint lives in `title` ONLY: an aria-label would REPLACE the
@@ -60,28 +78,28 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     return b;
   };
 
-  const btnSelect = mkHintedBtn('Select', 'select');
-  const btnRect = mkHintedBtn('Rectangle', 'rectangle');
-  const btnPoly = mkHintedBtn('Polygon', 'polygon');
+  const btnSelect = mkHintedBtn('Select', 'select', '', 'select');
+  const btnRect = mkHintedBtn('Rectangle', 'rectangle', '', 'rectangle');
+  const btnPoly = mkHintedBtn('Polygon', 'polygon', '', 'polygon');
 
   // pkg 3 (issue #4): opening + furniture tools.
   const sep2 = document.createElement('span');
   sep2.className = 'toolbar-sep';
-  const btnDoor = mkHintedBtn('Door', 'door', 'editor-door');
-  const btnWindow = mkHintedBtn('Window', 'window', 'editor-window');
-  const btnStamp = mkHintedBtn('Furnish', 'stamp', 'editor-stamp');
+  const btnDoor = mkHintedBtn('Door', 'door', 'editor-door', 'door');
+  const btnWindow = mkHintedBtn('Window', 'window', 'editor-window', 'window');
+  const btnStamp = mkHintedBtn('Furnish', 'stamp', 'editor-stamp', 'furnish');
 
   // pkg 6 (issue #7): export + help buttons.
   const sep3 = document.createElement('span');
   sep3.className = 'toolbar-sep';
-  const btnExport = mkBtn('Export', 'editor-export');
+  const btnExport = mkBtn('Export', 'editor-export', 'export');
   btnExport.title = 'Download the plan as a PNG or JPEG image.';
   btnExport.setAttribute(
     'aria-label',
     'Export — Download the plan as a PNG or JPEG image.',
   );
   btnExport.setAttribute('data-testid', 'btn-export');
-  const btnHelp = mkBtn('? Help', 'editor-help');
+  const btnHelp = mkBtn('? Help', 'editor-help', 'help');
   btnHelp.title = 'Keyboard shortcuts';
   btnHelp.setAttribute('aria-label', 'Keyboard shortcuts');
   btnHelp.setAttribute('data-testid', 'btn-help');
@@ -90,21 +108,21 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // in `title` only (an aria-label would replace the accessible name).
   const sep4 = document.createElement('span');
   sep4.className = 'toolbar-sep';
-  const btnCenter = mkBtn('Center', 'editor-center');
+  const btnCenter = mkBtn('Center', 'editor-center', 'center');
   btnCenter.title = 'Fit the whole plan inside the viewport.';
   btnCenter.setAttribute('data-testid', 'btn-center');
-  const btnZoomIn = mkBtn('Zoom in', 'editor-zoom-in');
+  const btnZoomIn = mkBtn('Zoom in', 'editor-zoom-in', 'zoom-in');
   btnZoomIn.title = 'Zoom in around the canvas centre.';
   btnZoomIn.setAttribute('data-testid', 'btn-zoom-in');
-  const btnZoomOut = mkBtn('Zoom out', 'editor-zoom-out');
+  const btnZoomOut = mkBtn('Zoom out', 'editor-zoom-out', 'zoom-out');
   btnZoomOut.title = 'Zoom out around the canvas centre.';
   btnZoomOut.setAttribute('data-testid', 'btn-zoom-out');
 
   const sep = document.createElement('span');
   sep.className = 'toolbar-sep';
-  const btnUndo = mkBtn('Undo', 'editor-undo');
-  const btnRedo = mkBtn('Redo', 'editor-redo');
-  const btnDelete = mkBtn('Delete Selected', 'editor-delete');
+  const btnUndo = mkBtn('Undo', 'editor-undo', 'undo');
+  const btnRedo = mkBtn('Redo', 'editor-redo', 'redo');
+  const btnDelete = mkBtn('Delete Selected', 'editor-delete', 'delete');
   btnDelete.disabled = true;
   btnUndo.disabled = true;
   btnRedo.disabled = true;
