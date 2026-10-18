@@ -59,28 +59,35 @@ function concatBuffers(buffers: MeshBuffer[]): {
   return { positions, indices };
 }
 
-/** Deduplicate wall slabs whose centers coincide within epsilon. */
+/** Deduplicate wall slabs whose centers coincide within epsilon.
+ *
+ * Key widened to (cx, cy, cz) by issue #29: coincident-xy slabs from
+ * DIFFERENT height bands (stacked windows carved into one wall span)
+ * are NOT duplicates and must survive, so the centroid triple — not the
+ * pair — is what identifies a true coincident copy. */
 function dedupeWalls(walls: MeshBuffer[]): MeshBuffer[] {
   const kept: MeshBuffer[] = [];
-  const centers: Array<[number, number]> = [];
+  const centers: Array<[number, number, number]> = [];
 
   for (const w of walls) {
     const cx = avgCoordinate(w.positions, 0);
     const cy = avgCoordinate(w.positions, 1);
+    const cz = avgCoordinate(w.positions, 2);
     let dup = false;
     for (let k = 0; k < centers.length; k += 1) {
       const kc = centers[k];
       if (
         kc &&
         Math.abs(kc[0] - cx) < DUPLICATE_EPS &&
-        Math.abs(kc[1] - cy) < DUPLICATE_EPS
+        Math.abs(kc[1] - cy) < DUPLICATE_EPS &&
+        Math.abs(kc[2] - cz) < DUPLICATE_EPS
       ) {
         dup = true;
         break;
       }
     }
     if (!dup) {
-      centers.push([cx, cy]);
+      centers.push([cx, cy, cz]);
       kept.push(w);
     }
   }
