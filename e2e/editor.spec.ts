@@ -13,6 +13,8 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+import { BTN_ZOOM, CAM_SCALE, FIT_MARGIN } from './fixtures/camConstants';
+
 const SCALE = 80; // INITIAL_SCALE in glue.ts
 
 type Plan = {
@@ -202,5 +204,166 @@ test.describe.serial('editor core', () => {
 
     await page.getByRole('button', { name: 'Delete Selected' }).click();
     expect((await getPlan(page)).rooms).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Issue #46 (Pkg 2 nav): Center + zoom buttons.                       */
+/*                                                                     */
+/* The old aim() helper assumes origin (0,0)/SCALE 80 — once Center    */
+/* or zoom runs that assumption dies, so every aim below is computed   */
+/* from the LIVE camera via the glue-owned __editorCam seam.           */
+/* ------------------------------------------------------------------ */
+
+type Cam = { originX: number; originY: number; scale: number };
+
+// ROOM_STROKE is #2563eb = rgb(37,99,235) in glue.ts. These thresholds are
+// derived from that stroke so they admit it and reject the pale room fill
+// (r≈221): the stroke's blue (235) dominates, its red (37) stays low.
+const STROKE_MIN_BLUE = 170; // stroke blue 235
+const STROKE_MAX_RED = 160; // stroke red 37; fill red ≈221 fails this
+const STROKE_MAX_GREEN = 200; // stroke green 99
+
+async function getCam(page: Page): Promise<Cam> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return page.evaluate(() => (window as any).__editorCam());
+}
+
+/** Absolute page coords for world (wx,wy) under the live camera. */
+async function aimCam(
+  page: Page,
+  c: Cam,
+  wx: number,
+  wy: number,
+): Promise<{ x: number; y: number }> {
+  const b = (await page.locator('.editor-canvas').boundingBox())!;
+  return { x: b.x + (wx - c.originX) * c.scale, y: b.y + (c.originY - wy) * c.scale };
+}
+
+/** Count projected room corners whose pixels carry the #2563eb stroke. */
+async function strokeHits(page: Page, c: Cam, corners: number[][]): Promise<number> {
+  return page.evaluate(
+    ({ cam, pts, minB, maxR, maxG }) => {
+      const cv = document.querySelector('.editor-canvas') as HTMLCanvasElement;
+      const ctx = cv.getContext('2d')!;
+      const dpr = cv.width / cv.getBoundingClientRect().width;
+      const rad = 3;
+      let hits = 0;
+      for (const [wx, wy] of pts as number[][]) {
+        const sx = Math.round((wx - cam.originX) * cam.scale * dpr);
+        const sy = Math.round((cam.originY - wy) * cam.scale * dpr);
+        const img = ctx.getImageData(sx - rad, sy - rad, rad * 2 + 1, rad * 2 + 1).data;
+        for (let i = 0; i < img.length; i += 4) {
+          // ROOM_STROKE rgb(37,99,235); the pale room fill (r≈221) fails this.
+          if (img[i + 2] > minB && img[i] < maxR && img[i + 1] < maxG) {
+            hits += 1;
+            break;
+          }
+        }
+      }
+      return hits;
+    },
+    {
+      cam: c,
+      pts: corners,
+      minB: STROKE_MIN_BLUE,
+      maxR: STROKE_MAX_RED,
+      maxG: STROKE_MAX_GREEN,
+    },
+  );
+}
+
+test.describe.serial('nav buttons (#46)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await page.locator('.editor-canvas').waitFor();
+  });
+
+  test('AC1: Center refits a perturbed camera to the plan bounds', async ({ page }) => {
+    const poly = [
+      [1, -3],
+      [5, -3],
+      [5, -1],
+      [1, -1],
+    ];
+    await loadPlan(page, [
+      { id: 'r1', name: 'Solo', polygon: poly, floorTexture: null, wallsOverride: [] },
+    ]);
+
+    // Perturb: wheel zoom in over the canvas, then alt-drag a pan.
+    const box = (await page.locator('.editor-canvas').boundingBox())!;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.wheel(0, -240);
+    await page.keyboard.down('Alt');
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 120, cy + 90, { steps: 5 });
+    await page.mouse.up();
+    await page.keyboard.up('Alt');
+    const perturbed = await getCam(page);
+    expect(perturbed.scale).not.toBe(CAM_SCALE);
+
+    await page.getByTestId('btn-center').click();
+    const cam = await getCam(page);
+
+    // Expected fit, mirrored from glue's formula.
+    const xs = poly.map((p) => p[0]);
+    const ys = poly.map((p) => p[1]);
+    const bw = Math.max(...xs) - Math.min(...xs);
+    const bh = Math.max(...ys) - Math.min(...ys);
+    const expectedScale = Math.min(box.width / bw, box.height / bh) * (1 - FIT_MARGIN);
+    expect(cam.scale).toBeCloseTo(expectedScale, 6);
+    expect(cam.originX).toBeCloseTo((Math.min(...xs) + Math.max(...xs)) / 2 - box.width / 2 / expectedScale, 6);
+    expect(cam.originY).toBeCloseTo((Math.min(...ys) + Math.max(...ys)) / 2 + box.height / 2 / expectedScale, 6);
+    expect(Number.isFinite(cam.originX) && Number.isFinite(cam.originY)).toBe(true);
+
+    // The projected plan bounds are actually painted (stroke color).
+    expect(await strokeHits(page, cam, poly)).toBeGreaterThanOrEqual(3);
+
+    // Corner aims derived from the live camera still select the room.
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    const inside = await aimCam(page, cam, 3, -2);
+    await page.mouse.click(inside.x, inside.y);
+    const rooms = await page.evaluate(
+      () =>
+        (window as unknown as { __casaplaza: { getData: () => Plan } }).__casaplaza.getData()
+          .rooms,
+    );
+    expect(rooms).toHaveLength(1);
+  });
+
+  test('AC2: Zoom in x3 composes to the 1.2^3 button step', async ({ page }) => {
+    await loadPlan(page, [
+      {
+        id: 'r1',
+        name: 'Solo',
+        polygon: [[0, -2], [4, -2], [4, 0], [0, 0]],
+        floorTexture: null,
+        wallsOverride: [],
+      },
+    ]);
+    const before = await getCam(page);
+    await page.getByTestId('btn-zoom-in').click();
+    await page.getByTestId('btn-zoom-in').click();
+    await page.getByTestId('btn-zoom-in').click();
+    const after = await getCam(page);
+    expect(after.scale / before.scale).toBeCloseTo(BTN_ZOOM ** 3, 3);
+
+    const out = await page.getByTestId('btn-zoom-out');
+    await out.click();
+    const back = await getCam(page);
+    expect(back.scale).toBeCloseTo(after.scale / BTN_ZOOM, 3);
+  });
+
+  test('AC3: Center on an empty boot plan yields a finite neutral camera', async ({ page }) => {
+    const cam = await getCam(page);
+    expect(cam).toEqual({ originX: 0, originY: 0, scale: CAM_SCALE });
+    await page.getByTestId('btn-center').click();
+    const fitted = await getCam(page);
+    expect(Number.isFinite(fitted.originX) && Number.isFinite(fitted.originY)).toBe(true);
+    expect(Number.isNaN(fitted.scale)).toBe(false);
+    expect(fitted).toEqual({ originX: 0, originY: 0, scale: CAM_SCALE });
   });
 });
