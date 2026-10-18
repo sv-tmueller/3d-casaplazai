@@ -108,7 +108,6 @@ export function adaptScene(
   const wallBufs: MeshBuffer[] = [];
   const ceilBufs: MeshBuffer[] = [];
   const floorByTex = new Map<MaterialSlotId, MeshBuffer[]>();
-  let triangleCount = 0;
 
   for (const roomMeshes of compiled.rooms) {
     const tex = roomsById.get(roomMeshes.roomId)?.floorTexture ?? null;
@@ -118,13 +117,6 @@ export function adaptScene(
     floorByTex.set(slot, arr);
     ceilBufs.push(roomMeshes.ceiling);
     wallBufs.push(...dedupeWalls(roomMeshes.walls));
-    for (const buf of [
-      roomMeshes.floor,
-      roomMeshes.ceiling,
-      ...roomMeshes.walls,
-    ]) {
-      triangleCount += buf.indices.length / 3;
-    }
   }
 
   const buckets: MaterialBucket[] = [];
@@ -163,15 +155,12 @@ export function adaptScene(
   }
   pushBucket('glass', dressGlass);
   pushBucket('windowFrame', dressFrames);
-  // Dressing tris participate in the scene-wide count (e2e parity).
-  for (const buf of dressGlass) triangleCount += buf.indices.length / 3;
-  for (const buf of dressFrames) triangleCount += buf.indices.length / 3;
 
   // ---- Furniture meshes (issue #18) ------------------------------------
   // Oriented 12-triangle prisms from the compiler's furniture volumes,
-  // bucketed per material family. NOTE: triangleCount stays ROOM-ONLY
-  // (floors/ceilings/walls) — the countTriangles parity test and the
-  // compiler goldens measure the room shell, not furnishings.
+  // bucketed per material family. Furniture tris participate in the
+  // scene-wide triangleCount (issue #28): the count is defined as the
+  // sum over ALL emitted buckets, so no post-bucket exclusion applies.
   const furnBufs = new Map<Extract<MaterialSlotId, `furn-${string}`>, MeshBuffer[]>();
   for (const vol of compiled.furniture) {
     const slot = furnitureSlot(vol.typeId);
@@ -182,6 +171,14 @@ export function adaptScene(
   for (const [slot, bufs] of [...furnBufs.entries()].sort(sortSlots)) {
     pushBucket(slot, bufs);
   }
+
+  // Scene-wide triangle count (issue #28): the honest sum over EVERY
+  // emitted bucket, computed post-emission so dedupe drops and all
+  // bucket families (shell, dressing, furniture) are accounted once.
+  const triangleCount = buckets.reduce(
+    (sum, b) => sum + b.indices.length / 3,
+    0,
+  );
 
   const collisions: CollisionBox[] = compiled.collisions.map((c) => ({
     minX: c.minX,
