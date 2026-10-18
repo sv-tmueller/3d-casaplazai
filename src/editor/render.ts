@@ -13,7 +13,7 @@ import {
 } from './controller';
 import type { Pt } from './geom';
 import { itemCorners } from './model/furniture';
-import { pointAtT, roomSegments, segmentNormal } from './model/openings';
+import { groupedPairs, pointAtT, roomSegments, segmentNormal } from './model/openings';
 
 export interface SegHighlight {
   roomId: string;
@@ -68,10 +68,21 @@ export function paintScene(
 
   // pkg 3 (issue #4): openings belong to rooms; draw AFTER room strokes so
   // gaps/leaves read on top of the wall lines.
-  for (const room of plan.rooms) {
-    for (const op of plan.openings.filter((o) => o.roomId === room.id)) {
-      drawOpening(ctx, cam, room, op, op.id === selectedId);
-    }
+  //
+  // Issue #59 — render-only dedupe. One physical cutout is stored as one
+  // Opening row PER room (symmetric rows, see derivePairRows), so painting
+  // row-by-row drew a paired door/window twice (two leaves, two glass bars
+  // on the same span). Instead we paint one symbol per grouped pair, keyed
+  // on groupedPairs(). Dedupe never reaches the store: hit-testing (#52)
+  // and pair-delete still operate on individual rows.
+  for (const group of groupedPairs(plan)) {
+    const row = pickCanonRow(group);
+    const room = plan.rooms.find((r) => r.id === row.roomId);
+    if (!room) continue;
+    // Selection threads per GROUP: highlighted iff ANY member row is the
+    // selected one, so selecting either side yields the same span highlight.
+    const selected = group.some((o) => o.id === selectedId);
+    drawOpening(ctx, cam, room, row, selected);
   }
 
   for (const f of plan.furniture) {
@@ -85,6 +96,22 @@ export function paintScene(
 
 function isSelected(phase: InteractionPhase, room: Room): boolean {
   return 'selectedRoomId' in phase && phase.selectedRoomId === room.id;
+}
+
+/**
+ * Canonical row for a grouped pair (issue #59) — CANON DOCUMENTED IN CODE.
+ * The authored origin is NOT persisted in the store (paired rows are
+ * symmetric Openings; derivePairRows emits the origin first but nothing
+ * records that), so we pick deterministically: the row whose roomId sorts
+ * lexicographically first, ties broken by id for a total order. Both rows
+ * of a pair project to the same world span, so the choice is visually inert.
+ */
+function pickCanonRow(
+  group: FloorplanData['openings'],
+): FloorplanData['openings'][number] {
+  return [...group].sort(
+    (a, b) => a.roomId.localeCompare(b.roomId) || a.id.localeCompare(b.id),
+  )[0];
 }
 
 function drawGrid(
