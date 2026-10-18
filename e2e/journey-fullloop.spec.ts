@@ -73,7 +73,11 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
   // ---- 3. Stamp a sofa THROUGH the real UI ----
   await page.getByRole('button', { name: 'Furnish' }).click();
   await page.getByRole('button', { name: 'Sofa' }).click();
-  const drop = await aim(page, 2, -2);
+  // Drop the sofa SOUTH of centre: plopping it exactly on the living
+  // centroid (the walk spawn cell) saturates the room once furniture is
+  // solid (issue #18) — spawn would honestly fail. Real users furnish
+  // against a wall, not atop their own feet.
+  const drop = await aim(page, 2, -1.1);
   await page.mouse.move(drop.x, drop.y);
   await page.waitForTimeout(120);
   await page.mouse.click(drop.x, drop.y);
@@ -106,7 +110,16 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
   // Descend into walk mode via the HUD toggle (headless pointer lock is
   // unreliable; the camera seam is the dependable signal).
   await page.getByTestId('hud-mode-toggle').click();
-  await page.waitForTimeout(600);
+  // Wait for the WALK rig specifically: the overview camera lacks the
+  // disc fields; catching the transition mid-fade yields undefined.
+  await page.waitForFunction(
+    () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = (window as any).__viewerCam?.() ?? null;
+      return c !== null && typeof c.discX === 'number';
+    },
+    { timeout: 10_000 },
+  );
   const cam = await page.evaluate(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (window as any).__viewerCam?.() ?? null;
@@ -142,7 +155,21 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
     },
     [JSON.stringify(plan)],
   );
-  expect(spawnOk).toBe(true);
+  const toastsSeen = await page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    [...document.querySelectorAll('.hud-toast')].map((t) => t.textContent),
+  );
+  const hydrated = await page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__casaplaza.getData(),
+  );
+  console.log('HYDRATED_OPENINGS', JSON.stringify(hydrated.openings));
+  console.log('HYDRATED_FURNITURE', JSON.stringify(hydrated.furniture));
+  console.log('HYDRATED_ROOMS', hydrated.rooms.length);
+  expect(
+    spawnOk,
+    `disc=(${(cam as { discX?: number }).discX},${(cam as { discY?: number }).discY}) toasts=${toastsSeen.join(' | ')}`,
+  ).toBe(true);
 
   // ---- 6. Back in the editor: export the plan as PNG ----
   await page.goto('/');

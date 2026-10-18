@@ -199,7 +199,9 @@ export function buildViewerScene(adapted: AdaptedScene): BuiltScene {
     const mesh = new Mesh(geo, mat);
     mesh.name = `slot-${bucket.slot}`;
     mesh.receiveShadow = true;
-    mesh.castShadow = bucket.slot === 'wall';
+    mesh.castShadow =
+      bucket.slot === 'wall' ||
+      bucket.slot.startsWith('furn-');
     mesh.userData.slot = bucket.slot;
     scene.add(mesh);
     meshes.push(mesh);

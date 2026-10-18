@@ -265,6 +265,7 @@ export function buildMaterial(
     });
   }
   if (slot === 'furn-wood') {
+    // Reuse the cached wood texture — free realism win.
     return new MeshStandardMaterial({
       map: getTexture('wood'),
       roughness: 0.7,
@@ -307,9 +308,15 @@ export function buildMaterial(
       metalness: 0,
     });
   }
+  // Remaining slots are the floor TextureKinds only (glass/windowFrame/
+  // furn-* arms all returned above); narrow exhaustively.
+  const kind: TextureKind =
+    slot === 'wood' || slot === 'tile' || slot === 'carpet' || slot === 'concrete'
+      ? slot
+      : 'wood';
   return new MeshStandardMaterial({
-    map: getTexture(slot),
-    roughness: slot === 'carpet' ? 1 : 0.72,
+    map: getTexture(kind),
+    roughness: kind === 'carpet' ? 1 : 0.72,
     metalness: 0,
   });
 }

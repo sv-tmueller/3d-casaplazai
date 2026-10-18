@@ -69,7 +69,8 @@ export interface CollisionBox {
 export interface MaterialBucket {
   /**
    * Stable slot identity the materials factory keys off: 'wall',
-   * 'ceiling', or a floorTexture enum member.
+   * 'ceiling', a floorTexture enum member, window dressing
+   * ('glass'/'windowFrame'), or a furniture family ('furn-*').
    */
   slot: MaterialSlotId;
   /** Plain positions (xyz triples), pkg-4 wire format. */
@@ -84,7 +85,11 @@ export type MaterialSlotId =
   | 'ceiling'
   | Exclude<FloorTexture, null>
   | 'glass'
-  | 'windowFrame';
+  | 'windowFrame'
+  | 'furn-wood'
+  | 'furn-fabric'
+  | 'furn-porcelain'
+  | 'furn-laminate';
 
 /** Fully translated scene the renderer consumes. */
 export interface AdaptedScene {

@@ -16,7 +16,7 @@ import type { FloorplanData } from '../../src/shared/schema';
 function basePlan(): FloorplanData {
   return {
     schemaVersion: 1,
-    units: 'metric',
+    units: 'meters',
     wallHeight: 2.5,
     wallThickness: 0.1,
     rooms: [
@@ -70,7 +70,7 @@ describe('furnitureCollisionBoxes', () => {
     plan.furniture = [
       {
         id: 'f1',
-        type: 'rug-table',
+        type: 'table',
         roomId: 'r1',
         position: [0, 0],
         rotationDeg: 90,

@@ -72,7 +72,7 @@ describe('golden — demo apartment compile metrics', () => {
 
   it('emits collision boxes and furniture volumes', () => {
     const scene = compilePlan(demoRaw);
-    expect(scene.collisions.length).toBe(24);
+    expect(scene.collisions.length).toBe(32); // 24 wall pieces + 8 furniture volumes (issue #18)
     expect(scene.furniture.length).toBe(8);
   });
 });

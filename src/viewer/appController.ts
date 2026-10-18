@@ -449,10 +449,12 @@ export class ViewerApp {
     w.__viewerStats = () => ({
       meshCount: this.countMeshes(),
       slotCount: this.sceneRoot?.meshes.length ?? 0,
-      furnitureMeshCount: 0, // adapter emits collisions only, no furniture meshes
       // Glass arrives as ONE merged bucket (draw-call budget); the
       // meaningful window-parity figure is the QUAD count.
       glassQuadCount: this.countSlotQuads('glass'),
+      // Furniture ships as ONE merged mesh per material family (draw-call
+      // budget); the plan-parity figure is the VOLUME count (8 verts each).
+      furnitureVolumeCount: this.countPrefixVerts('furn-', 8),
     });
   }
 
@@ -472,6 +474,24 @@ export class ViewerApp {
       }
     });
     return quads;
+  }
+
+  /** Sum verts/stride across meshes whose userData.slot starts with prefix. */
+  private countPrefixVerts(prefix: string, stride: number): number {
+    if (!this.sceneRoot) return 0;
+    let total = 0;
+    this.sceneRoot.scene.traverse((obj) => {
+      const mesh = obj as {
+        isMesh?: boolean;
+        userData?: { slot?: string };
+        geometry?: { attributes?: { position?: { count: number } } };
+      };
+      if (mesh.isMesh === true && mesh.userData?.slot?.startsWith(prefix)) {
+        const pos = mesh.geometry?.attributes?.position;
+        if (pos) total += pos.count / stride;
+      }
+    });
+    return total;
   }
 
   private countMeshes(): number {
