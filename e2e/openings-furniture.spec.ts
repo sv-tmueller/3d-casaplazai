@@ -304,4 +304,55 @@ test.describe.serial('openings + furniture stamps (issue #4)', () => {
       new Set(['living', 'kitchen']),
     );
   });
+
+  /**
+   * AC7 (#52): a placed door is select-clickable on the canvas and Delete
+   * removes the WHOLE pair in one step; undo restores both rows, redo
+   * removes them again.
+   */
+  test('AC7: select-click a door, pair-delete, undo/redo (#52)', async ({ page }) => {
+    await loadTwoRooms(page);
+
+    // Door on the shared wall x=3.5 at world y=-2.0 (t≈0.5).
+    await page.getByRole('button', { name: 'Door' }).click();
+    const hit = await aim(page, 3.5, -2.0);
+    await page.mouse.move(hit.x, hit.y);
+    await page.waitForTimeout(120);
+    await page.mouse.click(hit.x, hit.y);
+    expect((await getPlan(page)).openings).toHaveLength(2);
+
+    // Select tool: clicking the door selects it (openings beat rooms).
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.click(hit.x, hit.y);
+    await page.keyboard.press('Delete');
+    expect((await getPlan(page)).openings).toHaveLength(0);
+
+    // Undo restores BOTH rows in a single snapshot step.
+    await page.getByRole('button', { name: 'Undo' }).click();
+    expect((await getPlan(page)).openings).toHaveLength(2);
+    // Redo removes the pair again.
+    await page.getByRole('button', { name: 'Redo' }).click();
+    expect((await getPlan(page)).openings).toHaveLength(0);
+  });
+
+  /** AC8 (#52): the single-row window case selects and deletes too. */
+  test('AC8: select-click a window and delete the single row (#52)', async ({ page }) => {
+    await loadTwoRooms(page);
+
+    // Window on room A's OUTER north wall (y=-0.5, midpoint x=2.0) = 1 row.
+    await page.getByRole('button', { name: 'Window' }).click();
+    const hit = await aim(page, 2.0, -0.5);
+    await page.mouse.move(hit.x, hit.y);
+    await page.waitForTimeout(120);
+    await page.mouse.click(hit.x, hit.y);
+    expect((await getPlan(page)).openings).toHaveLength(1);
+
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.mouse.click(hit.x, hit.y);
+    await page.keyboard.press('Delete');
+    expect((await getPlan(page)).openings).toHaveLength(0);
+
+    await page.getByRole('button', { name: 'Undo' }).click();
+    expect((await getPlan(page)).openings).toHaveLength(1);
+  });
 });

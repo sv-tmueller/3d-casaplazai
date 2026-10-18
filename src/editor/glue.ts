@@ -30,7 +30,7 @@ import {
   type InteractionPhase,
 } from './controller';
 import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from './model/constants';
-import { nearestSegment, pointAtT, projectOntoSegment } from './model/openings';
+import { nearestSegment, openingAt, pointAtT, projectOntoSegment } from './model/openings';
 import { itemCorners } from './model/furniture';
 import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
@@ -176,7 +176,7 @@ export function initEditorInteraction(
     const rect = canvas.getBoundingClientRect();
     paintScene(
       ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId,
-      ghost, hoverSeg, hoverHandle,
+      ghost, hoverSeg, hoverHandle, store.getState().selectedId,
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
@@ -633,6 +633,16 @@ export function initEditorInteraction(
       store.beginGesture();
       phase = { tag: 'draggingFurniture', furnitureId: grabbed.id };
       canvas.setPointerCapture(ev.pointerId);
+      return;
+    }
+
+    // pkg 1 (issue #52): an opening under the cursor wins over the room
+    // wall it is cut into. Selection only — no drag phase, no pointer
+    // capture (opening dragging is a non-goal).
+    const openingHit = openingAt(worldPt, st.data);
+    if (openingHit) {
+      store.dispatch({ type: 'setEntitySelection', entityId: openingHit.id });
+      phase = { tag: 'idle' };
       return;
     }
 
