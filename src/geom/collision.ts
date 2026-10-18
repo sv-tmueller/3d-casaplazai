@@ -138,3 +138,38 @@ export function buildCollisions(plan: FloorplanData): Aabb[] {
   }
   return boxes.map((box) => expandPlayerRadius(box));
 }
+
+/**
+ * Expanded collision boxes for furniture footprints (issue #18):
+ * the rotated-corner AABB of each stamped item (same rotation math as
+ * `furnitureVolumes` in compile.ts), grown by PLAYER_RADIUS so walking
+ * capsules stop short of sofas, beds and counters alike. Empty for
+ * plans without furniture.
+ */
+export function furnitureCollisionBoxes(plan: FloorplanData): Aabb[] {
+  return plan.furniture.map((item) => {
+    const [fx, fy] = item.footprint;
+    const hw = fx / 2;
+    const hh = fy / 2;
+    const rad = (item.rotationDeg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [lx, ly] of [
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
+    ]) {
+      xs.push(item.position[0] + lx * cos - ly * sin);
+      ys.push(item.position[1] + lx * sin + ly * cos);
+    }
+    return expandPlayerRadius({
+      minX: Math.min(...xs),
+      minY: Math.min(...ys),
+      maxX: Math.max(...xs),
+      maxY: Math.max(...ys),
+    });
+  });
+}

@@ -24,7 +24,7 @@ import {
   wallHeightForSegment,
   buildSlab,
 } from './walls';
-import { buildCollisions } from './collision';
+import { buildCollisions, furnitureCollisionBoxes } from './collision';
 import { validateGeometry } from './validate';
 import { makeSegments } from './mathutil';
 
@@ -198,7 +198,8 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
 
   return {
     rooms,
-    collisions: buildCollisions(plan),
+    // Walls first (unchanged contract), then furniture boxes (issue #18).
+    collisions: [...buildCollisions(plan), ...furnitureCollisionBoxes(plan)],
     furniture: furnitureVolumes(plan.furniture),
   };
 }
