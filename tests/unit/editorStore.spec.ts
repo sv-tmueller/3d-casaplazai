@@ -113,6 +113,74 @@ describe('addOpening two-row emission (AC1)', () => {
   });
 });
 
+describe('tolerance based shared-wall pairing (#36)', () => {
+  /** Two-room plan with the kitchen's shared wall shifted by dx meters. */
+  function offsetPlan(dx: number): FloorplanData {
+    const p = plan();
+    p.rooms[1].polygon = [
+      [5 + dx, 0],
+      [8 + dx, 0],
+      [8 + dx, 4],
+      [5 + dx, 4],
+    ];
+    return p;
+  }
+
+  function addDoor(store: EditorStore, segmentIndex: number, tCenter: number) {
+    return store.dispatch({
+      type: 'addOpening',
+      roomId: 'living',
+      segmentIndex,
+      tCenter,
+      ...DOOR_BASE,
+    });
+  }
+
+  it('5 mm-offset counterpart still emits the mirror row', () => {
+    const store = new EditorStore(offsetPlan(0.005));
+    expect(addDoor(store, 1, 0.55).ok).toBe(true);
+    const ops = openingsOf(store.getState());
+    expect(ops).toHaveLength(2);
+    expect(ops[0].roomId).toBe('living');
+    expect(ops[1].roomId).toBe('kitchen');
+    expect(ops[1].segmentIndex).toBe(3);
+    expect(ops[1].tCenter).toBeCloseTo(0.45);
+  });
+
+  it('findPartner still finds the partner across a 5 mm gap', () => {
+    const store = new EditorStore(offsetPlan(0.005));
+    expect(addDoor(store, 1, 0.55).ok).toBe(true);
+    const a = openingsOf(store.getState())[0];
+    const res = store.dispatch({
+      type: 'moveOpening',
+      openingId: a.id,
+      tCenter: 0.7,
+      syncPair: true,
+    });
+    expect(res.ok).toBe(true);
+    const [rowA, rowB] = openingsOf(store.getState());
+    expect(rowA.tCenter).toBeCloseTo(0.7);
+    expect(rowB.tCenter).toBeCloseTo(0.3);
+  });
+
+  it('2 cm offset does NOT pair (guards the tolerance boundary)', () => {
+    const store = new EditorStore(offsetPlan(0.02));
+    expect(addDoor(store, 1, 0.55).ok).toBe(true);
+    const ops = openingsOf(store.getState());
+    expect(ops).toHaveLength(1);
+    // Editing the lone row must not conjure a partner.
+    expect(
+      store.dispatch({
+        type: 'moveOpening',
+        openingId: ops[0].id,
+        tCenter: 0.7,
+        syncPair: true,
+      }).ok,
+    ).toBe(true);
+    expect(openingsOf(store.getState())).toHaveLength(1);
+  });
+});
+
 describe('pair sync on edit', () => {
   function withPair(): EditorStore {
     const store = newStore();

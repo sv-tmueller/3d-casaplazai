@@ -9,6 +9,7 @@
  */
 import type { FloorplanData, Opening, Room, Vec2 } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
+import { PAIR_TOLERANCE_M } from './model/constants';
 
 export type Pt = Vec2;
 
@@ -193,13 +194,23 @@ function reduceSetSelection(st: EditorState, cmd: { roomId: string | null }): Di
 
 /* --------------------- pkg 3 reducer internals (issue #4) ------------------ */
 
-/** Coincident-vertex comparator (same tolerance as the model layer). */
-function vertsCoincide(p: Vec2 | undefined, q: Vec2 | undefined): boolean {
+/**
+ * Coincident-vertex comparator used for shared-wall pairing. Tolerance
+ * defaults to PAIR_TOLERANCE_M so a wall drawn a few millimeters off
+ * still pairs (issue #36); it is the SAME tolerance the model layer's
+ * derivePairRows() uses, keeping emission, mutate, undo and select in
+ * agreement.
+ */
+function vertsCoincide(
+  p: Vec2 | undefined,
+  q: Vec2 | undefined,
+  tol: number = PAIR_TOLERANCE_M,
+): boolean {
   return (
     !!p &&
     !!q &&
-    Math.abs(p[0] - q[0]) < 1e-6 &&
-    Math.abs(p[1] - q[1]) < 1e-6
+    Math.abs(p[0] - q[0]) < tol &&
+    Math.abs(p[1] - q[1]) < tol
   );
 }
 

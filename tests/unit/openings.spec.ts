@@ -186,6 +186,41 @@ describe('two-row shared-door convention (AC1)', () => {
     expect(pl[0]).toBeCloseTo(pk[0]);
     expect(pl[1]).toBeCloseTo(pk[1]);
   });
+
+  it('tolerates a 5 mm-offset shared wall (#36)', () => {
+    const plan = twoRoomSharedWall();
+    plan.rooms[1].polygon = [
+      [5.005, 0],
+      [8.005, 0],
+      [8.005, 4],
+      [5.005, 4],
+    ];
+    const rows = derivePairRows(plan, {
+      roomId: 'living',
+      segmentIndex: 1,
+      tCenter: 0.55,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[1].roomId).toBe('kitchen');
+    expect(rows[1].segmentIndex).toBe(3);
+    expect(rows[1].tCenter).toBeCloseTo(0.45);
+  });
+
+  it('does not pair at a 2 cm offset (#36 boundary)', () => {
+    const plan = twoRoomSharedWall();
+    plan.rooms[1].polygon = [
+      [5.02, 0],
+      [8.02, 0],
+      [8.02, 4],
+      [5.02, 4],
+    ];
+    const rows = derivePairRows(plan, {
+      roomId: 'living',
+      segmentIndex: 1,
+      tCenter: 0.55,
+    });
+    expect(rows).toHaveLength(1);
+  });
 });
 
 describe('nearestSegment picking', () => {
