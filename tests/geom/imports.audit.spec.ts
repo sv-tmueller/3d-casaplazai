@@ -58,6 +58,9 @@ describe('imports audit — src/geom purity', () => {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .split('\n')
         .map((ln) => ln.replace(/^(\s*)\/\/.*$/, '$1'))
+        // Strip single-quoted string literals too: comparing against the
+        // KIND VALUE 'window' is data, not a DOM-global reference.
+        .map((ln) => ln.replace(/'[^']*'/g, "''"))
         .join('\n');
       expect(stripped.trim()).toBeTruthy();
       expect(DOM_GLOBAL_PATTERN.test(stripped)).toBe(false);
