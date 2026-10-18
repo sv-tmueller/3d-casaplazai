@@ -80,22 +80,29 @@ describe('dedupeWalls — stacked windows (issue #29)', () => {
   };
   const adapted = adaptScene(compiled, roomsById(plan));
 
-  it('keeps both windows’ slabs in the wall bucket', () => {
+  it('covers the carved span exactly once (stacked bands not collapsed)', () => {
     const wall = adapted.buckets.find((b) => b.slot === 'wall');
     expect(wall).toBeDefined();
-    // 9 raw slabs (3 solid perimeter + 2 solid spans in the carved wall
-    // + 4 window pieces) survive verbatim: nothing here is coincident
-    // in all three axes.
-    expect(wall?.positions.length).toBe(9 * 8 * 3);
+    // This fixture stacks two openings on ONE span — rejectable input
+    // (validateGeometry forbids longitudinal opening overlap), so the
+    // white-box compiler emits REDUNDANT slabs: win-high's below-sill
+    // span z[0,1.4] redraws win-low's hole band, and win-low's
+    // above-head span z[0.9,2.7] CONTAINS win-high's above-head
+    // z[1.9,2.7] on the same t-range — the same coincident shape as the
+    // cross-z-band finding on PR #50. The coplanar pass now merges that
+    // pair (it is a real z-fight), so 8 slabs / 64 verts remain, and the
+    // span is covered exactly once: [0,0.4], [0.4,1.4], [1.4,2.7].
+    expect(wall?.positions.length).toBe(8 * 8 * 3);
 
     const zs = zValues(wall?.positions as Float32Array);
     const has = (target: number): boolean =>
       zs.some((z) => Math.abs(z - target) < EPS);
-    // win-low above-head bottom, win-high below-sill top / above-head
-    // bottom — present only when the stacked bands are NOT collapsed.
-    expect(has(0.9)).toBe(true);
+    // Seams of the exactly-once cover of the carved span: the band that
+    // win-low's hole interrupts, win-high's below-sill top, and the
+    // surviving above-head band. None of the stacked bands collapsed.
+    expect(has(0.4)).toBe(true);
     expect(has(1.4)).toBe(true);
-    expect(has(1.9)).toBe(true);
+    expect(has(2.7)).toBe(true);
   });
 });
 
@@ -114,21 +121,23 @@ describe('dedupeWalls — demo parity (issue #29)', () => {
   const wall = adapted.buckets.find((b) => b.slot === 'wall');
   const keptVerts = wall ? wall.positions.length / 3 : -1;
 
-  it('pins the demo wall-bucket vertex count (208)', () => {
+  it('pins the demo wall-bucket vertex count (184)', () => {
     // Post-#29 figure was 224 (xy-only key collapsed 3 stacked-window
-    // slab pairs). Issue #45 lowered it to 208: with walls now
-    // full-thickness, the demo's shared interior walls produce
-    // PARTIALLY-overlapping coplanar spans (not just identical copies)
-    // that z-fight; adaptScene's coplanar-span pass removes the 16
-    // doubly-covered verts. All counts are MEASURED from a real run.
-    expect(keptVerts).toBe(208);
+    // slab pairs). Issue #45 lowered it to 208 (full-thickness walls ⇒
+    // partially-overlapping coplanar spans). The PR #50 fix round
+    // generalized the pass from z-band-keyed to 2-D (t,z) coverage on
+    // the shared plane, which also merges the demo's CROSS-Z-BAND
+    // coincidences (door above-head z[2.05,2.70] vs a neighbour's
+    // full-height z[0,2.70]) — measured 184. All counts are MEASURED
+    // from a real run.
+    expect(keptVerts).toBe(184);
   });
 
   it('still drops genuinely coincident duplicates', () => {
     // Interior shared walls are emitted twice with matching xy AND z —
     // dedupe removes them (3 slabs = 24 verts); the coplanar pass then
-    // removes the further 16 verts of partial overlaps (#45).
+    // nets a further 40 verts of overlaps/splits (#45 + PR #50).
     expect(rawWallVerts).toBe(248);
-    expect(keptVerts).toBe(rawWallVerts - 24 - 16);
+    expect(keptVerts).toBe(rawWallVerts - 24 - 40);
   });
 });

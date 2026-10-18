@@ -13,8 +13,10 @@
  * pre-trim half a thickness), so it is valid for real-thickness slabs.
  */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { adaptScene } from '../../src/viewer/adapter';
-import { compilePlan } from '../../src/geom';
+import { compilePlan, parseValidatedPlan } from '../../src/geom';
 import type { MeshBuffer } from '../../src/geom';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
 
@@ -139,5 +141,108 @@ describe('issue #45 staggered shared wall — no coplanar z-fighting', () => {
     }
     // doorRects emits ONE rect per paired doorway; nothing to dedupe.
     expect([...perDoor.values()].sort((a, b) => a - b)).toEqual([4, 4]);
+  });
+});
+
+/* --------- cross-z-band coincidence (tester finding, PR #50) ------------ */
+
+/**
+ * Two rooms share a straight wall plane. Room A's wall is carved by a
+ * door (above-head slab z[2.05,2.70]); room B's is full-height
+ * z[0,2.70]. The slabs are coplanar and tangentially overlapping but have
+ * DIFFERENT z-bands, so the old z-band-keyed grouping never merged them —
+ * coincident faces → z-fighting. The pass must now key on the plane and
+ * subtract coverage inside the z-overlap only.
+ */
+function crossBandPlan(): FloorplanData {
+  const rooms: Room[] = [
+    { id: 'A', name: 'A', polygon: [[0, 0], [5, 0], [5, 4], [0, 4]], floorTexture: null },
+    { id: 'B', name: 'B', polygon: [[5, 0], [8, 0], [8, 4], [5, 4]], floorTexture: null },
+  ];
+  const openings: Opening[] = [
+    { id: 'A-door', roomId: 'A', kind: 'door', segmentIndex: 1, tCenter: 0.5, width: 0.9, headHeight: 2.05, sillHeight: 0 },
+  ];
+  return {
+    schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: W,
+    rooms, openings, furniture: [],
+  };
+}
+
+describe('issue #45 — cross-z-band coplanar slabs (PR #50 finding)', () => {
+  it('the raw compile DOES emit a cross-z-band coplanar pair (real repro)', () => {
+    const plan = crossBandPlan();
+    const scene = compilePlan(plan);
+    const all: Slab[] = [];
+    for (const rm of scene.rooms) {
+      for (const b of rm.walls) {
+        const s = describeSlab(b.positions);
+        if (s) all.push(s);
+      }
+    }
+    let crossBand = 0;
+    for (let i = 0; i < all.length; i += 1) {
+      for (let j = i + 1; j < all.length; j += 1) {
+        const a = all[i] as Slab; const b = all[j] as Slab;
+        if (Math.abs(a.nx * b.ny - a.ny * b.nx) > 1e-6) continue;
+        if (Math.abs(a.offA - b.offA) > 1e-6 || Math.abs(a.offB - b.offB) > 1e-6) continue;
+        const tOv = Math.min(a.t1, b.t1) - Math.max(a.t0, b.t0);
+        const zOv = Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0);
+        // coplanar + t/z overlap but DIFFERENT z-bands (the cross-band class)
+        const sameBand = Math.abs(a.z0 - b.z0) < 1e-6 && Math.abs(a.z1 - b.z1) < 1e-6;
+        if (tOv > 1e-6 && zOv > 1e-6 && !sameBand) crossBand += 1;
+      }
+    }
+    expect(crossBand).toBeGreaterThan(0);
+  });
+
+  it('leaves ZERO coplanar overlapping slabs after adaptation', () => {
+    const plan = crossBandPlan();
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
+    expect(wall).toBeDefined();
+    expect(coplanarOverlaps(wall)).toBe(0);
+  });
+
+  it('emits the demo wall bucket with ZERO coplanar overlaps', () => {
+    const demo = parseValidatedPlan(
+      JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+    );
+    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.openings);
+    const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
+    expect(wall).toBeDefined();
+    expect(coplanarOverlaps(wall)).toBe(0);
+  });
+
+  it('does NOT merge same-room window bands (below-sill / above-head)', () => {
+    const room: Room = {
+      id: 'W', name: 'W', polygon: [[0, 0], [5, 0], [5, 4], [0, 4]], floorTexture: null,
+    };
+    const openings: Opening[] = [
+      { id: 'win', roomId: 'W', kind: 'window', segmentIndex: 1, tCenter: 0.5, width: 1.2, sillHeight: 0.9, headHeight: 2.05 },
+    ];
+    const plan: FloorplanData = {
+      schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: W,
+      rooms: [room], openings, furniture: [],
+    };
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
+    const slabs: Slab[] = [];
+    for (let o = 0; o + 24 <= wall.positions.length; o += 24) {
+      const s = describeSlab(wall.positions, o);
+      if (s) slabs.push(s);
+    }
+    const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-3;
+    const sill = slabs.filter((s) => near(s.z0, 0) && near(s.z1, 0.9));
+    const head = slabs.filter((s) => near(s.z0, 2.05) && near(s.z1, 2.7));
+    expect(sill.length).toBeGreaterThan(0);
+    expect(head.length).toBeGreaterThan(0);
+    // Both bands span the window's tangential range ⇒ neither was eaten.
+    const sillS = sill[0] as Slab; const headS = head[0] as Slab;
+    expect(near(sillS.t0, headS.t0)).toBe(true);
+    expect(near(sillS.t1, headS.t1)).toBe(true);
+    expect(sillS.t1 - sillS.t0).toBeGreaterThan(1);
+    expect(coplanarOverlaps(wall)).toBe(0);
   });
 });

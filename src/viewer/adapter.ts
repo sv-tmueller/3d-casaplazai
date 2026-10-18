@@ -163,8 +163,14 @@ function describeWallPrism(p: Float32Array): WallPrismSpan | null {
   return { nx, ny, ex, ey, offA, offB, t0, t1, z0, z1 };
 }
 
-/** Re-emit a prism of the SAME thickness/plane, clipped to [t0,t1]. */
-function emitWallPrism(s: WallPrismSpan, t0: number, t1: number): MeshBuffer {
+/** Re-emit a prism of the SAME thickness/plane, clipped in t and in z. */
+function emitWallPrism(
+  s: WallPrismSpan,
+  t0: number,
+  t1: number,
+  z0: number = s.z0,
+  z1: number = s.z1,
+): MeshBuffer {
   const q = 1e4;
   const v = (off: number, t: number, z: number): number[] => [
     Math.round((s.nx * off + s.ex * t) * q) / q,
@@ -172,10 +178,10 @@ function emitWallPrism(s: WallPrismSpan, t0: number, t1: number): MeshBuffer {
     Math.round(z * q) / q,
   ];
   const positions = new Float32Array([
-    ...v(s.offA, t0, s.z0), ...v(s.offA, t0, s.z1),
-    ...v(s.offA, t1, s.z0), ...v(s.offA, t1, s.z1),
-    ...v(s.offB, t0, s.z0), ...v(s.offB, t0, s.z1),
-    ...v(s.offB, t1, s.z0), ...v(s.offB, t1, s.z1),
+    ...v(s.offA, t0, z0), ...v(s.offA, t0, z1),
+    ...v(s.offA, t1, z0), ...v(s.offA, t1, z1),
+    ...v(s.offB, t0, z0), ...v(s.offB, t0, z1),
+    ...v(s.offB, t1, z0), ...v(s.offB, t1, z1),
   ]);
   const indices = new Uint32Array([
     0, 2, 3, 0, 3, 1,
@@ -205,9 +211,16 @@ function resolveCoplanarWallOverlaps(bufs: MeshBuffer[]): MeshBuffer[] {
   const d = descs as WallPrismSpan[];
   const groups = new Map<string, number[]>();
   d.forEach((s, i) => {
+    // Group by PLANE ONLY (normal + face offsets), not by z-band: two rooms
+    // sharing a wall may carve openings at different heights, so their
+    // coplanar slabs need not share a z-band yet still coincide on the
+    // shared plane (cross-z-band z-fighting, tester finding on PR #50).
+    // Disjoint z-bands are handled by the z-intersection test below, so
+    // same-room stacked slabs (below-sill / above-head around a window)
+    // never eat each other.
     const key =
       `${s.nx.toFixed(4)}|${s.ny.toFixed(4)}|${s.offA.toFixed(4)}|` +
-      `${s.offB.toFixed(4)}|${s.z0.toFixed(4)}|${s.z1.toFixed(4)}`;
+      `${s.offB.toFixed(4)}`;
     const g = groups.get(key);
     if (g) g.push(i);
     else groups.set(key, [i]);
@@ -217,40 +230,64 @@ function resolveCoplanarWallOverlaps(bufs: MeshBuffer[]): MeshBuffer[] {
   const extra: MeshBuffer[] = [];
   let touched = false;
 
+  /** Emitted (t0,t1,z0,z1) rectangles already drawn on this plane. */
+  type Rect = [number, number, number, number];
+
   for (const idxs of groups.values()) {
     if (idxs.length < 2) continue;
-    const covered: Array<[number, number]> = [];
+    const covered: Rect[] = [];
     const ordered = [...idxs].sort(
-      (a, b) => d[a]!.t0 - d[b]!.t0 || d[a]!.t1 - d[b]!.t1,
+      (a, b) =>
+        d[a]!.t0 - d[b]!.t0 ||
+        d[a]!.t1 - d[b]!.t1 ||
+        d[a]!.z0 - d[b]!.z0,
     );
     for (const i of ordered) {
       const s = d[i] as WallPrismSpan;
-      let pieces: Array<[number, number]> = [[s.t0, s.t1]];
-      for (const [c0, c1] of covered) {
-        const next: Array<[number, number]> = [];
-        for (const [a0, a1] of pieces) {
-          if (c1 <= a0 + SPAN_EPS || c0 >= a1 - SPAN_EPS) {
-            next.push([a0, a1]);
+      let pieces: Rect[] = [[s.t0, s.t1, s.z0, s.z1]];
+      for (const [c0, c1, cz0, cz1] of covered) {
+        const next: Rect[] = [];
+        for (const [a0, a1, az0, az1] of pieces) {
+          const z0 = Math.max(az0, cz0);
+          const z1 = Math.min(az1, cz1);
+          // Disjoint in z or t ⇒ the whole piece survives untouched.
+          if (
+            z1 <= z0 + SPAN_EPS ||
+            c1 <= a0 + SPAN_EPS ||
+            c0 >= a1 - SPAN_EPS
+          ) {
+            next.push([a0, a1, az0, az1]);
             continue;
           }
-          if (c0 > a0 + SPAN_EPS) next.push([a0, c0]);
-          if (c1 < a1 - SPAN_EPS) next.push([c1, a1]);
+          // t-outside parts keep the full z-band.
+          if (c0 > a0 + SPAN_EPS) next.push([a0, c0, az0, az1]);
+          if (c1 < a1 - SPAN_EPS) next.push([c1, a1, az0, az1]);
+          // t-inside part keeps only the z-runs outside the covered band.
+          const lo = Math.max(a0, c0);
+          const hi = Math.min(a1, c1);
+          if (cz0 > az0 + SPAN_EPS) next.push([lo, hi, az0, cz0]);
+          if (cz1 < az1 - SPAN_EPS) next.push([lo, hi, cz1, az1]);
         }
         pieces = next;
       }
+      const p0 = pieces[0];
       const whole =
         pieces.length === 1 &&
-        pieces[0] !== undefined &&
-        pieces[0][0] <= s.t0 + SPAN_EPS &&
-        pieces[0][1] >= s.t1 - SPAN_EPS;
+        p0 !== undefined &&
+        p0[0] <= s.t0 + SPAN_EPS &&
+        p0[1] >= s.t1 - SPAN_EPS &&
+        p0[2] <= s.z0 + SPAN_EPS &&
+        p0[3] >= s.z1 - SPAN_EPS;
       if (!whole) {
         touched = true;
         kept[i] = null;
         for (const p of pieces) {
-          if (p[1] - p[0] > SPAN_EPS) extra.push(emitWallPrism(s, p[0], p[1]));
+          if (p[1] - p[0] > SPAN_EPS && p[3] - p[2] > SPAN_EPS) {
+            extra.push(emitWallPrism(s, p[0], p[1], p[2], p[3]));
+          }
         }
       }
-      covered.push([s.t0, s.t1]);
+      covered.push([s.t0, s.t1, s.z0, s.z1]);
     }
   }
 
