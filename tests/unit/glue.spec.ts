@@ -11,12 +11,43 @@ import {
   FIT_MARGIN,
   MAX_ZOOM_SCALE,
   MIN_ZOOM_SCALE,
+  openingCommitNotice,
   ZOOM_BUTTON_STEP,
   zoomAboutCenter,
 } from '../../src/editor/glue';
 import { worldToScreen, type Camera } from '../../src/editor/controller';
 import { emptyPlan } from '../../src/editor/store';
 import type { FloorplanData, FurnitureItem, Room } from '../../src/shared/schema';
+// #46 e2e constants — asserting these equal the real glue exports keeps the
+// Playwright spec's hand-mirrored numbers honest (drift fails loudly here).
+import * as e2eCam from '../../e2e/fixtures/camConstants';
+
+describe('openingCommitNotice (#36 single-sided warning)', () => {
+  it('warns when a single row was emitted (pierces only this wall)', () => {
+    const notice = openingCommitNotice(0, 1);
+    expect(notice).not.toBeNull();
+    expect(notice).toContain('only this wall');
+  });
+
+  it('stays silent when the shared door emitted two rows', () => {
+    expect(openingCommitNotice(0, 2)).toBeNull();
+    expect(openingCommitNotice(3, 5)).toBeNull();
+  });
+
+  it('is silent for a no-op (no row added)', () => {
+    expect(openingCommitNotice(2, 2)).toBeNull();
+  });
+});
+
+describe('e2e camera constants sync guard (#46)', () => {
+  it('mirrors the real glue constants so e2e drift fails loudly', () => {
+    // CAM_SCALE mirrors glue's unexported INITIAL_SCALE: the neutral scale
+    // computeFitCamera returns for an empty plan (see the fallback test).
+    expect(e2eCam.CAM_SCALE).toBe(computeFitCamera(emptyPlan(), 800, 600).scale);
+    expect(e2eCam.FIT_MARGIN).toBe(FIT_MARGIN);
+    expect(e2eCam.BTN_ZOOM).toBe(ZOOM_BUTTON_STEP);
+  });
+});
 
 const room = (id: string, polygon: Array<[number, number]>): Room => ({
   id,

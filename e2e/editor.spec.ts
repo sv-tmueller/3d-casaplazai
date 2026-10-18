@@ -13,6 +13,8 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+import { BTN_ZOOM, CAM_SCALE, FIT_MARGIN } from './fixtures/camConstants';
+
 const SCALE = 80; // INITIAL_SCALE in glue.ts
 
 type Plan = {
@@ -215,9 +217,12 @@ test.describe.serial('editor core', () => {
 
 type Cam = { originX: number; originY: number; scale: number };
 
-const CAM_SCALE = 80; // glue INITIAL_SCALE (neutral camera)
-const FIT_MARGIN = 0.1; // glue FIT_MARGIN
-const BTN_ZOOM = 1.2; // glue ZOOM_BUTTON_STEP
+// ROOM_STROKE is #2563eb = rgb(37,99,235) in glue.ts. These thresholds are
+// derived from that stroke so they admit it and reject the pale room fill
+// (r≈221): the stroke's blue (235) dominates, its red (37) stays low.
+const STROKE_MIN_BLUE = 170; // stroke blue 235
+const STROKE_MAX_RED = 160; // stroke red 37; fill red ≈221 fails this
+const STROKE_MAX_GREEN = 200; // stroke green 99
 
 async function getCam(page: Page): Promise<Cam> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,7 +243,7 @@ async function aimCam(
 /** Count projected room corners whose pixels carry the #2563eb stroke. */
 async function strokeHits(page: Page, c: Cam, corners: number[][]): Promise<number> {
   return page.evaluate(
-    ({ cam, pts }) => {
+    ({ cam, pts, minB, maxR, maxG }) => {
       const cv = document.querySelector('.editor-canvas') as HTMLCanvasElement;
       const ctx = cv.getContext('2d')!;
       const dpr = cv.width / cv.getBoundingClientRect().width;
@@ -250,7 +255,7 @@ async function strokeHits(page: Page, c: Cam, corners: number[][]): Promise<numb
         const img = ctx.getImageData(sx - rad, sy - rad, rad * 2 + 1, rad * 2 + 1).data;
         for (let i = 0; i < img.length; i += 4) {
           // ROOM_STROKE rgb(37,99,235); the pale room fill (r≈221) fails this.
-          if (img[i + 2] > 170 && img[i] < 160 && img[i + 1] < 200) {
+          if (img[i + 2] > minB && img[i] < maxR && img[i + 1] < maxG) {
             hits += 1;
             break;
           }
@@ -258,7 +263,13 @@ async function strokeHits(page: Page, c: Cam, corners: number[][]): Promise<numb
       }
       return hits;
     },
-    { cam: c, pts: corners },
+    {
+      cam: c,
+      pts: corners,
+      minB: STROKE_MIN_BLUE,
+      maxR: STROKE_MAX_RED,
+      maxG: STROKE_MAX_GREEN,
+    },
   );
 }
 
