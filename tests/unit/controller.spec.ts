@@ -3,13 +3,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  classifyCorner,
   computeOverlaps,
   evaluateSnapCandidates,
   finalizeRectangle,
   rectCorners,
+  resizeHandleAt,
 } from '../../src/editor/controller';
 import { vecAdd, vecSub, type Pt } from '../../src/editor/geom';
 import { emptyPlan } from '../../src/editor/store';
+import type { Room } from '../../src/shared/schema';
 
 describe('finalizeRectangle', () => {
   it('orders opposite corners into a CCW ring', () => {
@@ -105,5 +108,51 @@ describe('drag anchor math (regression: interior grab jumped the room)', () => {
     // Whole polygon translated by exactly the cursor delta — no jump.
     expect(moved[0]).toEqual([1, -0.5]);
     expect(moved[2]).toEqual([4, 2.5]);
+  });
+});
+
+/* --------------- issue #53: resize-handle picking + corner cursor --------- */
+
+const RECT: Room = {
+  id: 'r',
+  name: 'R',
+  polygon: [[0, 0], [4, 0], [4, 3], [0, 3]],
+  floorTexture: null,
+};
+
+describe('resizeHandleAt rectangle path (#53)', () => {
+  it('returns the vertex index when the point is within tolerance', () => {
+    expect(resizeHandleAt([0.1, 0.1], RECT, 0.3)).toBe(0);
+    expect(resizeHandleAt([3.95, 2.9], RECT, 0.3)).toBe(2);
+    expect(resizeHandleAt([0.05, 2.9], RECT, 0.3)).toBe(3);
+  });
+
+  it('returns null for an interior point or a miss outside tolerance', () => {
+    expect(resizeHandleAt([2, 1.5], RECT, 0.3)).toBeNull();
+    expect(resizeHandleAt([4.6, 0], RECT, 0.3)).toBeNull();
+  });
+});
+
+describe('classifyCorner (#53)', () => {
+  it('maps NW/SE to nwse and NE/SW to nesw', () => {
+    // World SW (0,0) = screen bottom-left -> anti-diagonal.
+    expect(classifyCorner([0, 0], RECT)).toBe('nesw-resize');
+    // World SE (4,0) = screen bottom-right -> main diagonal.
+    expect(classifyCorner([4, 0], RECT)).toBe('nwse-resize');
+    // World NE (4,3) = screen top-right -> anti-diagonal.
+    expect(classifyCorner([4, 3], RECT)).toBe('nesw-resize');
+    // World NW (0,3) = screen top-left -> main diagonal.
+    expect(classifyCorner([0, 3], RECT)).toBe('nwse-resize');
+  });
+
+  it('returns null for a degenerate corner on the bbox centre axes', () => {
+    const degenerate: Room = {
+      id: 'd',
+      name: 'D',
+      polygon: [[0, 0], [4, 0], [4, 4], [0, 4]],
+      floorTexture: null,
+    };
+    // Centre column corner (x == centre) -> no diagonal.
+    expect(classifyCorner([2, 0], degenerate)).toBeNull();
   });
 });
