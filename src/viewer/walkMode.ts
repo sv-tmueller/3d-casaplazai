@@ -183,7 +183,26 @@ export class WalkRig implements CameraRig {
 
     const ownerDoc = canvas.ownerDocument;
     this.controls = {
-      lock: () => void canvas.requestPointerLock(),
+      // Swallow async lock denials: the Walk-button/canvas-click flows
+      // treat refusal as "stay unlocked, keep the overlay up" (graceful
+      // fallback). Sync throws propagate to the caller's try/catch.
+      lock: () => {
+        try {
+          const req: unknown = canvas.requestPointerLock();
+          if (
+            typeof req === 'object' &&
+            req !== null &&
+            typeof (req as { catch?: unknown }).catch === 'function'
+          ) {
+            (req as { catch: (onErr: () => void) => void }).catch(() => {
+              /* async denial: stay unlocked, overlay stays up */
+            });
+          }
+        } catch {
+          /* sync refusal: let the caller's try/catch apply the fallback */
+          throw new Error('pointer-lock request refused synchronously');
+        }
+      },
       unlock: () => {
         if (ownerDoc.pointerLockElement === canvas) ownerDoc.exitPointerLock();
       },
