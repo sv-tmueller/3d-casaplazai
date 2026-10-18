@@ -10,6 +10,7 @@ import {
   WINDOW_SILL_EPSILON_M,
   derivePairRows,
   nearestSegment,
+  openingAt,
   openingFitError,
   openingsOverlap,
   pairConsistencyErrors,
@@ -222,5 +223,67 @@ describe('nearestSegment picking', () => {
     expect(nearestSegment(room, [2.5, -0.1])?.index).toBe(0);
     expect(nearestSegment(room, [4.9, 2])?.index).toBe(1);
     expect(nearestSegment(room, [2.5, 2])).toBeNull(); // middle: no wall nearby
+  });
+});
+
+describe('openingAt hit-testing (issue #52)', () => {
+  function opening(over: Partial<Opening>): Opening {
+    return {
+      id: 'op',
+      roomId: 'living',
+      kind: 'door',
+      segmentIndex: 0,
+      tCenter: 0.5,
+      width: 1,
+      sillHeight: 0,
+      headHeight: 2.1,
+      ...over,
+    };
+  }
+
+  it('hits inside the cutout span', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [opening({})];
+    // Living south wall y=0 from x=0..5; span 1 m ⇒ x ∈ [2.0, 3.0].
+    expect(openingAt([2.6, 0.05], plan)?.id).toBe('op');
+  });
+
+  it('misses outside the span (same wall, within radius)', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [opening({})];
+    // t=0.98 ⇒ 2.4 m from tCenter, far beyond width/2 = 0.5 m.
+    expect(openingAt([4.9, 0], plan)).toBeNull();
+  });
+
+  it('misses when the click is off the wall (>0.3 m)', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [opening({})];
+    expect(openingAt([2.5, 0.5], plan)).toBeNull(); // 0.5 m from wall
+    expect(openingAt([2.5, 0.25], plan)?.id).toBe('op'); // inside radius
+  });
+
+  it('treats the clamped span edges inclusively and rejects just past', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [opening({})];
+    expect(openingAt([2.0, 0], plan)?.id).toBe('op'); // exact lo edge
+    expect(openingAt([3.0, 0], plan)?.id).toBe('op'); // exact hi edge
+    expect(openingAt([1.95, 0], plan)).toBeNull(); // 5 cm past lo
+    expect(openingAt([3.05, 0], plan)).toBeNull(); // 5 cm past hi
+  });
+
+  it('picks the intended kind when door and window share the wall', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [
+      opening({ id: 'door1', kind: 'door', tCenter: 0.2, width: 1 }),
+      opening({ id: 'win1', kind: 'window', tCenter: 0.8, width: 1 }),
+    ];
+    expect(openingAt([1.0, 0], plan)?.kind).toBe('door'); // t=0.2
+    expect(openingAt([4.0, 0], plan)?.kind).toBe('window'); // t=0.8
+  });
+
+  it('returns null when the room/segment cannot be resolved', () => {
+    const plan = twoRoomSharedWall();
+    plan.openings = [opening({ roomId: 'ghost' })];
+    expect(openingAt([2.5, 0], plan)).toBeNull();
   });
 });

@@ -41,6 +41,7 @@ export function paintScene(
   hoverRoomId: string | null,
   ghost: GhostPreview | null = null,
   segHighlight: SegHighlight | null = null,
+  selectedId: string | null = null,
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
@@ -56,7 +57,7 @@ export function paintScene(
   // gaps/leaves read on top of the wall lines.
   for (const room of plan.rooms) {
     for (const op of plan.openings.filter((o) => o.roomId === room.id)) {
-      drawOpening(ctx, cam, room, op);
+      drawOpening(ctx, cam, room, op, op.id === selectedId);
     }
   }
 
@@ -214,6 +215,7 @@ function drawOpening(
   cam: Camera,
   room: Room,
   op: FloorplanData['openings'][number],
+  selected = false,
 ): void {
   const seg = roomSegments(room)[op.segmentIndex];
   if (!seg || seg.length === 0) return;
@@ -223,6 +225,18 @@ function drawOpening(
   const pEnd = pointAtT(seg, Math.min(1, op.tCenter + half));
   const a = worldToScreen(cam, pStart);
   const b = worldToScreen(cam, pEnd);
+
+  // Selection affordance (issue #52): heavier orange span, mirroring the
+  // furniture-selection convention (see drawStamp below).
+  if (selected) {
+    ctx.strokeStyle = '#e67e22';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
 
   if (op.kind === 'door') {
     // Jambs: dark posts bracketing the gap.
