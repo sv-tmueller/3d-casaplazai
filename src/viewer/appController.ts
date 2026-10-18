@@ -467,6 +467,13 @@ export class ViewerApp {
         };
       };
     }
+    // TEST-ONLY steering seam (issue #27): face the walk rig at a
+    // plan-space yaw (radians, CCW from +X). Guarded on walkCam so orbit
+    // mode no-ops harmlessly — the e2e traversal spec drives this instead
+    // of synthesizing mouse deltas (headless pointer lock is unreliable).
+    w.__viewerYaw = (yaw: number): void => {
+      this.walkCam?.setYaw(yaw);
+    };
     w.__viewerStats = () => ({
       meshCount: this.countMeshes(),
       slotCount: this.sceneRoot?.meshes.length ?? 0,

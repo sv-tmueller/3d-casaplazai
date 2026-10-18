@@ -5,6 +5,8 @@
  * TWO-ROW shared-door emission + pairing regressions (dispatch
  * routing), furniture command cycles, and gesture streaming.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening, Vec2 } from '../../src/shared/schema';
 import {
@@ -498,5 +500,27 @@ describe('escape-abandoned furniture drag (regression: stuck gesture base)', () 
         segmentIndex: 1, tCenter: 0.5, width: 0.9, sillHeight: 0, headHeight: 2.05,
       } } as never),
     ).not.toThrow();
+  });
+});
+
+/**
+ * Regression guard (#23 disposition): loading the demo fixture TWICE in
+ * a row must be idempotent — no throw, and getState().data deep-equals
+ * the fixture after each replaceAll. Pins the double-loadPlan path.
+ */
+describe('double replaceAll is idempotent (regression: double-loadPlan)', () => {
+  const fixture = (): FloorplanData =>
+    JSON.parse(
+      readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+    ) as FloorplanData;
+
+  it('replaceAll(fixture) twice: no throw, data deep-equals both times', () => {
+    const store = new EditorStore(emptyPlan());
+    const demo = fixture();
+    expect(() => store.replaceAll(demo)).not.toThrow();
+    expect(store.getState().data).toStrictEqual(demo);
+    // Second consecutive load — the historical double-loadPlan crash.
+    expect(() => store.replaceAll(fixture())).not.toThrow();
+    expect(store.getState().data).toStrictEqual(demo);
   });
 });

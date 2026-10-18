@@ -110,53 +110,118 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
   test('WASD traversal threads the doorway into the next room', async ({
     page,
   }) => {
-    test.setTimeout(90_000); // real steering loop: 8-hop route x ~0.3 s/hop
+    test.setTimeout(150_000); // real steering loop: 10 waypoints x ~1.5 s
     await boot(page);
     await page.keyboard.press('Tab');
     await page.waitForTimeout(600);
 
-    // Spawn is the largest room's centroid; walk to the front door, then
-    // through it. Hold W via keyboard.down/up around the traversal.
-    const walkRoute = async (tx: number, ty: number): Promise<void> => {
-      // Steering loop: read camera, walk toward target, stop when close.
-      for (let step = 0; step < 40; step++) {
-        const cam = await page.evaluate(() => {
+    // Arrival slack (m), NOT eyeballed: corridor clearance is only
+    // ±0.12–0.18 m after player-radius expansion, so landing within
+    // 0.45 m of each derived waypoint proves the disc stayed in the
+    // corridor (wall thickness 0.24 + radius 0.3 leaves no room to
+    // cheat). Each hop asserts this — no vacuous Number.isFinite here.
+    const ARRIVAL_SLACK = 0.45;
+    // The terminal waypoint (front-door mouth) lies on the WALL centreline;
+    // the disc (radius 0.3) cannot occupy the wall band, so its standoff
+    // there is bounded by wall thickness 0.24 + radius 0.3 = 0.54 m —
+    // derived, not eyeballed (measured ~0.52 m in the demo).
+    const DOOR_MOUTH_SLACK = 0.54;
+    const slackFor = (i: number): number =>
+      i === ROUTE.length - 1 ? DOOR_MOUTH_SLACK : ARRIVAL_SLACK;
+
+    const readCam = () =>
+      page.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (window as any).__viewerCam?.() ?? null;
+      });
+
+    // HARD latch: a phantom/missing seam must FAIL loud, never silently
+    // no-op (the `__viewerYaw?.()` bug this package retires).
+    const initial = await readCam();
+    expect(
+      initial,
+      'DEBUG SEAM __viewerCam must exist in walk mode',
+    ).not.toBeNull();
+
+    /** Aim at a plan-space point, then press W for one bounded burst. */
+    const hopToward = async (tx: number, ty: number): Promise<void> => {
+      // Plan X = world X; plan Y = world Y (the Z-up world seats eye
+      // height on Z). Reading posZ as plan-Y was the old phantom bug.
+      const cam = await readCam();
+      expect(
+        cam,
+        'DEBUG SEAM __viewerCam must exist in walk mode',
+      ).not.toBeNull();
+      const dx = tx - cam!.discX;
+      const dyPlan = ty - cam!.discY;
+      // Desired plan-yaw: seedYaw lays world forward along
+      // (cos yaw, sin yaw), so facing the goal is atan2(dyPlan, dx).
+      // The old atan2(-dy, dx) was axis- and sign-inverted.
+      const yaw = Math.atan2(dyPlan, dx);
+      const steered = await page.evaluate(
+        ([y]) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return (window as any).__viewerCam?.() ?? null;
-        });
-        if (cam === null) break;
-        const dx = tx - cam.posX;
-        const dy = ty - cam.posZ; // plan-Y lives on world Z after conversion
-        const dist = Math.hypot(dx, dy);
-        if (dist < 0.25) break;
-        // Heading: face the target via mouse-look emulation is unavailable
-        // headless; instead the rig steers by rotating yaw toward the goal.
-        await page.evaluate(
-          ([yaw]) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (window as any).__viewerYaw?.(yaw);
-          },
-          [Math.atan2(-dy, dx)],
-        );
-        await page.keyboard.down('KeyW');
-        await page.waitForTimeout(180);
-        await page.keyboard.up('KeyW');
-      }
+          const fn = (window as any).__viewerYaw;
+          if (typeof fn !== 'function') return false;
+          fn(y);
+          return true;
+        },
+        [yaw],
+      );
+      expect(steered, 'DEBUG SEAM __viewerYaw must be a function').toBe(true);
+      await page.keyboard.down('KeyW');
+      await page.waitForTimeout(160);
+      await page.keyboard.up('KeyW');
     };
 
-    for (const wp of ROUTE) {
-      await walkRoute(wp.x, wp.y);
+    // SIGN-CONVENTION PROBE (empirical, per sub-plan): aim at hop 1 and
+    // assert the exposed WORLD forward actually points that way. seedYaw
+    // maps plan-yaw θ → forward (cosθ, sinθ, 0); a sign error fails here.
+    {
+      const cam = await readCam();
+      const dx = ROUTE[1].x - cam!.discX;
+      const dyPlan = ROUTE[1].y - cam!.discY;
+      const len = Math.hypot(dx, dyPlan);
+      await page.evaluate(
+        ([y]) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).__viewerYaw(y);
+        },
+        [Math.atan2(dyPlan, dx)],
+      );
+      const aimed = await readCam();
+      expect(aimed!.fwdX).toBeCloseTo(dx / len, 2);
+      expect(aimed!.fwdY).toBeCloseTo(dyPlan / len, 2);
+      expect(Math.abs(aimed!.fwdZ)).toBeLessThan(0.05); // laid flat
     }
 
-    const cam = await page.evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (window as any).__viewerCam?.() ?? null;
-    });
-    if (cam !== null) {
-      // Ended near the bedroom door heading deeper — i.e., crossed walls.
-      expect(Number.isFinite(cam.posX)).toBe(true);
-      expect(Number.isFinite(cam.posZ)).toBe(true);
+    // Traverse the route VERBATIM (its doglegs are load-bearing). Each
+    // hop is bounded, then the disc position is read and asserted.
+    for (let i = 0; i < ROUTE.length; i++) {
+      const wp = ROUTE[i];
+      for (let step = 0; step < 60; step++) {
+        const cam = await readCam();
+        expect(
+          cam,
+          'DEBUG SEAM __viewerCam must exist in walk mode',
+        ).not.toBeNull();
+        if (Math.hypot(wp.x - cam!.discX, wp.y - cam!.discY) < 0.2) break;
+        await hopToward(wp.x, wp.y);
+      }
+      const cam = await readCam();
+      expect(
+        cam,
+        'DEBUG SEAM __viewerCam must exist in walk mode',
+      ).not.toBeNull();
+      const err = Math.hypot(cam!.discX - wp.x, cam!.discY - wp.y);
+      expect(
+        err,
+        `waypoint ${i} (${wp.x},${wp.y}): disc stopped ${err.toFixed(2)} m away`,
+      ).toBeLessThanOrEqual(slackFor(i));
     }
+    // The final hop above lands at ROUTE.at(-1) = the FRONT-door mouth,
+    // so the last per-waypoint assertion already proves walls were
+    // threaded rather than clipped.
   });
 
   test('walking into the sofa stops at its expanded boundary (issue #18)', async ({
