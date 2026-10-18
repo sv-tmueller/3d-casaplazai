@@ -197,20 +197,65 @@ export interface PairRowSpec {
   roomId: string;
   segmentIndex: number;
   tCenter: number;
+  /** Cutout width in meters; when given, the partner's overlap must host it. */
+  width?: number;
 }
 
 /**
- * Near-coincident vertex test for shared-wall pairing (issue #36).
- * Uses PAIR_TOLERANCE_M so a wall drawn a few millimeters off still
- * pairs — the SAME tolerance the store's vertsCoincide() applies, so
- * derivePairRows() and the reducer agree on what "the same physical
- * wall" means.
+ * Overlap of two COLLINEAR-reaching segments, expressed in meters along
+ * `seg`'s own axis (from seg.a towards seg.b). `rev` reports whether
+ * `cand` traverses the shared stretch in the opposite direction.
+ *
+ * Issue #41: shared-wall pairing is collinear-OVERLAP based, not
+ * endpoint based. Two walls pair when the candidate's endpoints lie
+ * within PAIR_TOLERANCE_M of the host's LINE (perpendicular distance,
+ * so a wall drawn a few millimeters off still pairs — #36) AND their
+ * extents overlap. Endpoint coincidence is then just the special case
+ * where the overlap equals both full lengths.
  */
-function near(a: Vec2, b: Vec2): boolean {
-  return (
-    Math.abs(a[0] - b[0]) < PAIR_TOLERANCE_M &&
-    Math.abs(a[1] - b[1]) < PAIR_TOLERANCE_M
-  );
+export function sharedWallOverlap(
+  seg: SegmentInfo,
+  cand: SegmentInfo,
+  tol: number = PAIR_TOLERANCE_M,
+): { rev: boolean; lo: number; hi: number } | null {
+  const len = seg.length;
+  if (!(len > 0)) return null;
+  const ux = (seg.b[0] - seg.a[0]) / len;
+  const uy = (seg.b[1] - seg.a[1]) / len;
+  // Perpendicular distance of each candidate endpoint from seg's line.
+  const perp = (p: Vec2): number =>
+    Math.abs(-uy * (p[0] - seg.a[0]) + ux * (p[1] - seg.a[1]));
+  if (perp(cand.a) > tol || perp(cand.b) > tol) return null;
+  const sA = ux * (cand.a[0] - seg.a[0]) + uy * (cand.a[1] - seg.a[1]);
+  const sB = ux * (cand.b[0] - seg.a[0]) + uy * (cand.b[1] - seg.a[1]);
+  const lo = Math.max(0, Math.min(sA, sB));
+  const hi = Math.min(len, Math.max(sA, sB));
+  if (hi - lo <= 0) return null; // distinct spans on the same line
+  const rev =
+    cand.length > 0 &&
+    ux * (cand.b[0] - cand.a[0]) + uy * (cand.b[1] - cand.a[1]) < 0;
+  return { rev, lo, hi };
+}
+
+/** True when an overlap interval can host a cutout given in meters. */
+export function overlapHosts(
+  ov: { lo: number; hi: number },
+  cutLo: number,
+  cutHi: number,
+  eps = 1e-9,
+): boolean {
+  return ov.lo <= cutLo + eps && ov.hi >= cutHi - eps;
+}
+
+/**
+ * Mirror tCenter for a partner segment: the partner's own parameter of
+ * the SAME physical world point (issue #41). Projection handles
+ * arbitrary overlap fractions and both traversal directions, so a
+ * simple complement is only its same-length special case.
+ */
+export function mirrorT(seg: SegmentInfo, worldPoint: Vec2, cand: SegmentInfo): number {
+  void seg;
+  return projectOntoSegment(worldPoint, cand);
 }
 
 /** Complementary tCenter for reversed traversal, clamped into [0,1]. */
@@ -231,19 +276,24 @@ export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRo
   const seg = roomSegments(originRoom)[origin.segmentIndex];
   if (!seg) return [origin];
 
+  const cutHalf = (origin.width ?? 0) / 2;
+  const cutLo = origin.tCenter * seg.length - cutHalf;
+  const cutHi = origin.tCenter * seg.length + cutHalf;
+  const world = pointAtT(seg, origin.tCenter);
+
   const rows: PairRowSpec[] = [origin];
   for (const other of plan.rooms) {
     if (other.id === origin.roomId) continue;
     for (const cand of roomSegments(other)) {
-      const rev = near(cand.a, seg.b) && near(cand.b, seg.a);
-      const fwd = near(cand.a, seg.a) && near(cand.b, seg.b);
-      if (rev || fwd) {
-        rows.push({
-          roomId: other.id,
-          segmentIndex: cand.index,
-          tCenter: rev ? complement(origin.tCenter) : origin.tCenter,
-        });
-      }
+      const ov = sharedWallOverlap(seg, cand);
+      if (!ov || !overlapHosts(ov, cutLo, cutHi)) continue;
+      const mirror: PairRowSpec = {
+        roomId: other.id,
+        segmentIndex: cand.index,
+        tCenter: mirrorT(seg, world, cand),
+      };
+      if (origin.width !== undefined) mirror.width = origin.width;
+      rows.push(mirror);
     }
   }
   return rows;
@@ -291,15 +341,16 @@ export function groupedPairs(plan: FloorplanData): Opening[][] {
           if (!otherRoom) continue;
           const otherSeg = roomSegments(otherRoom)[other.segmentIndex];
           if (!otherSeg) continue;
-          const rev = near(otherSeg.a, seedSeg.b) && near(otherSeg.b, seedSeg.a);
-          const fwd = near(otherSeg.a, seedSeg.a) && near(otherSeg.b, seedSeg.b);
-          // Operator precedence: the guarded disjunction below replaces an
-          // older unguarded `||` chain that short-circuited past the
-          // kind/coincidence guards (fixed late in pkg 3's life).
+          const ov = sharedWallOverlap(seedSeg, otherSeg);
+          // Need #41: collinear-overlap walls pair; the two rows are the
+          // same physical cutout, so their world points coincide — which
+          // projection expresses directly, independent of orientation.
+          const seedWorld = pointAtT(seedSeg, seed.tCenter);
           const tMatch =
             other.kind === seed.kind &&
-            ((rev && Math.abs(complement(seed.tCenter) - other.tCenter) < PAIR_TOLERANCE_M) ||
-              (fwd && Math.abs(seed.tCenter - other.tCenter) < PAIR_TOLERANCE_M));
+            ov !== null &&
+            Math.abs(mirrorT(seedSeg, seedWorld, otherSeg) - other.tCenter) <
+              PAIR_TOLERANCE_M;
           if (tMatch) {
             group.push(other);
             consumed.add(j);
