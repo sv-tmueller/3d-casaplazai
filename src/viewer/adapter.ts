@@ -15,6 +15,7 @@
 
 import {
   type CompiledScene,
+  type FurnitureVolume,
   type MeshBuffer,
   windowPaneRects,
 } from '../geom';
@@ -146,7 +147,7 @@ export function adaptScene(
   pushBucket('ceiling', ceilBufs);
   pushBucket('wall', dedupeWalls(wallBufs));
 
-  // ---- Window dressing (issue #19): glass panes + frames -------------
+  // ---- Window dressing (issue #19): glass panes + frames --------------
   // Emitted AFTER the wall bucket; doors are skipped entirely by
   // windowPaneRects. Undefined openings ⇒ no new buckets (legacy
   // callers keep their exact shape).
@@ -165,6 +166,22 @@ export function adaptScene(
   // Dressing tris participate in the scene-wide count (e2e parity).
   for (const buf of dressGlass) triangleCount += buf.indices.length / 3;
   for (const buf of dressFrames) triangleCount += buf.indices.length / 3;
+
+  // ---- Furniture meshes (issue #18) ------------------------------------
+  // Oriented 12-triangle prisms from the compiler's furniture volumes,
+  // bucketed per material family. NOTE: triangleCount stays ROOM-ONLY
+  // (floors/ceilings/walls) — the countTriangles parity test and the
+  // compiler goldens measure the room shell, not furnishings.
+  const furnBufs = new Map<Extract<MaterialSlotId, `furn-${string}`>, MeshBuffer[]>();
+  for (const vol of compiled.furniture) {
+    const slot = furnitureSlot(vol.typeId);
+    const arr = furnBufs.get(slot) ?? [];
+    arr.push(furniturePrism(vol));
+    furnBufs.set(slot, arr);
+  }
+  for (const [slot, bufs] of [...furnBufs.entries()].sort(sortSlots)) {
+    pushBucket(slot, bufs);
+  }
 
   const collisions: CollisionBox[] = compiled.collisions.map((c) => ({
     minX: c.minX,
@@ -206,6 +223,72 @@ function sortSlots(
   b: [MaterialSlotId, MeshBuffer[]],
 ): number {
   return a[0].localeCompare(b[0]);
+}
+
+/** Map a furniture type onto its material slot family (issue #18). */
+function furnitureSlot(typeId: string): Extract<MaterialSlotId, `furn-${string}`> {
+  switch (typeId) {
+    case 'bed':
+    case 'table':
+      return 'furn-wood';
+    case 'sofa':
+    case 'chair':
+      return 'furn-fabric';
+    case 'bathtub':
+    case 'toilet':
+      return 'furn-porcelain';
+    default: // counter
+      return 'furn-laminate';
+  }
+}
+
+/**
+ * Build a 12-triangle outward-wound prism from one furniture volume:
+ * 4 footprint corners (CCW plan ring) extruded zMin→zMax. Bottom 2 +
+ * top 2 + 4 sides × 2 triangles. Outward winding matters for shadow
+ * acne only lightly here (materials are DoubleSide), but keep it clean.
+ */
+function furniturePrism(vol: FurnitureVolume): MeshBuffer {
+  const [c0, c1, c2, c3] = vol.corners;
+  const zLo = vol.zMin;
+  const zHi = vol.zMax;
+
+  const ring: Array<[number, number]> = [c0, c1, c2, c3];
+
+  // Ensure CCW (positive signed area) so side faces wind outward.
+  let area2 = 0;
+  for (let i = 0; i < 4; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % 4];
+    area2 += ax * by - bx * ay;
+  }
+  if (area2 < 0) ring.reverse();
+
+  const positions = new Float32Array(8 * 3);
+  // Bottom verts 0..3, top verts 4..7 (ring order preserved).
+  ring.forEach(([x, y], i) => {
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = zLo;
+    const t = (i + 4) * 3;
+    positions[t] = x;
+    positions[t + 1] = y;
+    positions[t + 2] = zHi;
+  });
+
+  const indices = new Uint32Array([
+    // bottom (faces down: reverse winding)
+    0, 3, 2, 0, 2, 1,
+    // top (faces up)
+    4, 5, 6, 4, 6, 7,
+    // sides
+    0, 1, 5, 0, 5, 4,
+    1, 2, 6, 1, 6, 5,
+    2, 3, 7, 2, 7, 6,
+    3, 0, 4, 3, 4, 7,
+  ]);
+
+  return { positions, indices };
 }
 
 /** True when any positional coordinate is NaN/Inf (parity invariant). */

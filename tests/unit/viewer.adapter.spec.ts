@@ -38,9 +38,13 @@ describe('adaptScene — demo fixture parity', () => {
       (sum, b) => sum + b.positions.length / 3,
       0,
     );
-    // Dedupe collapses coincident duplicate walls, so bucket verts are
-    // LESS THAN OR EQUAL to raw; equality iff no dupes existed.
-    expect(bucketVerts).toBeLessThanOrEqual(countVertices(compiled));
+    // Dedupe collapses coincident duplicate walls, so the SHELL bucket
+    // verts are <= the raw shell count; furniture prisms add 8 verts per
+    // volume (issue #18). Comparator: shellBudget + furnitureVerts.
+    const furnitureVerts = compiled.furniture.length * 8;
+    expect(bucketVerts).toBeLessThanOrEqual(
+      countVertices(compiled) + furnitureVerts,
+    );
     expect(bucketVerts).toBeGreaterThan(0);
   });
 

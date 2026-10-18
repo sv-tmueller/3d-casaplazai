@@ -169,7 +169,7 @@
       "roomId": "room-living-room",
       "position": [
         1.6,
-        0.65
+        0.9
       ],
       "rotationDeg": 0,
       "footprint": [
@@ -197,7 +197,7 @@
       "roomId": "room-living-room",
       "position": [
         3.3,
-        2.6
+        2.2
       ],
       "rotationDeg": 20,
       "footprint": [

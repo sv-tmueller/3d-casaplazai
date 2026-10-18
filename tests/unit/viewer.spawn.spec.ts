@@ -67,7 +67,7 @@ describe('polygon math', () => {
 });
 
 describe('solveSpawn — adversarial fixtures', () => {
-  it('skinny room marches off the saturated centroid to a legal cell', () => {
+  it('skinny room with furniture SEVERING the corridor fails honestly (SpawnFailureError)', () => {
     // Skinny corridor room with a fat obstacle squatting on its centroid.
     const plan: FloorplanData = {
       schemaVersion: 1,
@@ -96,8 +96,11 @@ describe('solveSpawn — adversarial fixtures', () => {
       ],
     };
     const boxes = boxesOf(plan);
-    const pose = solveSpawn(plan.rooms, boxes);
-    expect(isClear(pose.x, pose.y, boxes, 1.5)).toBe(true);
+    // Issue #18: furniture now participates in collisions. The expanded
+    // counter (3.1 x 2.2 at the centroid) fully SEVERS the 2 m corridor —
+    // no legal cell is reachable from the centroid, so the honest outcome
+    // is a typed failure, not a teleport through the obstacle.
+    expect(() => solveSpawn(plan.rooms, boxes)).toThrow(SpawnFailureError);
   });
 
   it('throws SpawnFailureError when saturation leaves nowhere legal', () => {

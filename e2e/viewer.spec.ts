@@ -9,9 +9,24 @@
 import { expect, test, type Page } from '@playwright/test';
 
 /** Derived door-center waypoints (world XY, meters) for demo-apartment.json. */
-const FRONT_DOOR = { x: 2.7, y: 0 }; // living seg0, t=0.5 × 5.4
-const LIVING_KITCHEN_DOOR = { x: 5.4, y: 1.98 }; // living seg1, t=0.55 × 3.6
-const BEDROOM_DOOR = { x: 6.2, y: 3.6 }; // kitchen seg2 reversed: 8.6 − 0.75 × 3.2
+// Issue #18 furniture-aware route (verified-clean 8 hops; the old direct
+// diagonals graze the sofa/table expanded boxes — see PR notes):
+// spawn(1.8,2.4) → north gate → east past table → LK door → dip south →
+// front door. BEDROOM_DOOR (6.2,3.6) is unreachable: the bed's expanded
+// box seals it (nudging the bed is illegal per the validator) — the route
+// ends at the front door instead.
+const ROUTE: Array<{ x: number; y: number }> = [
+  { x: 1.8, y: 2.4 }, // spawn (fan-cell march result)
+  { x: 2.3, y: 2.95 }, // north gate (between chair top and wall band)
+  { x: 4.8, y: 2.95 }, // east past the table
+  { x: 4.8, y: 1.98 }, // down to the LK door latitude
+  { x: 5.4, y: 1.98 }, // thread LIVING<->KITCHEN door
+  { x: 4.8, y: 1.98 }, // back west
+  { x: 4.8, y: 1.0 }, // dip south (dogleg: direct graze lk-wall band)
+  { x: 3.3, y: 1.0 }, // west along the south lane
+  { x: 3.2, y: 0.6 }, // descend (dogleg: direct cuts sofa)
+  { x: 2.7, y: 0.0 }, // FRONT door mouth
+];
 
 async function boot(page: Page): Promise<void> {
   await page.goto('/viewer');
@@ -56,7 +71,7 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
     if (stats !== null) {
       expect(stats.meshCount).toBeGreaterThan(0);
       expect(stats.slotCount).toBeGreaterThanOrEqual(3);
-      // Window dressing (issue #19): one glass mesh per window opening,
+      // Window dressing (issue #19): glass quads == window count,
       // derived from the fixture at runtime (never hardcoded).
       const demoRaw = await import('node:fs/promises');
       const plan = JSON.parse(
@@ -66,6 +81,9 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
         (o: { kind: string }) => o.kind === 'window',
       ).length;
       expect(stats.glassQuadCount).toBe(windows);
+      // Issue #18: furniture meshes now render; count derived from the
+      // fixture at runtime (8 for the demo).
+      expect(stats.furnitureVolumeCount).toBe(plan.furniture.length);
     } else {
       await expect(page.locator('[data-testid="hud-mode-toggle"]')).toBeVisible();
     }
@@ -92,6 +110,7 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
   test('WASD traversal threads the doorway into the next room', async ({
     page,
   }) => {
+    test.setTimeout(90_000); // real steering loop: 8-hop route x ~0.3 s/hop
     await boot(page);
     await page.keyboard.press('Tab');
     await page.waitForTimeout(600);
@@ -125,9 +144,9 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
       }
     };
 
-    await walkRoute(FRONT_DOOR.x, FRONT_DOOR.y);
-    await walkRoute(LIVING_KITCHEN_DOOR.x, LIVING_KITCHEN_DOOR.y);
-    await walkRoute(BEDROOM_DOOR.x, BEDROOM_DOOR.y);
+    for (const wp of ROUTE) {
+      await walkRoute(wp.x, wp.y);
+    }
 
     const cam = await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -138,6 +157,38 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
       expect(Number.isFinite(cam.posX)).toBe(true);
       expect(Number.isFinite(cam.posZ)).toBe(true);
     }
+  });
+
+  test('walking into the sofa stops at its expanded boundary (issue #18)', async ({
+    page,
+  }) => {
+    await boot(page);
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(600);
+    // March south along x≈1.8 (spawn column) into the sofa's expanded
+    // top face (y = 1.675 = sofa top 1.375 + radius 0.3 after the
+    // fixture nudge y=0.9 → footprint top 1.375).
+    for (let step = 0; step < 30; step++) {
+      await page.keyboard.down('KeyS'); // backwards = south when facing north
+      await page.waitForTimeout(120);
+      await page.keyboard.up('KeyS');
+    }
+    // HARD latch: a seam regression must fail loud, not pass vacuously.
+    await page.waitForFunction(
+      () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const c = (window as any).__viewerCam?.() ?? null;
+        return c !== null && typeof c.discY === 'number';
+      },
+      { timeout: 10_000 },
+    );
+    const cam = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (window as any).__viewerCam?.() ?? null;
+    });
+    // Flush pin at the expanded boundary (±1 cm tolerance).
+    expect(cam!.discY).toBeLessThanOrEqual(1.675 + 0.01);
+    expect(cam!.discY).toBeGreaterThan(1.0); // actually traveled south
   });
 
   test('ESC returns to orbit and releases pointer lock', async ({ page }) => {
