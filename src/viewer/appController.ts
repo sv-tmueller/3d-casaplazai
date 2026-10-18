@@ -131,6 +131,27 @@ export class ViewerApp {
       (next) => this.requestMode(next),
     );
 
+    // Tab toggles overview ⇄ walk (README-promised; formerly unwired —
+    // the e2e descended vacuously). Skipped while typing in form fields.
+    const onTabKey = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Tab' || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      const tgt = ev.target as HTMLElement | null;
+      if (
+        tgt &&
+        (tgt.tagName === 'INPUT' ||
+          tgt.tagName === 'TEXTAREA' ||
+          tgt.isContentEditable)
+      ) {
+        return; // let accessibility-focused Tab behave normally
+      }
+      ev.preventDefault();
+      this.requestMode(this.phase === 'walk' ? 'overview' : 'walk');
+    };
+    window.addEventListener('keydown', onTabKey);
+    this.disposers.push(() =>
+      window.removeEventListener('keydown', onTabKey),
+    );
+
     this.refreshAdaptation(true);
     reflectMode(this.hud, 'overview');
     this.seatRig('overview');

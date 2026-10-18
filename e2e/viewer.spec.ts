@@ -110,6 +110,7 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
   test('WASD traversal threads the doorway into the next room', async ({
     page,
   }) => {
+    test.setTimeout(90_000); // real steering loop: 8-hop route x ~0.3 s/hop
     await boot(page);
     await page.keyboard.press('Tab');
     await page.waitForTimeout(600);
