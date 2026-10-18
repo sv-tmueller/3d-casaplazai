@@ -203,8 +203,7 @@ export interface PairRowSpec {
 
 /**
  * Overlap of two COLLINEAR-reaching segments, expressed in meters along
- * `seg`'s own axis (from seg.a towards seg.b). `rev` reports whether
- * `cand` traverses the shared stretch in the opposite direction.
+ * `seg`'s own axis (from seg.a towards seg.b).
  *
  * Issue #41: shared-wall pairing is collinear-OVERLAP based, not
  * endpoint based. Two walls pair when the candidate's endpoints lie
@@ -212,12 +211,17 @@ export interface PairRowSpec {
  * so a wall drawn a few millimeters off still pairs — #36) AND their
  * extents overlap. Endpoint coincidence is then just the special case
  * where the overlap equals both full lengths.
+ *
+ * Tolerance tie semantics (issue #47, convention #40c): the pairing
+ * test is INCLUSIVE — an endpoint exactly `tol` from the line still
+ * pairs (`perp <= tol`). One convention wherever tolerance is compared;
+ * specs pin exact-10 mm pairing and a 10.0001 µm-plus reject here.
  */
 export function sharedWallOverlap(
   seg: SegmentInfo,
   cand: SegmentInfo,
   tol: number = PAIR_TOLERANCE_M,
-): { rev: boolean; lo: number; hi: number } | null {
+): { lo: number; hi: number } | null {
   const len = seg.length;
   if (!(len > 0)) return null;
   const ux = (seg.b[0] - seg.a[0]) / len;
@@ -231,10 +235,7 @@ export function sharedWallOverlap(
   const lo = Math.max(0, Math.min(sA, sB));
   const hi = Math.min(len, Math.max(sA, sB));
   if (hi - lo <= 0) return null; // distinct spans on the same line
-  const rev =
-    cand.length > 0 &&
-    ux * (cand.b[0] - cand.a[0]) + uy * (cand.b[1] - cand.a[1]) < 0;
-  return { rev, lo, hi };
+  return { lo, hi };
 }
 
 /** True when an overlap interval can host a cutout given in meters. */
@@ -253,14 +254,8 @@ export function overlapHosts(
  * arbitrary overlap fractions and both traversal directions, so a
  * simple complement is only its same-length special case.
  */
-export function mirrorT(seg: SegmentInfo, worldPoint: Vec2, cand: SegmentInfo): number {
-  void seg;
+export function mirrorT(worldPoint: Vec2, cand: SegmentInfo): number {
   return projectOntoSegment(worldPoint, cand);
-}
-
-/** Complementary tCenter for reversed traversal, clamped into [0,1]. */
-export function complement(t: number): number {
-  return Math.min(1, Math.max(0, 1 - t));
 }
 
 /**
@@ -290,7 +285,7 @@ export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRo
       const mirror: PairRowSpec = {
         roomId: other.id,
         segmentIndex: cand.index,
-        tCenter: mirrorT(seg, world, cand),
+        tCenter: mirrorT(world, cand),
       };
       if (origin.width !== undefined) mirror.width = origin.width;
       rows.push(mirror);
@@ -349,7 +344,7 @@ export function groupedPairs(plan: FloorplanData): Opening[][] {
           const tMatch =
             other.kind === seed.kind &&
             ov !== null &&
-            Math.abs(mirrorT(seedSeg, seedWorld, otherSeg) - other.tCenter) <
+            Math.abs(mirrorT(seedWorld, otherSeg) - other.tCenter) <
               PAIR_TOLERANCE_M;
           if (tMatch) {
             group.push(other);
