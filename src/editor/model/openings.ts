@@ -118,8 +118,10 @@ export function pointAtT(seg: SegmentInfo, t: number): Vec2 {
  * WALL_PICK_RADIUS_M, reusing nearestSegment semantics) from that
  * segment. Otherwise reject it when the projected parameter falls
  * outside its cutout span: |t − tCenter| · segLen > width/2 + ε. Among
- * the survivors the CLOSEST one wins (ties broken by list order), so a
- * click near a shared corner still picks the intended row. Pure —
+ * the survivors the one with the smallest perpendicular distance wins;
+ * COLLINEAR rows (e.g. a shared-wall pair on the same wall line) share
+ * that distance, so they tie-break by LIST ORDER — either row of a
+ * pair deletes the same pair, so the tie is harmless. Pure —
  * geometry only, no DOM, no store.
  */
 export function openingAt(
