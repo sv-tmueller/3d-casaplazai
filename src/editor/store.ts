@@ -224,7 +224,7 @@ function pairMirrorT(
   const cutLo = tCenter * seg.length - half;
   const cutHi = tCenter * seg.length + half;
   if (!overlapHosts(ov, cutLo, cutHi)) return null;
-  return mirrorT(seg, pointAtT(seg, tCenter), cand);
+  return mirrorT(pointAtT(seg, tCenter), cand);
 }
 
 /** SegmentInfo view of one room segment (length included), or undefined. */
@@ -305,6 +305,14 @@ function reduceMutateOpening(
 ): DispatchResult {
   const target = st.data.openings.find((o) => o.id === openingId);
   if (!target) return { ok: false, error: `unknown opening "${openingId}"` };
+  // Width-path semantics (issue #47, ratified on #44): FREEZE. The
+  // fields are assigned BEFORE findPartner runs, and the partner search
+  // re-runs pairMirrorT with the NEW width — so widening a cut beyond the
+  // partner's collinear overlap finds NO partner and copies NOTHING to the
+  // twin (which keeps its old width). The pair implicitly UNLINKS: a later
+  // move/delete of this cut no longer cascades to the twin. Narrowing back
+  // into the overlap re-syncs (findPartner matches again). This silent
+  // desync is intentional; specs pin it (tests/unit/tolerance-hygiene.spec.ts).
   Object.assign(target, fields);
   if (syncPair) {
     const partner = findPartner(st.data, target);
