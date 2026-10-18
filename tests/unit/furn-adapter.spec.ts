@@ -1,15 +1,11 @@
 /**
  * Furniture-mesh adapter spec (issue #18): per-slot prisms, 12 tris per
- * volume, demo emits 8 volumes, room-only triangleCount preserved.
+ * volume, demo emits 8 volumes, triangleCount counts furniture (#28).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  compilePlan,
-  countTriangles,
-  parseValidatedPlan,
-} from '../../src/geom';
+import { compilePlan, parseValidatedPlan } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
 import { adaptScene, sceneHasNaN } from '../../src/viewer/adapter';
 
@@ -49,10 +45,21 @@ describe('adaptScene — furniture buckets (issue #18)', () => {
     expect(compiled.furniture.length).toBe(8);
   });
 
-  it('triangleCount stays ROOM-ONLY (equals the compiler golden count)', () => {
-    // Parity with the pre-dedupe room shell (the golden metric); furniture
-    // tris ride in buckets but are NOT added to the count.
-    expect(adapted.triangleCount).toBe(countTriangles(compiled));
+  it('triangleCount counts furniture (honest post-emission sum, #28)', () => {
+    // Issue #28: the count is the sum over ALL emitted buckets, so
+    // furniture tris participate. Dynamic expectation from the returned
+    // buckets — no pinned constant, immune to dedupe/compiler changes.
+    const bucketTris = adapted.buckets.reduce(
+      (sum, b) => sum + b.indices.length / 3,
+      0,
+    );
+    expect(adapted.triangleCount).toBe(bucketTris);
+    // Explicit furniture participation: 8 volumes x 12 tris = 96.
+    const furnTris = adapted.buckets
+      .filter((b) => b.slot.startsWith('furn-'))
+      .reduce((sum, b) => sum + b.indices.length / 3, 0);
+    expect(furnTris).toBe(96);
+    expect(adapted.triangleCount).toBeGreaterThanOrEqual(furnTris);
   });
 
   it('furniture verts are finite (NaN guard)', () => {
