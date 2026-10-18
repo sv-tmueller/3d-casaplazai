@@ -43,6 +43,22 @@ import { snapVec, vecAdd, vecSub } from './geom';
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
 const INITIAL_SCALE = 80; // px per meter
+
+/**
+ * Notice text for a just-committed opening, derived from the opening-row
+ * count before/after the addOpening dispatch (issue #36). The reducer
+ * emits ONE row for a solo wall and TWO (origin + mirror) for a paired
+ * shared wall, so a delta of 1 means this cut pierces only the host
+ * wall. Returns null when no warning is warranted (paired success or any
+ * non-add outcome).
+ */
+export function openingCommitNotice(
+  rowsBefore: number,
+  rowsAfter: number,
+): string | null {
+  return rowsAfter - rowsBefore === 1 ? 'Opening pierces only this wall' : null;
+}
+
 const ZOOM_STEP = 1.1;
 const MIN_ZOOM_SCALE = 12;
 const MAX_ZOOM_SCALE = 480;
@@ -328,7 +344,15 @@ export function initEditorInteraction(
     ghost = { kind, seg: bestSeg, t, width: defs.width, valid: err === null };
   }
 
-  /** Commit the currently-hovered opening, bouncing invalid drafts. */
+  /**
+   * Commit the currently-hovered opening, bouncing invalid drafts.
+   *
+   * Single-sided warning (issue #36): the reducer emits a MIRROR row
+   * when the host segment pairs with a neighbour's wall. We don't widen
+   * the dispatch result shape — instead we diff the opening count
+   * across the dispatch: +1 row means the cut pierces only this wall,
+   * +2 rows is the silent shared-door success.
+   */
   function commitOpening(kind: 'door' | 'window'): void {
     if (!ghost || !ghost.seg || ghost.t === undefined || !ghost.valid || !hoverSeg) {
       return;
@@ -342,6 +366,7 @@ export function initEditorInteraction(
       flashMessage(refs, openingErrorMessage(err, kind));
       return;
     }
+    const rowsBefore = store.getState().data.openings.length;
     const res = store.dispatch({
       type: 'addOpening',
       roomId: hoverSeg.roomId,
@@ -352,7 +377,15 @@ export function initEditorInteraction(
       sillHeight: defs.sillHeight,
       headHeight: defs.headHeight,
     });
-    if (!res.ok) flashMessage(refs, res.error);
+    if (!res.ok) {
+      flashMessage(refs, res.error);
+      return;
+    }
+    const notice = openingCommitNotice(
+      rowsBefore,
+      store.getState().data.openings.length,
+    );
+    if (notice !== null) flashMessage(refs, notice);
   }
 
   /* ---------- pointer interactions ---------- */
