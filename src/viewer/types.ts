@@ -82,7 +82,9 @@ export interface MaterialBucket {
 export type MaterialSlotId =
   | 'wall'
   | 'ceiling'
-  | Exclude<FloorTexture, null>;
+  | Exclude<FloorTexture, null>
+  | 'glass'
+  | 'windowFrame';
 
 /** Fully translated scene the renderer consumes. */
 export interface AdaptedScene {

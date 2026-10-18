@@ -40,3 +40,4 @@ export {
 } from './collision';
 export { packRingFan } from './meshio';
 export { compilePlan, countTriangles, countVertices, sceneBounds } from './compile';
+export { windowPaneRects, type PaneRect } from './windowpanes';
