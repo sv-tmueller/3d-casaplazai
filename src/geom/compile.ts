@@ -105,8 +105,8 @@ export function buildRoomWalls(room: Room, plan: FloorplanData): MeshBuffer[] {
           seg.ux,
           seg.uy,
           plan.wallThickness,
+          -seg.nx,
           -seg.ny,
-          seg.nx,
         ),
       );
     }
@@ -128,8 +128,8 @@ export function buildRoomWalls(room: Room, plan: FloorplanData): MeshBuffer[] {
             seg.ux,
             seg.uy,
             plan.wallThickness,
+            -seg.nx,
             -seg.ny,
-            seg.nx,
           ),
         );
       }

@@ -114,19 +114,21 @@ describe('dedupeWalls — demo parity (issue #29)', () => {
   const wall = adapted.buckets.find((b) => b.slot === 'wall');
   const keptVerts = wall ? wall.positions.length / 3 : -1;
 
-  it('pins the demo wall-bucket vertex count (224)', () => {
-    // Post-#29 figure. The pre-#29 (xy-only) key read 200 because it also
-    // collapsed 3 pairs of stacked window slabs (below-sill vs above-head
-    // of the demo's windows) that share an xy-centroid — those are real
-    // geometry, so 224 is the honest parity pin. Verified by grouping the
-    // raw slabs: exactly 3 xy-groups carry two distinct-z slabs.
-    expect(keptVerts).toBe(224);
+  it('pins the demo wall-bucket vertex count (208)', () => {
+    // Post-#29 figure was 224 (xy-only key collapsed 3 stacked-window
+    // slab pairs). Issue #45 lowered it to 208: with walls now
+    // full-thickness, the demo's shared interior walls produce
+    // PARTIALLY-overlapping coplanar spans (not just identical copies)
+    // that z-fight; adaptScene's coplanar-span pass removes the 16
+    // doubly-covered verts. All counts are MEASURED from a real run.
+    expect(keptVerts).toBe(208);
   });
 
   it('still drops genuinely coincident duplicates', () => {
     // Interior shared walls are emitted twice with matching xy AND z —
-    // dedupe must still remove them (3 slabs = 24 verts in the demo).
+    // dedupe removes them (3 slabs = 24 verts); the coplanar pass then
+    // removes the further 16 verts of partial overlaps (#45).
     expect(rawWallVerts).toBe(248);
-    expect(keptVerts).toBe(rawWallVerts - 24);
+    expect(keptVerts).toBe(rawWallVerts - 24 - 16);
   });
 });

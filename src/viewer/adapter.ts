@@ -105,6 +105,161 @@ function avgCoordinate(positions: Float32Array, axis: number): number {
   return n === 0 ? 0 : sum / n;
 }
 
+/* --------- coplanar wall-span overlap resolution (issue #45) ------------- */
+
+const SPAN_EPS = 1e-6;
+
+/** Planar prism descriptor for one 8-vertex (24-float) wall slab. */
+interface WallPrismSpan {
+  nx: number;
+  ny: number;
+  ex: number;
+  ey: number;
+  /** Signed plane offsets of the two faces, along (nx,ny). */
+  offA: number;
+  offB: number;
+  t0: number;
+  t1: number;
+  z0: number;
+  z1: number;
+}
+
+/** Exact descriptor of a buildSlab prism; null when the shape is unknown. */
+function describeWallPrism(p: Float32Array): WallPrismSpan | null {
+  if (p.length !== 24) return null;
+  const ax = p[12] - p[0];
+  const ay = p[13] - p[1];
+  const L = Math.hypot(ax, ay);
+  if (L < 1e-9) return null;
+  let nx = ax / L;
+  let ny = ay / L;
+  if (nx < -1e-9 || (Math.abs(nx) <= 1e-9 && ny < 0)) {
+    nx = -nx;
+    ny = -ny;
+  }
+  const ex = -ny;
+  const ey = nx;
+  const offA0 = nx * p[0] + ny * p[1];
+  const offB0 = nx * p[12] + ny * p[13];
+  // Canonicalize face order (lower offset first) so a wall emitted by two
+  // adjoining rooms — whose outward normals point opposite ways — lands in
+  // the SAME overlap group.
+  const offA = Math.min(offA0, offB0);
+  const offB = Math.max(offA0, offB0);
+  let t0 = Infinity;
+  let t1 = -Infinity;
+  let z0 = Infinity;
+  let z1 = -Infinity;
+  for (let i = 0; i < 8; i += 1) {
+    const x = p[i * 3];
+    const y = p[i * 3 + 1];
+    const z = p[i * 3 + 2];
+    const t = ex * x + ey * y;
+    if (t < t0) t0 = t;
+    if (t > t1) t1 = t;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
+  }
+  return { nx, ny, ex, ey, offA, offB, t0, t1, z0, z1 };
+}
+
+/** Re-emit a prism of the SAME thickness/plane, clipped to [t0,t1]. */
+function emitWallPrism(s: WallPrismSpan, t0: number, t1: number): MeshBuffer {
+  const q = 1e4;
+  const v = (off: number, t: number, z: number): number[] => [
+    Math.round((s.nx * off + s.ex * t) * q) / q,
+    Math.round((s.ny * off + s.ey * t) * q) / q,
+    Math.round(z * q) / q,
+  ];
+  const positions = new Float32Array([
+    ...v(s.offA, t0, s.z0), ...v(s.offA, t0, s.z1),
+    ...v(s.offA, t1, s.z0), ...v(s.offA, t1, s.z1),
+    ...v(s.offB, t0, s.z0), ...v(s.offB, t0, s.z1),
+    ...v(s.offB, t1, s.z0), ...v(s.offB, t1, s.z1),
+  ]);
+  const indices = new Uint32Array([
+    0, 2, 3, 0, 3, 1,
+    4, 5, 7, 4, 7, 6,
+    0, 4, 6, 0, 6, 2,
+    1, 3, 7, 1, 7, 5,
+    0, 1, 5, 0, 5, 4,
+    2, 6, 7, 2, 7, 3,
+  ]);
+  return { positions, indices };
+}
+
+/**
+ * Kill coplanar wall-span duplicates that dedupeWalls cannot catch.
+ * Two rooms sharing a wall each emit a full-thickness slab across the
+ * shared plane; where their solid spans differ (staggered neighbours,
+ * #45) the slabs coincide partially instead of exactly, so the centroid
+ * dedupe keeps both and they z-fight. Within a group of slabs on the
+ * same plane + z-band, each tangential interval is subtracted from the
+ * coverage already emitted, so every physical region is drawn EXACTLY
+ * once. No overlaps ⇒ identical output (legacy/parity path).
+ */
+function resolveCoplanarWallOverlaps(bufs: MeshBuffer[]): MeshBuffer[] {
+  if (bufs.length < 2) return bufs;
+  const descs = bufs.map((b) => describeWallPrism(b.positions));
+  if (descs.some((d) => d === null)) return bufs;
+  const d = descs as WallPrismSpan[];
+  const groups = new Map<string, number[]>();
+  d.forEach((s, i) => {
+    const key =
+      `${s.nx.toFixed(4)}|${s.ny.toFixed(4)}|${s.offA.toFixed(4)}|` +
+      `${s.offB.toFixed(4)}|${s.z0.toFixed(4)}|${s.z1.toFixed(4)}`;
+    const g = groups.get(key);
+    if (g) g.push(i);
+    else groups.set(key, [i]);
+  });
+
+  const kept: Array<MeshBuffer | null> = bufs.slice();
+  const extra: MeshBuffer[] = [];
+  let touched = false;
+
+  for (const idxs of groups.values()) {
+    if (idxs.length < 2) continue;
+    const covered: Array<[number, number]> = [];
+    const ordered = [...idxs].sort(
+      (a, b) => d[a]!.t0 - d[b]!.t0 || d[a]!.t1 - d[b]!.t1,
+    );
+    for (const i of ordered) {
+      const s = d[i] as WallPrismSpan;
+      let pieces: Array<[number, number]> = [[s.t0, s.t1]];
+      for (const [c0, c1] of covered) {
+        const next: Array<[number, number]> = [];
+        for (const [a0, a1] of pieces) {
+          if (c1 <= a0 + SPAN_EPS || c0 >= a1 - SPAN_EPS) {
+            next.push([a0, a1]);
+            continue;
+          }
+          if (c0 > a0 + SPAN_EPS) next.push([a0, c0]);
+          if (c1 < a1 - SPAN_EPS) next.push([c1, a1]);
+        }
+        pieces = next;
+      }
+      const whole =
+        pieces.length === 1 &&
+        pieces[0] !== undefined &&
+        pieces[0][0] <= s.t0 + SPAN_EPS &&
+        pieces[0][1] >= s.t1 - SPAN_EPS;
+      if (!whole) {
+        touched = true;
+        kept[i] = null;
+        for (const p of pieces) {
+          if (p[1] - p[0] > SPAN_EPS) extra.push(emitWallPrism(s, p[0], p[1]));
+        }
+      }
+      covered.push([s.t0, s.t1]);
+    }
+  }
+
+  if (!touched) return bufs;
+  const out: MeshBuffer[] = [];
+  for (const b of kept) if (b) out.push(b);
+  return [...out, ...extra];
+}
+
 /** Translate a compiled scene into viewer-facing buckets + collisions. */
 export function adaptScene(
   compiled: CompiledScene,
@@ -144,7 +299,7 @@ export function adaptScene(
     pushBucket(slot, bufs);
   }
   pushBucket('ceiling', ceilBufs);
-  pushBucket('wall', dedupeWalls(wallBufs));
+  pushBucket('wall', resolveCoplanarWallOverlaps(dedupeWalls(wallBufs)));
 
   // ---- Window dressing (issue #19): glass panes + frames --------------
   // Emitted AFTER the wall bucket; doors are skipped entirely by
