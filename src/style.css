@@ -889,6 +889,39 @@ body {
   font-size: 12px;
 }
 
+/* Issue #119 (Pkg 14.4): floor-material radio group — segmented pills.
+ * Native inputs keep the keyboard semantics; :has colors the checked
+ * pill without any JS state classes. */
+.inspector-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.inspector-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.inspector-radio:has(input:checked) {
+  background: #dbeafe;
+  border-color: #2563eb;
+  color: #1d4ed8;
+}
+
+.inspector-radio input {
+  margin: 0;
+  accent-color: #2563eb;
+}
+
 /* Issue #100 (Pkg 12.2): floating type-in dim fields, mid-draw. Docked
  * bottom-right INSIDE the canvas wrap (absolute — the wrap is already
  * position:relative); rebuilt per pending segment, destroyed with the

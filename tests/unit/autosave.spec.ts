@@ -148,6 +148,19 @@ describe('AutosaveManager', () => {
     // Round-trip: the loader's migrate-at-the-door accepts it back.
     expect(mgr.loadStoredPlan(validateOk)).toEqual(multi);
   });
+
+  /** Pkg 14.4 (issue #119): the inspector's floor-material picks ride
+   * the raw-v2 slot — they must survive the debounce AND the
+   * migrate-at-the-door hydrate, exactly like every other field. */
+  it('round-trips floor-texture picks through the debounced slot', () => {
+    const painted = structuredClone(PLAN);
+    painted.floors[0].rooms[0]!.floorTexture = 'concrete';
+    mgr.scheduleSave(painted);
+    vi.advanceTimersByTime(850);
+    const stored = mgr.loadStoredPlan(validateOk) as FloorplanData | null;
+    expect(stored).toEqual(painted);
+    expect(stored!.floors[0].rooms[0]!.floorTexture).toBe('concrete');
+  });
 });
 
 function validateOk(p: unknown): boolean {

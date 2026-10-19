@@ -794,3 +794,55 @@ describe('gesture-streamed moveOpening (issue #61)', () => {
     expect(store.canUndo()).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Issue #119 (Pkg 14.4): floor-material command                       *
+ * ------------------------------------------------------------------ */
+
+describe('setRoomFloorTexture (issue #119)', () => {
+  it('assigns the material to the addressed room only', () => {
+    const store = newStore();
+    const res = store.dispatch({ type: 'setRoomFloorTexture', roomId: 'living', texture: 'wood' });
+    expect(res.ok).toBe(true);
+    const rooms = store.getState().data.floors[0].rooms;
+    expect(rooms.find((r) => r.id === 'living')!.floorTexture).toBe('wood');
+    expect(rooms.find((r) => r.id === 'kitchen')!.floorTexture).toBeNull();
+  });
+
+  it('round-trips back to null and treats EVERY pick as one undo step', () => {
+    const store = newStore();
+    store.dispatch({ type: 'setRoomFloorTexture', roomId: 'living', texture: 'tile' });
+    store.dispatch({ type: 'setRoomFloorTexture', roomId: 'living', texture: 'carpet' });
+    store.dispatch({ type: 'setRoomFloorTexture', roomId: 'living', texture: null });
+    const living = (): string | null => store.getState().data.floors[0].rooms[0]!.floorTexture;
+    expect(living()).toBeNull();
+    expect(store.undo()).toBe(true);
+    expect(living()).toBe('carpet');
+    expect(store.undo()).toBe(true);
+    expect(living()).toBe('tile');
+    expect(store.redo()).toBe(true);
+    expect(living()).toBe('carpet');
+    expect(store.canRedo()).toBe(true);
+  });
+
+  it('refuses an unknown room without mutating or snapshotting', () => {
+    const store = newStore();
+    const res = store.dispatch({ type: 'setRoomFloorTexture', roomId: 'ghost', texture: 'wood' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('unknown room');
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('refuses an out-of-enum texture (the store never emits unvalidatable data)', () => {
+    const store = newStore();
+    const res = store.dispatch({
+      type: 'setRoomFloorTexture',
+      roomId: 'living',
+      texture: 'marble' as never,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('unknown floor texture');
+    expect(store.getState().data.floors[0].rooms[0]!.floorTexture).toBeNull();
+    expect(store.canUndo()).toBe(false);
+  });
+});

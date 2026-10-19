@@ -18,6 +18,7 @@ import { itemCorners } from './model/furniture';
 import { DEFAULT_SNAP_PITCH_M } from './model/settings';
 import { underlayCorners, type UnderlayState } from './model/underlay';
 import { groupedPairs, pointAtT, roomSegments, segmentNormal } from './model/openings';
+import { getFloorPattern } from './render/floorPatterns';
 
 export interface SegHighlight {
   roomId: string;
@@ -340,7 +341,12 @@ function drawRoomShape(
   for (let i = 1; i < scrPts.length; i += 1) ctx.lineTo(scrPts[i][0], scrPts[i][1]);
   ctx.closePath();
 
-  ctx.fillStyle = ROOM_FILL;
+  // Pkg 14.4 (issue #119): a room with a floor material fills with its
+  // procedural pattern; null keeps the generic blue wash. Patterns are
+  // memoized per 2D context; stub contexts (unit specs) fall back to
+  // the plain fill via the null return.
+  ctx.fillStyle =
+    room.floorTexture !== null ? (getFloorPattern(room.floorTexture, ctx) ?? ROOM_FILL) : ROOM_FILL;
   ctx.fill();
 
   ctx.lineJoin = 'bevel';

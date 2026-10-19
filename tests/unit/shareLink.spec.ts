@@ -216,3 +216,23 @@ describe('shareLink length guard tiers (issue #91)', () => {
     expect(sample.length).toBeLessThan(SHARE_ENCODE_INPUT_MAX_JSON);
   });
 });
+
+describe('shareLink keeps floor assignments (pkg 14.4, issue #119)', () => {
+  it('round-trips per-room floorTexture through encode → decode', async () => {
+    const plan = townhouse();
+    // Distinct materials on the ground floor (nulls upstairs stay null)
+    // so a dropped field anywhere in the codec shows up in the diff.
+    const kinds = ['wood', 'tile', 'carpet', 'concrete', null] as const;
+    plan.floors[0].rooms.forEach((room, i) => {
+      room.floorTexture = kinds[i % kinds.length] ?? null;
+    });
+    const expected = plan.floors.map((f) => f.rooms.map((r) => r.floorTexture));
+    expect(expected.flat().filter((t) => t !== null).length).toBeGreaterThan(0);
+
+    const { fragment } = await encodeShare(plan);
+    const res = await decodeShare(fragment);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.plan.floors.map((f) => f.rooms.map((r) => r.floorTexture))).toEqual(expected);
+  });
+});
