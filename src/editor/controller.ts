@@ -5,7 +5,7 @@
  * gestures into store Commands. Deliberately split so the gesture math
  * and FSM transitions stay unit-testable without a real canvas.
  */
-import type { FloorplanData, Room } from '../shared/schema';
+import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import {
   convexHull,
@@ -20,6 +20,7 @@ import type { Pt } from './geom';
 import { OPENING_DEFAULTS, ROTATION_STEP_DEG } from './model/constants';
 import {
   clampPoseIntoRoom,
+  itemCorners,
   judgeContainment,
 } from './model/furniture';
 import {
@@ -164,6 +165,92 @@ export function computeOverlaps(plan: FloorplanData): [string, string][] {
 
 function comparePairs(a: [string, string], b: [string, string]): number {
   return a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]);
+}
+
+/* ------------------- pkg 13.2 marquee band geometry (issue #110) --------- */
+
+/**
+ * Axis-aligned world rectangle swept by a marquee band (either corner
+ * order). Kept as a struct (not a Pt[]) so membership predicates read
+ * plainly; pure — unit spec'd.
+ */
+export interface BandRect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export function bandRect(a: Pt, b: Pt): BandRect {
+  return {
+    minX: Math.min(a[0], b[0]),
+    minY: Math.min(a[1], b[1]),
+    maxX: Math.max(a[0], b[0]),
+    maxY: Math.max(a[1], b[1]),
+  };
+}
+
+/** Strict overlap of two axis-aligned intervals (touching ≠ overlap). */
+function intervalsOverlap(aLo: number, aHi: number, bLo: number, bHi: number): boolean {
+  return aLo < bHi && bLo < aHi;
+}
+
+/**
+ * Point-in-band test (half-open like interval overlap: a point exactly
+ * on the max edge is OUTSIDE — symmetric with the rect predicates).
+ */
+export function pointInBand(rect: BandRect, p: Pt): boolean {
+  return (
+    p[0] >= rect.minX && p[0] < rect.maxX && p[1] >= rect.minY && p[1] < rect.maxY
+  );
+}
+
+/**
+ * Marquee membership for a furniture stamp: AABB of the item's rotated
+ * corners ∩ band AABB. DELIBERATELY LOOSE for rotated items (a 45°
+ * sofa's AABB exceeds its true footprint) — acceptable selection UX,
+ * exact SAT deferred (issue #110 non-goals). Pure — unit spec'd.
+ */
+export function furnitureInBand(
+  item: FurnitureItem,
+  rect: BandRect,
+): boolean {
+  const corners = itemCorners(item);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const c of corners) {
+    if (c[0] < minX) minX = c[0];
+    if (c[0] > maxX) maxX = c[0];
+    if (c[1] < minY) minY = c[1];
+    if (c[1] > maxY) maxY = c[1];
+  }
+  return intervalsOverlap(minX, maxX, rect.minX, rect.maxX) &&
+    intervalsOverlap(minY, maxY, rect.minY, rect.maxY);
+}
+
+/**
+ * Marquee membership for a room: bbox-overlap OR any polygon vertex
+ * inside the band — either leg admits (SUB_PLAN formula). The vertex
+ * leg guarantees a thin band crossing the interior selects the room
+ * even when it misses every extreme. Loose by design — exact
+ * polygon∩rect is a non-goal (issue #110). Pure — unit spec'd.
+ */
+export function roomInBand(room: Room, rect: BandRect): boolean {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of room.polygon) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+    if (pointInBand(rect, p)) return true;
+  }
+  return intervalsOverlap(minX, maxX, rect.minX, rect.maxX) &&
+    intervalsOverlap(minY, maxY, rect.minY, rect.maxY);
 }
 
 /* --------------------------- Resize-handle picking ------------------------ */

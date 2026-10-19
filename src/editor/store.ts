@@ -116,7 +116,15 @@ export type Command =
    * must NOT rewind image nudges/drags. Keyed by floor.id so each
    * storey traces its own blueprint.
    */
-  | { type: 'setUnderlaySlot'; floorId: string; state: UnderlayState | null };
+  | { type: 'setUnderlaySlot'; floorId: string; state: UnderlayState | null }
+  /* ---- pkg 13.2 addition (issue #110): bulk marquee delete ---- */
+  /**
+   * Atomically delete MANY entities (marquee bulk-delete). ONE command,
+   * ONE undo step: per-kind reducers are reused for validation +
+   * mutation; unknown ids are skipped, an empty effective batch
+   * refuses without snapshotting.
+   */
+  | { type: 'deleteEntities'; ids: string[] };
 
 export type DispatchResult =
   | { ok: true }
@@ -676,6 +684,59 @@ function reduceClearWallLean(
   return { ok: true };
 }
 
+/* ------------- pkg 13.2 bulk delete (issue #110) ----------------------- */
+
+/**
+ * Atomically delete MANY entities (rooms, openings, furniture - any mix).
+ * Routes EACH id through its per-kind reducer (reuse = same validation +
+ * cascade semantics as the single-delete commands) but commits as ONE
+ * command / ONE undo step: dispatch() snapshots once around the whole
+ * batch. Unknown ids are SKIPPED (bulk selection races a concurrent
+ * delete gracefully); an empty EFFECTIVE batch (nothing recognized)
+ * refuses so no junk snapshot enters history. selectedId drops when it
+ * was among the deleted ids (extended reconciliation, SUB_PLAN step 2).
+ */
+function reduceDeleteEntities(st: EditorState, cmd: { ids: string[] }): DispatchResult {
+  if (cmd.ids.length === 0) return { ok: false, error: 'no entities to delete' };
+  const idSet = new Set(cmd.ids);
+  const floor = activeFloor(st);
+  let acted = 0;
+
+  for (const id of idSet) {
+    if (floor.rooms.some((r) => r.id === id)) {
+      const res = reduceDeleteRoom(st, { roomId: id });
+      if (res.ok) acted += 1;
+    } else if (floor.openings.some((o) => o.id === id)) {
+      // syncPair mirrors the single-delete route (glue deletes doors with
+      // their pair): a marquee-deleted door takes its partner along,
+      // keeping shared-wall cutouts consistent.
+      const res = reduceDeleteOpening(st, id, true);
+      if (res.ok) acted += 1;
+    } else if (floor.furniture.some((f) => f.id === id)) {
+      const res = reduceDeleteFurniture(st, id);
+      if (res.ok) acted += 1;
+    }
+    // Unknown id: skipped (selection raced a delete; not an error).
+  }
+
+  if (acted === 0) return { ok: false, error: 'no deletable entities in batch' };
+  // Single-selection reconciliation: purge the deleted ids AND anything a
+  // room cascade took with it (furniture/openings anchored to a deleted
+  // room vanish without appearing in `ids` — selectedId must not dangle).
+  if (
+    st.selectedId !== null &&
+    (idSet.has(st.selectedId) ||
+      !(
+        floor.rooms.some((r) => r.id === st.selectedId) ||
+        floor.openings.some((o) => o.id === st.selectedId) ||
+        floor.furniture.some((f) => f.id === st.selectedId)
+      ))
+  ) {
+    st.selectedId = null;
+  }
+  return { ok: true };
+}
+
 /* ---------------- pkg 12.1 underlay slice (issue #99) ------------------- */
 
 /**
@@ -875,6 +936,9 @@ export class EditorStore {
         return reduceSetWallLean(this._state, cmd);
       case 'clearWallLean':
         return reduceClearWallLean(this._state, cmd);
+      /* ---- pkg 13.2 addition (issue #110) ---- */
+      case 'deleteEntities':
+        return reduceDeleteEntities(this._state, cmd);
     }
   }
 
