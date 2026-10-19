@@ -98,6 +98,8 @@ import {
   saveMeasurements,
   type Measurement,
 } from "./model/measure";
+import { compassAngleBetween, polarEndpoint } from "./model/angles";
+import { mountDimFields, type DimFields } from "./typeInDims";
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -311,6 +313,14 @@ export function initEditorInteraction(
   // The inspector panel (pure renderer — mounted below, rendered on
   // every store notify + segment change).
   let inspector: InspectorPanel | null = null;
+  // Issue #100 (Pkg 12.2): the FLOATING type-in dim fields shown while
+  // drawingPoly has ≥1 committed point. Mounted lazily inside the
+  // canvas wrap (position:absolute, bottom-right); torn down when the
+  // gesture ends. NULL whenever the widget is off-screen.
+  let drawDims: DimFields | null = null;
+  function drawDimsMount(): HTMLElement {
+    return canvas.parentElement as HTMLElement;
+  }
 
   /* ---------- pkg 12.1 (issue #99): blueprint underlay ---------- */
 
@@ -694,6 +704,9 @@ export function initEditorInteraction(
     tool = next;
     dragOpening = null; // #61: switching tools abandons any opening candidate
     measureDraft = null; // #66: switching tools abandons a pending anchor
+    // Issue #100: tool switch also abandons a live poly draw (and its
+    // floating dim fields) — same lifetime rule as Esc.
+    destroyDrawDims();
     if (next === "select") {
       phase = { tag: "idle" };
     } else {
@@ -1799,6 +1812,9 @@ export function initEditorInteraction(
       if (cur === null) {
         const first = snapPoint(worldPt);
         phase = { tag: "drawingPoly", points: [first], cursor: first };
+        // Issue #100: first point committed — arm the floating type-in
+        // fields (autofocused, mouseless chain continues from here).
+        mountDrawDims();
       } else if (
         dist(cur.points[0], worldPt) * cam.scale <= CLOSE_HIT_RADIUS_PX &&
         cur.points.length >= POLYGON_MIN_POINTS
@@ -1810,6 +1826,9 @@ export function initEditorInteraction(
         const pushed = snapPoint(worldPt);
         cur.points.push(pushed);
         cur.cursor = pushed;
+        // Issue #100: the NEXT pending segment starts here — reseed the
+        // floating fields from the freshly committed geometry.
+        remountDrawDims();
       }
       repaint();
       return;
@@ -2325,6 +2344,9 @@ export function initEditorInteraction(
         repaint();
         return;
       }
+      // Issue #100: dropping a drawingPoly gesture kills the floating
+      // dim fields with it (widget lifetime == gesture lifetime).
+      destroyDrawDims();
       phase = { tag: "idle" };
       repaint();
       return;
@@ -2466,8 +2488,102 @@ export function initEditorInteraction(
     }
   });
 
+  /* ---------- pkg 12.2 (issue #100): mid-draw type-in dims ---------- */
+
+  /** Tear the floating widget down (gesture ended / cancelled). */
+  function destroyDrawDims(): void {
+    if (drawDims === null) return;
+    drawDims.root.remove();
+    drawDims = null;
+  }
+
+  /**
+   * (Re)build the floating length/angle pair against the CURRENT
+   * pending segment (last committed point → phase.cursor). Called on
+   * the first committed point and after every push (pointer click or
+   * typed Enter). Fresh mount each time keeps the seeding single-path
+   * (no imperative reconcile) and resets focus to the length field —
+   * the chain-alive, mouseless rhythm.
+   */
+  function remountDrawDims(): void {
+    if (phase.tag !== "drawingPoly") {
+      destroyDrawDims();
+      return;
+    }
+    const last = phase.points[phase.points.length - 1];
+    destroyDrawDims();
+    drawDims = mountDimFields({
+      lengthM: Math.hypot(
+        phase.cursor[0] - last[0],
+        phase.cursor[1] - last[1],
+      ),
+      angleDeg: compassAngleBetween(last, phase.cursor),
+      onLive: (dims) => {
+        if (phase.tag !== "drawingPoly") return;
+        // AS-YOU-TYPE ghost preview: the pending cursor becomes the
+        // typed polar point. NO snapPoint here — the typed value
+        // overrides snap for the PENDING segment only; the next
+        // pointer move/click re-engages snapPoint naturally.
+        phase = {
+          ...phase,
+          cursor: polarEndpoint(last, dims.lengthM, dims.angleDeg),
+        };
+        repaint();
+      },
+      onCommit: (dims) => {
+        if (phase.tag !== "drawingPoly") return;
+        // Push the typed point VERBATIM (typed overrides snap for this
+        // segment — the whole point of #100), keep the chain alive,
+        // reseed the fields for the next segment.
+        const pt = polarEndpoint(last, dims.lengthM, dims.angleDeg);
+        phase.points.push(pt);
+        phase.cursor = pt;
+        remountDrawDims();
+        repaint();
+      },
+      onInvalid: () => {
+        // Reject-with-flash; state untouched (ghost keeps last preview).
+        flashMessage(
+          refs,
+          "Length must be a positive number.",
+        );
+      },
+      onCancel: () => {
+        if (phase.tag !== "drawingPoly") return;
+        // Esc: drop the PENDING cursor back onto the last committed
+        // point (fields reseed, chain INTACT — nothing discarded but
+        // the uncommitted preview).
+        phase = { ...phase, cursor: last };
+        remountDrawDims();
+        repaint();
+      },
+      refocusOnCommit: true,
+      testidPrefix: "draw-dims",
+      lengthLabel: "Pending length (m)",
+      angleLabel: "Pending angle (\u00B0)",
+    });
+    drawDimsMount().appendChild(drawDims.root);
+    // Degenerate pending segment (fresh point, or right after Esc):
+    // seed the fields CLEAR (brief: "fields cleared, chain intact")
+    // instead of a meaningless 0/0 — typing starts from scratch.
+    const seededLen = Math.hypot(
+      phase.cursor[0] - last[0],
+      phase.cursor[1] - last[1],
+    );
+    if (seededLen < 1e-9) {
+      drawDims.lengthInput.value = "";
+      drawDims.angleInput.value = "";
+    }
+    drawDims.focus();
+  }
+
+  function mountDrawDims(): void {
+    remountDrawDims();
+  }
+
   function closePolygon(): void {
     if (phase.tag !== "drawingPoly") return;
+    destroyDrawDims();
     const pts = phase.points;
     if (pts.length < POLYGON_MIN_POINTS) {
       flashMessage(

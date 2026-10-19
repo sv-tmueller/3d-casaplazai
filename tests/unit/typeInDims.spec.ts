@@ -36,9 +36,9 @@ describe('parseDims (issue #100)', () => {
   });
 
   it('normalizes angles mod 360 (negatives and >360)', () => {
-    expect(parseDims('2', '450').angleDeg).toBeCloseTo(90, 9);
-    expect(parseDims('2', '-0.5').angleDeg).toBeCloseTo(359.5, 9);
-    expect(parseDims('2', '720').angleDeg).toBeCloseTo(0, 9);
+    expect(parseDims('2', '450')?.angleDeg).toBeCloseTo(90, 9);
+    expect(parseDims('2', '-0.5')?.angleDeg).toBeCloseTo(359.5, 9);
+    expect(parseDims('2', '720')?.angleDeg).toBeCloseTo(0, 9);
   });
 
   it('rejects non-finite input', () => {
