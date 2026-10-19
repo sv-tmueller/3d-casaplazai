@@ -15,7 +15,14 @@ import {
 } from '../../src/viewer/materials';
 import type { TextureKind } from '../../src/viewer/materials';
 
-const KINDS: TextureKind[] = ['wood', 'tile', 'carpet', 'concrete', 'wall'];
+const KINDS: TextureKind[] = [
+  'wood',
+  'tile',
+  'carpet',
+  'concrete',
+  'wall',
+  'roofShingle', // #87: sixth kind — additive, existing cases untouched.
+];
 
 /**
  * Drawer-op recorder: happy-dom canvases lack a real 2D context, so
