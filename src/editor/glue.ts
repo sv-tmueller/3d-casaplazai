@@ -80,7 +80,7 @@ import {
   type SegmentAddress,
 } from './inspectorPanel';
 import { flashMessage, type EditorDomRefs } from './ui';
-import { paintScene } from './render';
+import { paintScene, paintSelectedSegmentOverlay } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
@@ -438,6 +438,19 @@ export function initEditorInteraction(
       underlayImg,
       underlaySelected && underlayInteractable(activeUnderlay()),
     );
+    // Pkg 12.3 (issue #101, fix round): the WALL case paints WHICH
+    // segment the inspector is addressing (yellow, same readout path as
+    // the hoverSeg highlight) — the near-wall click upgrade is otherwise
+    // invisible on canvas. Shown only when the panel can actually be
+    // seen (open) so the select-tool idle canvas stays unpolluted.
+    if (
+      inspector !== null &&
+      inspector.isOpen() &&
+      selectedSegment &&
+      selectedSegment.roomId === store.getState().selectedId
+    ) {
+      paintSelectedSegmentOverlay(ctx, cam, view, selectedSegment);
+    }
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
     paintMeasurementBadges(ctx, cam, view, dimensionsVisible);
@@ -593,6 +606,9 @@ export function initEditorInteraction(
     if (sameSegmentAddress(selectedSegment, addr)) return;
     selectedSegment = addr;
     refreshInspector();
+    // Repaint so the canvas segment overlay (affordance for the WALL
+    // case) tracks the panel's address.
+    repaint();
   }
 
   store.subscribe((_s) => {
@@ -623,7 +639,10 @@ export function initEditorInteraction(
 
   function setInspectorOpen(open: boolean): void {
     inspector!.setOpen(open);
-    refs.btnInspector.setAttribute("aria-pressed", String(open));
+    refs.btnInspector.setAttribute('aria-pressed', String(open));
+    // Repaint: the canvas segment overlay draws only while the panel is
+    // open (visibility tied to the affordance it explains).
+    repaint();
     if (open) {
       refreshInspector();
       // Heading into the panel body puts focus INSIDE the dock — the
@@ -2420,12 +2439,16 @@ export function initEditorInteraction(
     // Pkg 12.3 (issue #101): "I" toggles the inspector panel (canvas-
     // focused stroke; the panel-scoped handler above covers focus
     // inside the panel). Registered in shortcuts.ts (sheet duty).
+    // Mid-gesture 'I' is swallowed (same guard as the panel handler +
+    // popovers): opening the panel mid-draw would steal focus and strand
+    // Esc/Enter for the rest of the gesture.
     if (
       (ev.key === "i" || ev.key === "I") &&
       !ev.ctrlKey &&
       !ev.metaKey &&
       !ev.altKey
     ) {
+      if (drawGestureInProgress()) return;
       setInspectorOpen(!inspector!.isOpen());
       ev.preventDefault();
       return;

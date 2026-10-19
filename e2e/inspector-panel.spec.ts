@@ -12,6 +12,12 @@
  * Journey 3 — ESC DISCIPLINE: Esc with focus inside the panel closes
  * the panel; a canvas-focused Esc still reaches the canvas handler
  * (selection survives, panel untouched).
+ *
+ * Fix round additions:
+ * - MID-DRAW I SWALLOW: 'I' during drawingPoly is a no-op (panel stays
+ *   shut, Esc still cancels the draw — MUST-FIX 2).
+ * - TAB-WALK: panel root → Close → lean field purely by keyboard
+ *   (SHOULD-FIX 4 — the AC's "Tab order sane" walked for real).
  */
 
 import { expect, test, type Page } from '@playwright/test';
@@ -180,6 +186,77 @@ test.describe.serial('inspector panel (issue #101)', () => {
     // Studio room: 12 m² livable area (measures.ts shoelace reuse).
     await expect(panel.getByText('Livable area')).toBeVisible();
     await expect(panel.getByText('12.0 m²')).toBeVisible();
+  });
+
+  // Pkg 12.3 fix round (MUST-FIX 2): mid-draw 'I' must be swallowed —
+  // opening the panel mid-gesture would steal focus and strand Esc /
+  // Enter for the rest of the draw. Draw a triangle, press I mid-draw
+  // (panel must NOT open), then Esc cancels cleanly.
+  test('mid-draw I is swallowed; Esc still cancels the gesture', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(String(err)));
+
+    await page.getByRole('button', { name: 'Polygon' }).click();
+    const p1 = await aim(page, 0.5, -0.5);
+    const p2 = await aim(page, 3.5, -0.5);
+    await page.mouse.click(p1.x, p1.y);
+    await page.mouse.click(p2.x, p2.y);
+
+    // Mid-drawingPoly: canvas-focused 'I' must be a no-op for the panel.
+    await page.locator('.editor-canvas').focus();
+    await page.keyboard.press('i');
+    const panel = page.getByTestId('inspector-panel');
+    await expect(panel).toBeHidden();
+
+    // Esc still belongs to the gesture: the draw cancels cleanly (no
+    // NEW room committed — only the preloaded Studio remains).
+    await page.keyboard.press('Escape');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wire = await page.evaluate(() => (window as any).__casaplaza.getData());
+    expect(wire.rooms).toHaveLength(1);
+    expect(wire.rooms[0].id).toBe('r1');
+
+    // And the gesture ended: a fresh 'I' NOW opens the panel (proves the
+    // swallow was gesture-scoped, not a wedged key handler).
+    await page.keyboard.press('i');
+    await expect(panel).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
+
+  // Pkg 12.3 fix round (SHOULD-FIX 4): walk the panel by KEYBOARD ONLY —
+  // from the panel root, Tab lands on Close first, then the lean field
+  // (sane Tab order, no pointer involved anywhere in the panel).
+  test('Tab walks panel root → Close → lean field (keyboard only)', async ({
+    page,
+  }) => {
+    // Arm the WALL case (near-bottom-wall click) and open via keyboard.
+    const p = await aim(page, 2.5, -3.35);
+    await page.mouse.click(p.x, p.y);
+    await page.locator('.editor-canvas').focus();
+    await page.keyboard.press('i');
+    const panel = page.getByTestId('inspector-panel');
+    await expect(panel).toBeVisible();
+
+    // Opening focuses the panel ROOT; the first Tab must land on the
+    // Close button (sole control in the heading, DOM order = Tab order).
+    await expect(panel).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('btn-close-inspector')).toBeFocused();
+
+    // Second Tab reaches the lean field — the AC's keyboard-only edit
+    // path with zero locator.focus()/fill() shortcuts.
+    await page.keyboard.press('Tab');
+    const leanField = page.getByTestId('insp-lean-deg');
+    await expect(leanField).toBeFocused();
+    await page.keyboard.type('30');
+    await page.keyboard.press('Enter');
+
+    expect(await leans(page)).toEqual([
+      { roomId: 'r1', segmentIndex: 2, leanDeg: 30 },
+    ]);
   });
 });
 

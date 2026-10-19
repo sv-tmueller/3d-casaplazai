@@ -486,6 +486,37 @@ function drawSegHighlight(
   ctx.stroke();
 }
 
+/**
+ * Pkg 12.3 (issue #101, fix round): paint the inspector-addressed wall
+ * segment ON TOP of the composed scene (called from glue's repaint AFTER
+ * paintScene). Distinct stroke from the hoverSeg yellow so the two
+ * affordances never read as one: thicker + dashed teal marks the segment
+ * the PANEL is editing; thin solid yellow stays the tool-hover readout.
+ */
+export function paintSelectedSegmentOverlay(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  plan: FloorplanData,
+  hl: SegHighlight,
+): void {
+  const room = flatRooms(plan).find((r) => r.id === hl.roomId);
+  if (!room) return;
+  const seg = roomSegments(room)[hl.segIndex];
+  if (!seg) return;
+  const sa = worldToScreen(cam, seg.a);
+  const sb = worldToScreen(cam, seg.b);
+  ctx.save();
+  ctx.strokeStyle = '#0d9488';
+  ctx.lineWidth = 5;
+  ctx.setLineDash([8, 4]);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sa[0], sa[1]);
+  ctx.lineTo(sb[0], sb[1]);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** Magnetic ghost: sliding opening band or translucent stamp rect. */
 function drawGhost(
   ctx: CanvasRenderingContext2D,
