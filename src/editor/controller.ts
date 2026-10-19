@@ -206,28 +206,77 @@ export function pointInBand(rect: BandRect, p: Pt): boolean {
 }
 
 /**
- * Marquee membership for a furniture stamp: AABB of the item's rotated
- * corners ∩ band AABB. DELIBERATELY LOOSE for rotated items (a 45°
- * sofa's AABB exceeds its true footprint) — acceptable selection UX,
- * exact SAT deferred (issue #110 non-goals). Pure — unit spec'd.
+ * Float-noise slack for the SAT touch exclusion below: edges that
+ * MERELY TOUCH (within this distance) count as separated, mirroring
+ * the strict half-open semantics of intervalsOverlap/pointInBand and
+ * the EPSILON slack in geom.polygonsOverlapSAT.
+ */
+const BAND_TOUCH_EPSILON = 1e-9;
+
+/**
+ * SAT hit-test between an item's ORIENTED quad (world corners, any
+ * winding) and the marquee band rect — issue #117 un-defers the #110
+ * "exact SAT" non-goal. Axes: the band's two normals plus the quad's
+ * edge normals; separated iff ANY axis shows a strict gap, with
+ * merely-touching counted as SEPARATED. Rotation-0 quads reduce to the
+ * strict AABB test; a zero-width band (perfectly vertical/horizontal
+ * sweep) still positively intersects, matching the interval
+ * semantics. Pure — unit spec'd.
+ */
+export function orientedQuadHitsBand(
+  corners: Pt[],
+  rect: BandRect,
+): boolean {
+  const axes: Pt[] = [
+    [1, 0],
+    [0, 1],
+  ];
+  for (let i = 0; i < corners.length; i += 1) {
+    const a = corners[i];
+    const b = corners[(i + 1) % corners.length];
+    const ex = b[0] - a[0];
+    const ey = b[1] - a[1];
+    const len = Math.hypot(ex, ey);
+    if (len === 0) continue; // degenerate edge contributes no axis
+    axes.push([-ey / len, ex / len]);
+  }
+  const bandCorners: Pt[] = [
+    [rect.minX, rect.minY],
+    [rect.maxX, rect.minY],
+    [rect.maxX, rect.maxY],
+    [rect.minX, rect.maxY],
+  ];
+  const projected = (poly: Pt[], axis: Pt): [number, number] => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of poly) {
+      const v = p[0] * axis[0] + p[1] * axis[1];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    return [lo, hi];
+  };
+  for (const axis of axes) {
+    const [qLo, qHi] = projected(corners, axis);
+    const [rLo, rHi] = projected(bandCorners, axis);
+    if (qHi < rLo + BAND_TOUCH_EPSILON || rHi < qLo + BAND_TOUCH_EPSILON) {
+      return false; // strict gap (touch ≠ hit)
+    }
+  }
+  return true;
+}
+
+/**
+ * Marquee membership for a furniture stamp: SAT-exact band ∩ ORIENTED
+ * footprint (issue #117 — retires the #110 "deliberately loose AABB"
+ * behavior; a 45° piece now selects exactly where its true quad lies).
+ * Pure — unit spec'd.
  */
 export function furnitureInBand(
   item: FurnitureItem,
   rect: BandRect,
 ): boolean {
-  const corners = itemCorners(item);
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const c of corners) {
-    if (c[0] < minX) minX = c[0];
-    if (c[0] > maxX) maxX = c[0];
-    if (c[1] < minY) minY = c[1];
-    if (c[1] > maxY) maxY = c[1];
-  }
-  return intervalsOverlap(minX, maxX, rect.minX, rect.maxX) &&
-    intervalsOverlap(minY, maxY, rect.minY, rect.maxY);
+  return orientedQuadHitsBand(itemCorners(item), rect);
 }
 
 /**
@@ -383,6 +432,37 @@ export function judgeMoveTarget(
   const solved = clampPoseIntoRoom(target, item.footprint, item.rotationDeg, host);
   if (solved) return { verdict: 'warn', resolved: solved };
   return { verdict: 'rejected', resolved: item.position };
+}
+
+/**
+ * Adjudicate a BULK-MOVE delta for every selected member (issue #117):
+ * each follower is re-judged against ITS OWN room via judgeMoveTarget,
+ * so a follower that would cross a wall clamps to the nearest
+ * contained pose (rejected → it parks at its current position) instead
+ * of riding the grabbed delta through the wall. Members that are not
+ * furniture (rooms/openings in the multi-set, or an id a delete raced)
+ * are skipped, preserving caller order for the rest. Pure — the caller
+ * streams the returned positions inside the one open gesture. Unit
+ * spec'd.
+ */
+export function judgeBulkFollow(
+  plan: FloorplanData,
+  ids: string[],
+  delta: Pt,
+): Array<{ id: string; pos: Pt }> {
+  const byId = new Map(flatFurniture(plan).map((f) => [f.id, f] as const));
+  const out: Array<{ id: string; pos: Pt }> = [];
+  for (const id of ids) {
+    const item = byId.get(id);
+    if (!item) continue;
+    const target: Pt = [
+      item.position[0] + delta[0],
+      item.position[1] + delta[1],
+    ];
+    const { resolved } = judgeMoveTarget(plan, id, target);
+    out.push({ id, pos: [resolved[0], resolved[1]] });
+  }
+  return out;
 }
 
 /** Advance rotation by one R-key step (mod 360, CCW). */
