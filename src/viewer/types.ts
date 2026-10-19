@@ -169,3 +169,11 @@ export interface CameraRig {
   /** Release listeners/locks; called on teardown and mode swap-out. */
   deactivate(): void;
 }
+
+/** Sun/time-of-day settings (issue #121). */
+export interface SunSettings {
+  /** Hour of day swept by the solar model, 0 … 24 (12 = noon preset). */
+  timeHours: number;
+  /** Rotation of the whole sun path about plan north, degrees, ±180. */
+  northOffsetDeg: number;
+}

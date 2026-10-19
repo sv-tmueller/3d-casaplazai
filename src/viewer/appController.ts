@@ -27,12 +27,15 @@ import {
   buildHud,
   destroyHud,
   onBindRoofToggle,
+  onBindSunNorth,
+  onBindSunTime,
   onBindToggle,
   onBindWallsAlpha,
   PerfOverlay,
   playFade,
   reflectMode,
   reflectRoofVisibility,
+  reflectSunSettings,
   reflectWallsAlpha,
   setWalkAffordances,
   showHint,
@@ -50,15 +53,23 @@ import {
 } from './renderConstants';
 import { solveSpawn, SpawnFailureError } from './spawn';
 import {
+  applySkyDusk,
+  applySunPose,
   buildViewerScene,
   configureRenderer,
   disposeObject,
   paintSky,
 } from './sceneBuilder';
 import {
+  DEFAULT_SUN_SETTINGS,
+  normalizeBearingDeg,
+  normalizeSunSettings,
+} from './sun';
+import {
   RECOMPILE_DEBOUNCE_MS,
   type AdaptedScene,
   type CameraRig,
+  type SunSettings,
   type ViewMode,
 } from './types';
 import { fadeStepOpacity, isIndoorFromRay, WalkRig } from './walkMode';
@@ -133,6 +144,8 @@ export class ViewerApp {
    */
   private readonly hiQuality: boolean;
   private unbindRoofToggle: (() => void) | null = null;
+  private unbindSunTime: (() => void) | null = null;
+  private unbindSunNorth: (() => void) | null = null;
 
   /** Manual roof-visibility state (HUD toggle, issue #86). */
   private roofsShown = true;
@@ -140,6 +153,19 @@ export class ViewerApp {
   /** Walls-transparency slider (issue #120): unbind + normalized state. */
   private unbindWallsAlpha: (() => void) | null = null;
   private wallsAlpha = 0;
+
+  /** Sun/time-of-day settings (issue #121); defaults = the noon perch. */
+  private sunSettings: SunSettings = { ...DEFAULT_SUN_SETTINGS };
+
+  /**
+   * Shadow-atlas generation counter (issue #121 fix round): increments
+   * once per rendered frame that regenerates the shadow atlas. The atlas
+   * is static unless needsUpdate asks (autoUpdate is OFF, #86) and the
+   * frame's render() consumes that flag; reading it immediately before
+   * render() therefore counts real regenerations, not intent — a stale
+   * refresh freezes this counter while the light pose still moves.
+   */
+  private shadowAtlasGenerations = 0;
 
   /**
    * Autofade machinery (issue #86): upward-eye-ray raycaster against
@@ -220,6 +246,16 @@ export class ViewerApp {
       this.setWallsAlpha(alpha),
     );
     reflectWallsAlpha(this.hud, this.wallsAlpha);
+    // Sun controls (issue #121): time-of-day + north-offset sliders —
+    // the same single-owner binder pattern; reflect so the HUD always
+    // mirrors the controller's state.
+    this.unbindSunTime = onBindSunTime(this.hud, (hours) => {
+      this.applySunSettings({ timeHours: hours });
+    });
+    this.unbindSunNorth = onBindSunNorth(this.hud, (deg) => {
+      this.applySunSettings({ northOffsetDeg: deg });
+    });
+    reflectSunSettings(this.hud, this.sunSettings);
 
     // Tab toggles overview ⇄ walk (README-promised; formerly unwired —
     // the e2e descended vacuously). Skipped while typing in form fields.
@@ -479,6 +515,10 @@ export class ViewerApp {
       disposeObject(this.sceneRoot.scene);
     }
     this.sceneRoot = rebuilt;
+    // Re-apply the live sun settings onto the fresh lights (issue #121):
+    // every rebuild recreates the light group, so the pose — and the
+    // HIGH-tier shadow atlas (autoUpdate is OFF, #86) — must be rewired.
+    this.paintSun();
 
     // Walls transparency (#120): fresh materials arrive opaque, so the
     // viewer-local slider state resets to 0 with them — keeps the UI
@@ -640,6 +680,65 @@ export class ViewerApp {
     }
   }
 
+  /* --------------------- sun affordances (issue #121) ---------------------- */
+
+  /**
+   * Funnel for every sun-settings change: normalise, store, reflect on
+   * the HUD, then repaint the live scene.
+   */
+  private applySunSettings(patch: Partial<SunSettings>): void {
+    this.sunSettings = normalizeSunSettings({ ...this.sunSettings, ...patch });
+    reflectSunSettings(this.hud, this.sunSettings);
+    this.paintSun();
+  }
+
+  /**
+   * Write the current sun settings onto the live scene: light pose +
+   * coupling curves, the sky-dome dusk blend, and (HIGH tier) a one-shot
+   * shadow-atlas refresh — shadowMap.autoUpdate is OFF (#86), so
+   * without needsUpdate the shadows would silently stay frozen while
+   * the sun moves.
+   */
+  private paintSun(): void {
+    const root = this.sceneRoot;
+    const adapted = this.lastGood?.adapted;
+    if (!root || !adapted) return;
+    const state = applySunPose(root.lights, this.sunSettings, adapted.bounds);
+    applySkyDusk(root.skyDome, state.duskBlend);
+    if (this.hiQuality && this.renderer) {
+      this.renderer.shadowMap.needsUpdate = true;
+    }
+  }
+
+  /** Live sun-lighting probe for the e2e stats (issue #121). */
+  private sunProbe(): {
+    sunBearingDeg: number | null;
+    sunElevationDeg: number | null;
+    sunIntensity: number | null;
+    ambientIntensity: number | null;
+  } {
+    const lights = this.sceneRoot?.lights;
+    if (!lights) {
+      return {
+        sunBearingDeg: null,
+        sunElevationDeg: null,
+        sunIntensity: null,
+        ambientIntensity: null,
+      };
+    }
+    // Read the LIVE light pose (not the settings) — the geometry
+    // assertion channel for the e2e AC2 probe.
+    const sun = lights.sun;
+    const dx = sun.position.x - sun.target.position.x;
+    const dy = sun.position.y - sun.target.position.y;
+    return {
+      sunBearingDeg: normalizeBearingDeg((Math.atan2(dx, dy) * 180) / Math.PI),
+      sunElevationDeg:
+        (Math.atan2(sun.position.z, Math.hypot(dx, dy)) * 180) / Math.PI,
+      sunIntensity: sun.intensity,
+      ambientIntensity: lights.amb.intensity,
+    };
+  }
   /* --------------------------------- seats ---------------------------------- */
 
   private seatRig(mode: ViewMode): void {
@@ -685,6 +784,17 @@ export class ViewerApp {
 
       const camera = this.liveCamera();
       if (this.renderer && this.sceneRoot && camera) {
+        // Atlas-refresh accounting (#121 fix round): mirrors
+        // WebGLShadowMap.render's own gate, evaluated just before the
+        // frame's render() — a set flag here means THIS frame
+        // regenerates the atlas (the flag is consumed by that call).
+        const shadowMap = this.renderer.shadowMap;
+        if (
+          shadowMap.enabled &&
+          (shadowMap.autoUpdate || shadowMap.needsUpdate)
+        ) {
+          this.shadowAtlasGenerations += 1;
+        }
         this.renderer.render(this.sceneRoot.scene, camera);
       }
       this.publishDebugSeams(camera);
@@ -789,6 +899,15 @@ export class ViewerApp {
       // the plan carries no wall slot at all.
       wallOpacity: this.wallProbe()?.opacity ?? null,
       wallVisible: this.wallProbe()?.visible ?? null,
+      // Sun/time-of-day probes (#121): the LIVE directional-light pose
+      // (bearing/elevation derived from position − target) plus the
+      // current intensities — the AC1/AC2/AC3 e2e channel.
+      ...this.sunProbe(),
+      // Shadow-atlas generations (#121 fix round): without this, a
+      // frozen refresh is only visible as a few-percent pixel delta —
+      // far inside the screenshot noise. A deleted needsUpdate parks
+      // this counter at its boot value across every change path.
+      shadowAtlasGenerations: this.shadowAtlasGenerations,
     });
   }
 
@@ -972,6 +1091,8 @@ export class ViewerApp {
     this.unbindToggle?.();
     this.unbindRoofToggle?.();
     this.unbindWallsAlpha?.();
+    this.unbindSunTime?.();
+    this.unbindSunNorth?.();
     this.perf.destroy();
     destroyHud(this.hud);
     this.renderer?.dispose();
