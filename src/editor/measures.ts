@@ -8,6 +8,7 @@
  * consistent with the warn-not-prevent overlap stance.
  */
 import type { FloorplanData, Room } from '../shared/schema';
+import { flatRooms } from '../shared/schema';
 import { signedArea } from './geom';
 
 export interface RoomMeasure {
@@ -24,7 +25,7 @@ export function roomAreaM2(room: Room): number {
 
 /** Measurements for every room in the plan. */
 export function measureRooms(plan: FloorplanData): RoomMeasure[] {
-  return plan.rooms.map((room) => ({
+  return flatRooms(plan).map((room) => ({
     roomId: room.id,
     name: room.name,
     areaM2: roomAreaM2(room),
@@ -33,7 +34,7 @@ export function measureRooms(plan: FloorplanData): RoomMeasure[] {
 
 /** Sum of all room areas (overlaps double-counted by design). */
 export function totalLivableAreaM2(plan: FloorplanData): number {
-  return plan.rooms.reduce((sum, room) => sum + roomAreaM2(room), 0);
+  return flatRooms(plan).reduce((sum, room) => sum + roomAreaM2(room), 0);
 }
 
 /** Badge label, e.g. "Living Room: 19.4 m²". */

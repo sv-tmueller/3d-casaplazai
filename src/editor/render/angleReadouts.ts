@@ -9,6 +9,7 @@
  * "Dimensions" toggle as the measurement badges.
  */
 import type { FloorplanData } from '../../shared/schema';
+import { flatRooms } from '../../shared/schema';
 import type { Pt } from '../geom';
 import { worldToScreen, type Camera, type InteractionPhase } from '../controller';
 import { roomSegments } from '../model/openings';
@@ -58,7 +59,7 @@ export function angleReadoutLabels(
     const row = rowFor(phase.corner1, phase.cursor);
     if (row) rows.push(row);
   } else if (phase.tag === 'resizing') {
-    const room = plan.rooms.find((r) => r.id === phase.selectedRoomId);
+    const room = flatRooms(plan).find((r) => r.id === phase.selectedRoomId);
     if (room) {
       const poly = room.polygon;
       const n = poly.length;
@@ -73,7 +74,7 @@ export function angleReadoutLabels(
   }
 
   if (rows.length === 0 && hoverSeg) {
-    const room = plan.rooms.find((r) => r.id === hoverSeg.roomId);
+    const room = flatRooms(plan).find((r) => r.id === hoverSeg.roomId);
     if (room) {
       const seg = roomSegments(room)[hoverSeg.segIndex];
       if (seg) {

@@ -18,7 +18,9 @@ function mkRoom(id: string, polygon: Vec2[]): Room {
 }
 
 function plan(...rooms: Room[]): FloorplanData {
-  return { ...emptyPlan(), rooms };
+  const p = emptyPlan();
+  p.floors[0].rooms = rooms;
+  return p;
 }
 
 const CAM: Camera = { originX: 0, originY: 0, scale: 100 };

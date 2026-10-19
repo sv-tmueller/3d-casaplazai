@@ -22,12 +22,13 @@ import {
 } from '../../src/geom';
 import { buildRoomWalls } from '../../src/geom/compile';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { adaptScene } from '../../src/viewer/adapter';
 
 const EPS = 1e-3;
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 /** Distinct z coordinates present in a bucket's positions. */
@@ -52,7 +53,7 @@ describe('dedupeWalls — stacked windows (issue #29)', () => {
     { id: 'win-low', roomId: 'r-stack', kind: 'window', segmentIndex: 0, tCenter: 0.5, width: 1, sillHeight: 0.4, headHeight: 0.9 },
     { id: 'win-high', roomId: 'r-stack', kind: 'window', segmentIndex: 0, tCenter: 0.5, width: 1, sillHeight: 1.4, headHeight: 1.9 },
   ];
-  const plan: FloorplanData = {
+  const plan: FloorplanData = migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -60,7 +61,7 @@ describe('dedupeWalls — stacked windows (issue #29)', () => {
     rooms: [room],
     openings,
     furniture: [],
-  };
+  }).data!;
 
   // Two stacked openings share a span, which validateGeometry rejects
   // (openings may not overlap longitudinally). Build the room's wall
@@ -108,10 +109,13 @@ describe('dedupeWalls — stacked windows (issue #29)', () => {
 
 describe('dedupeWalls — demo parity (issue #29)', () => {
   const demo: FloorplanData = parseValidatedPlan(
-    JSON.parse(
-      readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-    ),
-  );
+    // Demo stays v1 on disk; migrate first (mirrors the loaders).
+    migrate(
+      JSON.parse(
+          readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+        ),
+    ).data,
+    )
   const compiled = compilePlan(demo);
   const adapted = adaptScene(compiled, roomsById(demo));
   const rawWallVerts = compiled.rooms.reduce(

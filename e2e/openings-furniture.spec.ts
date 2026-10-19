@@ -287,7 +287,12 @@ test.describe.serial('openings + furniture stamps (issue #4)', () => {
         if (raw === null) return 0;
         try {
           const parsed = JSON.parse(raw);
-          return (parsed.openings?.length ?? 0) + (parsed.furniture?.length ?? 0);
+          // v2 shape (issue #74): entities nest under floors[].
+          const f = parsed.floors?.[0];
+          return (
+            ((f?.openings?.length ?? 0) + (f?.furniture?.length ?? 0)) ||
+            0
+          );
         } catch {
           return 0;
         }

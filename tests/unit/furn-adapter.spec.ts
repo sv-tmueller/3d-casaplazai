@@ -7,16 +7,20 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compilePlan, parseValidatedPlan } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { adaptScene, sceneHasNaN } from '../../src/viewer/adapter';
 
 const demo: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 describe('adaptScene — furniture buckets (issue #18)', () => {

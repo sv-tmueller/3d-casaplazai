@@ -5,13 +5,19 @@
  *
  * Keeps the `.pane[data-screen=editor]` mount contract asserted by
  * tests/stubs/mount.spec.ts.
+ *
+ * Wire-format note (pkg 7.1): the store is v2-native, but the PUBLIC
+ * surfaces owned here — the __casaplaza bridge and the autosave slot —
+ * keep speaking the frozen v1 shape (see editor/wire.ts for why and
+ * where the conversion happens).
  */
-import { SCHEMA_VERSION, type FloorplanData } from '../shared/schema';
+import { SCHEMA_VERSION, type FloorplanDataV1 } from '../shared/schema';
 import './../style.css';
 import { AutosaveManager } from './autosave';
 import { hydrateFromAutosave, initEditorInteraction } from './glue';
 import { buildEditorUi, type EditorDomRefs } from './ui';
 import { EditorStore, emptyPlan } from './store';
+import { normalizeIncoming, toLegacyWire } from './wire';
 
 declare global {
   interface Window {
@@ -20,8 +26,8 @@ declare global {
 }
 
 export interface CasaplazaBridge {
-  getData(): FloorplanData;
-  loadPlan(plan: FloorplanData): void;
+  getData(): FloorplanDataV1;
+  loadPlan(plan: unknown): void;
 }
 
 export function mountEditor(
@@ -37,11 +43,12 @@ export function mountEditor(
   hydrateFromAutosave(store, autosave);
 
   window.__casaplaza = {
-    getData: () => store.getState().data,
-    loadPlan: (plan: FloorplanData) => {
-      store.replaceAll(plan);
+    getData: () => toLegacyWire(store.getState().data),
+    loadPlan: (plan: unknown) => {
+      const normalized = normalizeIncoming(plan);
+      store.replaceAll(normalized);
       autosave.stop();
-      autosave.persistSync(plan);
+      autosave.persistSync(toLegacyWire(normalized));
     },
   };
 

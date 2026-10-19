@@ -11,22 +11,26 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { compilePlan, parseValidatedPlan } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { adaptScene } from '../../src/viewer/adapter';
 
 const demo: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 /** K doors spread along the south wall of one 2·K m wide room. */
 function kDoorPlan(k: number): FloorplanData {
   const w = k * 2;
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -50,12 +54,12 @@ function kDoorPlan(k: number): FloorplanData {
       headHeight: 2.05,
     })),
     furniture: [],
-  };
+  }).data!;
 }
 
 /** Two rooms carving the SAME doorway out of their shared x=3 wall. */
 function sharedDoorPlan(): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -69,12 +73,12 @@ function sharedDoorPlan(): FloorplanData {
       { id: 'dR', roomId: 'R', kind: 'door', segmentIndex: 3, tCenter: 0.5, width: 0.9, sillHeight: 0, headHeight: 2.05 },
     ],
     furniture: [],
-  };
+  }).data!;
 }
 
 /** Frame-bucket triangle count for a plan (0 when no bucket emitted). */
 function frameTris(plan: FloorplanData): number {
-  const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+  const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.floors[0].openings);
   const frames = adapted.buckets.find((b) => b.slot === 'windowFrame');
   return frames ? frames.indices.length / 3 : 0;
 }
@@ -94,7 +98,7 @@ describe('adaptScene — door frames (issue #37)', () => {
   });
 
   it('demo: door frame z-extents span sill 0 → headHeight (2.05)', () => {
-    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.openings);
+    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.floors[0].openings);
     const frames = adapted.buckets.find((b) => b.slot === 'windowFrame')!;
     // Front door (living seg0) sits on the south wall y≈0, x∈[2.23,3.17].
     const zs: number[] = [];
@@ -114,14 +118,14 @@ describe('adaptScene — door frames (issue #37)', () => {
   });
 
   it('door frames do not add glass quads (glass count == window count)', () => {
-    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.openings);
+    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.floors[0].openings);
     const glass = adapted.buckets.find((b) => b.slot === 'glass')!;
-    const windows = demo.openings.filter((o) => o.kind === 'window').length;
+    const windows = demo.floors[0].openings.filter((o) => o.kind === 'window').length;
     expect(glass.indices.length / 6).toBe(windows);
   });
 
   it('triangleCount equals the sum over emitted buckets', () => {
-    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.openings);
+    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.floors[0].openings);
     const sum = adapted.buckets.reduce(
       (acc, b) => acc + b.indices.length / 3,
       0,

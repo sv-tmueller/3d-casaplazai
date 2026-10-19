@@ -7,6 +7,7 @@
  */
 
 import type { FloorplanData, Opening, Room } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import type { Aabb } from './types';
 import {
   partitionLongitudinal,
@@ -95,7 +96,7 @@ export function segmentHitsBoxes(px: number, py: number, qx: number, qy: number,
 export function roomCollisionPieces(room: Room, plan: FloorplanData): Aabb[] {
   const out: Aabb[] = [];
   const segs = makeSegments(room.polygon);
-  const openingsHere = plan.openings.filter((o) => o.roomId === room.id);
+  const openingsHere = flatOpenings(plan).filter((o) => o.roomId === room.id);
   const bySeg = new Map<number, Opening[]>();
   for (const o of openingsHere) {
     const arr = bySeg.get(o.segmentIndex);
@@ -133,7 +134,7 @@ export function roomCollisionPieces(room: Room, plan: FloorplanData): Aabb[] {
 /** Collect expanded collision boxes for every solid wall piece. */
 export function buildCollisions(plan: FloorplanData): Aabb[] {
   const boxes: Aabb[] = [];
-  for (const room of plan.rooms) {
+  for (const room of flatRooms(plan)) {
     boxes.push(...roomCollisionPieces(room, plan));
   }
   return boxes.map((box) => expandPlayerRadius(box));
@@ -147,7 +148,7 @@ export function buildCollisions(plan: FloorplanData): Aabb[] {
  * plans without furniture.
  */
 export function furnitureCollisionBoxes(plan: FloorplanData): Aabb[] {
-  return plan.furniture.map((item) => {
+  return flatFurniture(plan).map((item) => {
     const [fx, fy] = item.footprint;
     const hw = fx / 2;
     const hh = fy / 2;

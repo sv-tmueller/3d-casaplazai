@@ -138,17 +138,21 @@ interface ParsedEntities {
   segLens: Map<string, Seg[]>;
 }
 
-function parseRooms(raw: unknown, c: Collector): ParsedEntities {
+function parseRooms(
+  raw: unknown,
+  basePath: string,
+  c: Collector,
+): ParsedEntities {
   const entities: ParsedEntities = { roomIds: new Set(), segLens: new Map() };
   if (!Array.isArray(raw)) {
-    c.add('rooms', 'missing-array', '"rooms" must be an array');
+    c.add(basePath, 'missing-array', `"${basePath}" must be an array`);
     return entities;
   }
   if (raw.length === 0) {
-    c.add('rooms', 'empty-collection', '"rooms" must contain at least one room');
+    c.add(basePath, 'empty-collection', `"${basePath}" must contain at least one room`);
   }
   raw.forEach((r: Record<string, unknown> | null, i: number) => {
-    const rp = `rooms[${i}]`;
+    const rp = `${basePath}[${i}]`;
     checkUniqueId(r?.id, rp, entities.roomIds, c);
     if (typeof r?.name !== 'string' || r.name.trim() === '') {
       c.add(`${rp}.name`, 'bad-name', 'room name must be a non-empty string');
@@ -180,14 +184,14 @@ function parseRooms(raw: unknown, c: Collector): ParsedEntities {
   return entities;
 }
 
-function parseOpenings(raw: unknown, ents: ParsedEntities, c: Collector): void {
+function parseOpenings(raw: unknown, basePath: string, ents: ParsedEntities, c: Collector): void {
   if (!Array.isArray(raw)) {
-    c.add('openings', 'missing-array', '"openings" must be an array');
+    c.add(basePath, 'missing-array', `"${basePath}" must be an array`);
     return;
   }
   const seen = new Set(ents.roomIds);
   raw.forEach((o: Record<string, unknown> | null, i: number) => {
-    const op = `openings[${i}]`;
+    const op = `${basePath}[${i}]`;
     checkUniqueId(o?.id, op, seen, c);
     if (!checkRefToRoom(o?.roomId, op, ents.roomIds, c)) return;
 
@@ -218,14 +222,14 @@ function parseOpenings(raw: unknown, ents: ParsedEntities, c: Collector): void {
   });
 }
 
-function parseFurniture(raw: unknown, ents: ParsedEntities, c: Collector): void {
+function parseFurniture(raw: unknown, basePath: string, ents: ParsedEntities, c: Collector): void {
   if (!Array.isArray(raw)) {
-    c.add('furniture', 'missing-array', '"furniture" must be an array');
+    c.add(basePath, 'missing-array', `"${basePath}" must be an array`);
     return;
   }
   const seen = new Set(ents.roomIds);
   raw.forEach((f: Record<string, unknown> | null, i: number) => {
-    const fp = `furniture[${i}]`;
+    const fp = `${basePath}[${i}]`;
     checkUniqueId(f?.id, fp, seen, c);
     if (!FURNITURE_TYPES.includes(f?.type as never)) {
       c.add(`${fp}.type`, 'unknown-furniture-type', `type must be one of ${FURNITURE_TYPES.join('|')} (got ${JSON.stringify(f?.type)})`);
@@ -243,6 +247,43 @@ function parseFurniture(raw: unknown, ents: ParsedEntities, c: Collector): void 
       }
     } else {
       c.add(`${fp}.footprint`, 'invalid-point', 'expected [x, y] pair of finite numbers');
+    }
+  });
+}
+
+/**
+ * Shallow stair sanity rules (pkg 7.1). Deep geometric checks — rise/gap
+ * matching against a higher floor, stairwell overlap — arrive with 7.4.
+ */
+function parseStairs(raw: unknown, c: Collector): void {
+  if (!Array.isArray(raw)) {
+    c.add('stairs', 'missing-array', '"stairs" must be an array');
+    return;
+  }
+  const seen = new Set<string>();
+  raw.forEach((s: Record<string, unknown> | null, i: number) => {
+    const sp = `stairs[${i}]`;
+    checkUniqueId(s?.id, sp, seen, c);
+    if (typeof s?.roomId !== 'string' || s.roomId.trim() === '') {
+      c.add(`${sp}.roomId`, 'bad-room-id', 'roomId must be a non-empty string');
+    }
+    if (!isPoint(s?.position)) {
+      c.add(`${sp}.position`, 'invalid-point', 'expected [x, y] pair of finite numbers');
+    }
+    if (!isNum(s?.rotationDeg)) {
+      c.add(`${sp}.rotationDeg`, 'bad-rotation', 'rotationDeg must be a finite number');
+    }
+    for (const field of ['width', 'run', 'rise'] as const) {
+      if (!isNum(s?.[field]) || (s[field] as number) <= 0) {
+        c.add(
+          `${sp}.${field}`,
+          `bad-${field}`,
+          `${field} must be a positive finite number`,
+        );
+      }
+    }
+    if (!isInt(s?.stepCount) || (s.stepCount as number) < 3) {
+      c.add(`${sp}.stepCount`, 'bad-step-count', 'stepCount must be an integer >= 3');
     }
   });
 }
@@ -267,9 +308,40 @@ export function validateFloorplan(json: unknown): ValidationResult<FloorplanData
     c.add('wallThickness', 'bad-wall-thickness', 'wallThickness must be a positive finite number');
   }
 
-  const ents = parseRooms(d.rooms, c);
-  parseOpenings(d.openings, ents, c);
-  parseFurniture(d.furniture, ents, c);
+  if (!Array.isArray(d.floors)) {
+    c.add('floors', 'missing-array', '"floors" must be an array');
+  } else if (d.floors.length === 0) {
+    c.add('floors', 'empty-collection', '"floors" must contain at least one floor');
+  } else {
+    // Entity ids are unique across the WHOLE plan: one shared namespace
+    // walked floor by floor (also admits floor ids into the namespace,
+    // preventing floor/entity collisions).
+    const idNamespace = new Set<string>();
+    let prevElevation: number | undefined;
+    d.floors.forEach((fl: Record<string, unknown> | null, fi: number) => {
+      const bp = `floors[${fi}]`;
+      checkUniqueId(fl?.id, bp, idNamespace, c);
+      if (typeof fl?.name !== 'string' || fl.name.trim() === '') {
+        c.add(`${bp}.name`, 'bad-name', 'floor name must be a non-empty string');
+      }
+      if (!isNum(fl?.elevation)) {
+        c.add(`${bp}.elevation`, 'bad-elevation', 'elevation must be a finite number');
+      } else if (prevElevation !== undefined && fl.elevation <= prevElevation) {
+        c.add(
+          `${bp}.elevation`,
+          'non-monotonic-elevation',
+          `elevations must strictly increase across floors[] (${fl.elevation} after ${prevElevation})`,
+        );
+      }
+      if (isNum(fl?.elevation)) prevElevation = fl.elevation;
+
+      const ents = parseRooms(fl?.rooms, `${bp}.rooms`, c);
+      parseOpenings(fl?.openings, `${bp}.openings`, ents, c);
+      parseFurniture(fl?.furniture, `${bp}.furniture`, ents, c);
+    });
+  }
+
+  parseStairs(d.stairs, c);
 
   if (c.failed) return { ok: false, errors: c.errors };
   return { ok: true, value: json as FloorplanData };

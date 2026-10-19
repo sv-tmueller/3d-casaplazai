@@ -519,12 +519,12 @@ function planFromRooms(
   openings: Opening[],
 ): Parameters<typeof windowPaneRects>[0] {
   const hostedIds = new Set(openings.map((o) => o.roomId));
+  // The window-pane projector only consults rooms/openings; synthesize
+  // a minimal plan carrying both flats (cast: a deliberate partial view).
+  const rooms = [...roomsById.values()].filter((r) => hostedIds.has(r.id));
   return {
-    rooms: [...roomsById.values()]
-      .filter((r) => hostedIds.has(r.id))
-      .map((r) => ({ ...r })),
-    openings,
-  } as Parameters<typeof windowPaneRects>[0];
+    floors: [{ rooms, openings, furniture: [] }],
+  } as unknown as Parameters<typeof windowPaneRects>[0];
 }
 
 /** Build ONE glass quad filling the pane rect (2 triangles). */

@@ -7,13 +7,14 @@
 import { describe, expect, it } from 'vitest';
 import type { Camera } from '../../src/editor/controller';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { paintScene } from '../../src/editor/render';
 import { RecordingCtx } from './helpers/recordingContext';
 
 const CAM: Camera = { originX: 0, originY: 5, scale: 20 };
 
 function emptyPlan(): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -21,7 +22,7 @@ function emptyPlan(): FloorplanData {
     rooms: [],
     openings: [],
     furniture: [],
-  };
+  }).data!;
 }
 
 function paint(gridPitch?: number): RecordingCtx {

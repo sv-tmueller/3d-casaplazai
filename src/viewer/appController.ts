@@ -13,6 +13,7 @@ import { PerspectiveCamera, Vector3, WebGLRenderer, type Camera } from 'three';
 
 import { compilePlan, parseValidatedPlan } from '../geom';
 import type { FloorplanData, Room } from '../shared/schema';
+import { flatOpenings, flatRooms, migrate } from '../shared/schema';
 import { adaptScene, sceneHasNaN } from './adapter';
 import {
   buildHud,
@@ -44,7 +45,12 @@ import { WalkRig } from './walkMode';
 
 /** Shape of the pkg-2 bridge hung off window.__casaplaza. */
 export interface DataBridge {
-  getData(): FloorplanData;
+  /**
+   * Current plan. May arrive in EITHER shape: the bridge's published
+   * wire format is frozen v1 (converted at the editor door), so the
+   * consumer migrates before validating (see refreshAdaptation).
+   */
+  getData(): unknown;
 }
 
 /** Runtime knobs injected for testability (defaults = production). */
@@ -255,7 +261,7 @@ export class ViewerApp {
     let spawn = { x: 0, y: 0, yaw: 0 };
     if (plan) {
       try {
-        spawn = solveSpawn(plan.rooms, adapted.collisions);
+        spawn = solveSpawn(flatRooms(plan), adapted.collisions);
       } catch (err) {
         if (err instanceof SpawnFailureError) {
           toast(this.hud, err.message, 'error');
@@ -286,12 +292,18 @@ export class ViewerApp {
 
   /* ------------------------------- adaptation ------------------------------- */
 
-  /** Latest plan from the bridge (undefined when unavailable/dirty). */
+  /**
+   * Latest plan from the bridge, MIGRATED to the current schema
+   * (undefined when unavailable/dirty/unmigratable). Single choke
+   * point: every internal consumer gets current-shape v2 data.
+   */
   private currentPlanSafe(): FloorplanData | undefined {
     const bridge = this.bridgeSupplier();
     if (!bridge) return undefined;
     try {
-      return bridge.getData();
+      const raw = bridge.getData();
+      const mig = migrate(raw);
+      return mig.ok && mig.data ? mig.data : undefined;
     } catch {
       return undefined;
     }
@@ -315,12 +327,16 @@ export class ViewerApp {
     }
 
     try {
+      // currentPlanSafe() already ran migrate-at-the-door (the bridge's
+      // wire format is frozen v1 — see editor/wire.ts), so the
+      // validator only ever sees current-shape data; raw v1 is still
+      // rejected by validateFloorplan itself (unsupported-version).
       const validated = parseValidatedPlan(plan);
       const compiled = compilePlan(validated);
       const adapted = adaptScene(
         compiled,
         roomsById(validated),
-        validated.openings,
+        flatOpenings(validated),
         validated.wallThickness,
       );
 
@@ -378,7 +394,7 @@ export class ViewerApp {
     if (isStandingLegal(x, y, adapted)) return;
 
     try {
-      const spawn = solveSpawn(plan.rooms, adapted.collisions);
+      const spawn = solveSpawn(flatRooms(plan), adapted.collisions);
       this.replaceWalkRig(spawn.x, spawn.y, spawn.yaw);
     } catch (err) {
       if (err instanceof SpawnFailureError) {
@@ -645,7 +661,7 @@ function makeRenderer(canvas: HTMLCanvasElement): WebGLRenderer | null {
 function roomsById(
   plan: FloorplanData,
 ): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(flatRooms(plan).map((r) => [r.id, r]));
 }
 
 /** Parse location.search for the perf flag (?perf=1). */

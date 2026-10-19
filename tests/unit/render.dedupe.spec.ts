@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Camera } from '../../src/editor/controller';
 import type { FloorplanData, Opening, OpeningKind, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { derivePairRows } from '../../src/editor/model/openings';
 import { paintScene } from '../../src/editor/render';
 
@@ -79,7 +80,7 @@ function squareRoom(id: string, x0: number, y0: number, w: number, h: number): R
 
 /** Living (0,0)-(5,4) + Kitchen (5,0)-(8,4): shared wall x=5. */
 function sharedWallPlan(openings: Opening[]): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -87,7 +88,7 @@ function sharedWallPlan(openings: Opening[]): FloorplanData {
     rooms: [squareRoom('living', 0, 0, 5, 4), squareRoom('kitchen', 5, 0, 3, 4)],
     openings,
     furniture: [],
-  };
+  }).data!;
 }
 
 function row(id: string, spec: { roomId: string; segmentIndex: number; tCenter: number }, kind: OpeningKind): Opening {

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FurnitureType } from '../../src/shared/schema';
-import { validateFloorplan } from '../../src/shared/schema';
+import { migrate, validateFloorplan } from '../../src/shared/schema';
 
 const demo = (): ReturnType<typeof JSON.parse> =>
   JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'));
@@ -13,8 +13,8 @@ const ALL_FURNITURE_TYPES: FurnitureType[] = ['bed', 'sofa', 'table', 'chair', '
 describe('demo/demo-apartment.json — AC coverage', () => {
   const fixture = demo();
 
-  it('validates cleanly against the v1 schema', () => {
-    const result = validateFloorplan(fixture);
+  it('validates cleanly after v1→v2 migration (issue #74)', () => {
+    const result = validateFloorplan(migrate(fixture).data);
     expect(result).toMatchObject({ ok: true });
   });
 

@@ -11,6 +11,7 @@
  */
 
 import type { FloorplanData, Vec2 } from '../shared/schema';
+import { flatOpenings, flatRooms } from '../shared/schema';
 import { makeSegments } from './mathutil';
 
 /** One glass pane: a vertical rectangle filling a window's hole. */
@@ -39,11 +40,11 @@ export interface PaneRect {
  */
 export function windowPaneRects(plan: FloorplanData): PaneRect[] {
   const panes: PaneRect[] = [];
-  const windows = plan.openings.filter((o) => o.kind === 'window');
+  const windows = flatOpenings(plan).filter((o) => o.kind === 'window');
   if (windows.length === 0) return panes;
 
   const byId = new Map(
-    plan.rooms
+    flatRooms(plan)
       .filter((r) => windows.some((o) => o.roomId === r.id))
       .map((r) => [r.id, r] as const),
   );

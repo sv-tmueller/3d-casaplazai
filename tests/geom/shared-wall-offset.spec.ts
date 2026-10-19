@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { buildCollisions, segmentHitsBoxes } from '../../src/geom/collision';
 import { derivePairRows } from '../../src/editor/model/openings';
 
@@ -28,7 +29,7 @@ function room(
 
 /** Two rooms sharing the wall near x=4, kitchen shifted +5 mm east. */
 function offsetSharedPlan(openings: Opening[]): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -36,7 +37,7 @@ function offsetSharedPlan(openings: Opening[]): FloorplanData {
     rooms: [room('living', 0, 0, 4, 4), room('kitchen', 4.005, 0, 3, 4)],
     openings,
     furniture: [],
-  };
+  }).data!;
 }
 
 describe('geom shared-wall offset (#36): pairing survives a 5 mm gap', () => {

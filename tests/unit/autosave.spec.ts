@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { AUTOSAVE_KEY, AutosaveManager } from '../../src/editor/autosave';
 
 class FakeStorage implements Storage {
@@ -27,7 +28,7 @@ class FakeStorage implements Storage {
   }
 }
 
-const PLAN: FloorplanData = {
+const PLAN: FloorplanData = migrate({
   schemaVersion: 1,
   units: 'meters',
   wallHeight: 2.7,
@@ -40,7 +41,7 @@ const PLAN: FloorplanData = {
   }],
   openings: [],
   furniture: [],
-};
+}).data!;
 
 describe('AutosaveManager', () => {
   let storage: FakeStorage;
@@ -120,7 +121,8 @@ describe('AutosaveManager', () => {
 });
 
 function validateOk(p: unknown): boolean {
-  return !!p && typeof p === 'object' && (p as { rooms?: unknown }).rooms !== undefined;
+  // v2 shape check (issue #74): migrated plans nest entities under floors[].
+  return !!p && typeof p === 'object' && Array.isArray((p as { floors?: unknown }).floors);
 }
 function validateFail(_p: unknown): boolean {
   return false;

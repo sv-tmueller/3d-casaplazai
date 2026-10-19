@@ -12,6 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { migrate } from '../../src/shared/schema';
 import type { FloorplanData } from '../../src/shared/schema';
 import {
   formatRoomLabel,
@@ -24,9 +25,12 @@ import {
 const DEMO_TOTAL_M2 = 36.68;
 
 function loadDemo(): FloorplanData {
-  return JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ) as FloorplanData;
+  // Demo fixture stays v1 on disk; migrate before use (issue #74).
+  return migrate(
+    JSON.parse(
+      readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+    ),
+  ).data!;
 }
 
 describe('measures — golden demo-fixture area sum (issue #7)', () => {

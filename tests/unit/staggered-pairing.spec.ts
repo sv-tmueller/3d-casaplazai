@@ -25,15 +25,14 @@ function mkRoom(id: string, polygon: Vec2[]): Room {
 }
 
 function plan(bed: Vec2[]): FloorplanData {
-  return {
-    ...emptyPlan(),
-    rooms: [
+  const p = emptyPlan();
+  p.floors[0].rooms = [
       // Living (0,0)->(5,0)->(5,4)->(0,4); seg 1 is the EAST wall, up.
       mkRoom('living', [[0, 0], [5, 0], [5, 4], [0, 4]]),
       // Bed tucked against PART of that east wall.
       mkRoom('bed', bed),
-    ],
-  };
+  ];
+  return p;
 }
 
 function addDoor(store: EditorStore, tCenter: number) {
@@ -86,7 +85,7 @@ describe('#41 staggered pairing through the store (dispatch)', () => {
   it('case 1: door on the shared stretch commits two rows', () => {
     const store = new EditorStore(plan(STAGGERED));
     expect(addDoor(store, 0.5).ok).toBe(true);
-    const ops = store.getState().data.openings;
+    const ops = store.getState().data.floors[0].openings;
     expect(ops.map((o) => o.roomId)).toEqual(['living', 'bed']);
     expect(ops[1].tCenter).toBeCloseTo(0.6);
   });
@@ -94,7 +93,7 @@ describe('#41 staggered pairing through the store (dispatch)', () => {
   it('case 2: flush-shifted commits two rows', () => {
     const store = new EditorStore(plan(FLUSH));
     expect(addDoor(store, 0.5).ok).toBe(true);
-    expect(store.getState().data.openings.map((o) => o.roomId)).toEqual([
+    expect(store.getState().data.floors[0].openings.map((o) => o.roomId)).toEqual([
       'living',
       'bed',
     ]);
@@ -105,13 +104,13 @@ describe('#41 staggered pairing through the store (dispatch)', () => {
     // cutout is NOT hosted: one honest row (glue() then warns single-cut).
     const store = new EditorStore(plan(STAGGERED));
     expect(addDoor(store, 0.25).ok).toBe(true);
-    expect(store.getState().data.openings).toHaveLength(1);
+    expect(store.getState().data.floors[0].openings).toHaveLength(1);
   });
 
   it('editing a staggered row still syncs its partner by projection', () => {
     const store = new EditorStore(plan(STAGGERED));
     addDoor(store, 0.5);
-    const a = store.getState().data.openings[0];
+    const a = store.getState().data.floors[0].openings[0];
     expect(
       store.dispatch({
         type: 'moveOpening',
@@ -120,7 +119,7 @@ describe('#41 staggered pairing through the store (dispatch)', () => {
         syncPair: true,
       }).ok,
     ).toBe(true);
-    const [, b] = store.getState().data.openings;
+    const [, b] = store.getState().data.floors[0].openings;
     // (5,2.8) projected onto bed seg 3 => (3.5-2.8)/2.5 = 0.28.
     expect(b.tCenter).toBeCloseTo(0.28);
   });
@@ -130,10 +129,10 @@ describe('#41 staggered pairing through the store (dispatch)', () => {
     const revPlan = plan([[5, 3.5], [8, 3.5], [8, 1], [5, 1]]);
     const store = new EditorStore(revPlan);
     addDoor(store, 0.5);
-    const [a, b] = store.getState().data.openings;
+    const [a, b] = store.getState().data.floors[0].openings;
     expect(b.roomId).toBe('bed');
-    const livingSeg = roomSegments(revPlan.rooms[0])[1];
-    const bedSeg = roomSegments(revPlan.rooms[1])[b.segmentIndex];
+    const livingSeg = roomSegments(revPlan.floors[0].rooms[0])[1];
+    const bedSeg = roomSegments(revPlan.floors[0].rooms[1])[b.segmentIndex];
     const wa = [
       livingSeg.a[0] + (livingSeg.b[0] - livingSeg.a[0]) * a.tCenter,
       livingSeg.a[1] + (livingSeg.b[1] - livingSeg.a[1]) * a.tCenter,
@@ -191,7 +190,7 @@ describe('#41 compiler-level: staggered pair carves a passage through BOTH walls
       sillHeight: 0,
       headHeight: 2.05,
     }));
-    const boxes = buildCollisions({ ...base, openings });
+    const boxes = buildCollisions({ ...base, floors: [{ ...base.floors[0], openings }] });
     // y=2 sits inside both door mouths: passage open.
     expect(segmentHitsBoxes(3, 2, 5.5, 2, boxes)).toBe(false);
     // y=3.2 is bed wall yet solid floor-to-ceiling: blocked.

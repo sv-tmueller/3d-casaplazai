@@ -19,6 +19,7 @@ import { adaptScene } from '../../src/viewer/adapter';
 import { compilePlan, parseValidatedPlan } from '../../src/geom';
 import type { MeshBuffer } from '../../src/geom';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 
 const W = 0.24;
 
@@ -35,14 +36,14 @@ function staggerPlan(): FloorplanData {
     door('A-hi', 'A', 2.8 / 4), door('B-hi', 'B', (3.5 - 2.8) / 2.5),
     door('A-lo', 'A', 1.8 / 4), door('B-lo', 'B', (3.5 - 1.8) / 2.5),
   ];
-  return {
+  return migrate({
     schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: W,
     rooms, openings, furniture: [],
-  };
+  }).data!;
 }
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 interface Slab {
@@ -122,7 +123,7 @@ describe('issue #45 staggered shared wall — no coplanar z-fighting', () => {
 
   it('leaves ZERO coplanar overlapping wall slabs after adaptation', () => {
     const plan = staggerPlan();
-    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.floors[0].openings);
     const wall = adapted.buckets.find((b) => b.slot === 'wall');
     expect(wall).toBeDefined();
     expect(coplanarOverlaps(wall as MeshBuffer)).toBe(0);
@@ -130,7 +131,7 @@ describe('issue #45 staggered shared wall — no coplanar z-fighting', () => {
 
   it('emits exactly FOUR door-frame slabs per shared doorway (no dupes)', () => {
     const plan = staggerPlan();
-    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.floors[0].openings);
     const frames = adapted.buckets.find((b) => b.slot === 'windowFrame') as MeshBuffer;
     const perDoor = new Map<string, number>();
     for (let o = 0; o + 24 <= frames.positions.length; o += 24) {
@@ -162,10 +163,10 @@ function crossBandPlan(): FloorplanData {
   const openings: Opening[] = [
     { id: 'A-door', roomId: 'A', kind: 'door', segmentIndex: 1, tCenter: 0.5, width: 0.9, headHeight: 2.05, sillHeight: 0 },
   ];
-  return {
+  return migrate({
     schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: W,
     rooms, openings, furniture: [],
-  };
+  }).data!;
 }
 
 describe('issue #45 — cross-z-band coplanar slabs (PR #50 finding)', () => {
@@ -197,7 +198,7 @@ describe('issue #45 — cross-z-band coplanar slabs (PR #50 finding)', () => {
 
   it('leaves ZERO coplanar overlapping slabs after adaptation', () => {
     const plan = crossBandPlan();
-    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.floors[0].openings);
     const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
     expect(wall).toBeDefined();
     expect(coplanarOverlaps(wall)).toBe(0);
@@ -205,11 +206,14 @@ describe('issue #45 — cross-z-band coplanar slabs (PR #50 finding)', () => {
 
   it('emits the demo wall bucket with ZERO coplanar overlaps', () => {
     const demo = parseValidatedPlan(
-      JSON.parse(
-        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-      ),
-    );
-    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.openings);
+      // Demo stays v1 on disk; migrate first (mirrors the loaders).
+      migrate(
+        JSON.parse(
+            readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+          ),
+      ).data,
+      )
+    const adapted = adaptScene(compilePlan(demo), roomsById(demo), demo.floors[0].openings);
     const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
     expect(wall).toBeDefined();
     expect(coplanarOverlaps(wall)).toBe(0);
@@ -222,11 +226,11 @@ describe('issue #45 — cross-z-band coplanar slabs (PR #50 finding)', () => {
     const openings: Opening[] = [
       { id: 'win', roomId: 'W', kind: 'window', segmentIndex: 1, tCenter: 0.5, width: 1.2, sillHeight: 0.9, headHeight: 2.05 },
     ];
-    const plan: FloorplanData = {
+    const plan: FloorplanData = migrate({
       schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: W,
       rooms: [room], openings, furniture: [],
-    };
-    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.openings);
+    }).data!;
+    const adapted = adaptScene(compilePlan(plan), roomsById(plan), plan.floors[0].openings);
     const wall = adapted.buckets.find((b) => b.slot === 'wall') as MeshBuffer;
     const slabs: Slab[] = [];
     for (let o = 0; o + 24 <= wall.positions.length; o += 24) {

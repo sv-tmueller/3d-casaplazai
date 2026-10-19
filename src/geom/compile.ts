@@ -11,6 +11,7 @@ import type {
   FurnitureItem,
   Room,
 } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import type {
   CompiledScene,
   FurnitureVolume,
@@ -66,7 +67,7 @@ export function sceneBounds(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const room of plan.rooms) {
+  for (const room of flatRooms(plan)) {
     for (const [x, y] of room.polygon) {
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
@@ -81,7 +82,7 @@ export function sceneBounds(
 export function buildRoomWalls(room: Room, plan: FloorplanData): MeshBuffer[] {
   const meshes: MeshBuffer[] = [];
   const segs = makeSegments(room.polygon);
-  const openingsHere = plan.openings.filter((o) => o.roomId === room.id);
+  const openingsHere = flatOpenings(plan).filter((o) => o.roomId === room.id);
   const bySeg = new Map<number, typeof openingsHere>();
   for (const o of openingsHere) {
     const arr = bySeg.get(o.segmentIndex);
@@ -189,7 +190,7 @@ function furnitureVolumes(items: FurnitureItem[]): FurnitureVolume[] {
 export function compilePlan(plan: FloorplanData): CompiledScene {
   validateGeometry(plan);
 
-  const rooms: RoomMeshes[] = plan.rooms.map((room) => ({
+  const rooms: RoomMeshes[] = flatRooms(plan).map((room) => ({
     roomId: room.id,
     floor: buildFloor(room),
     ceiling: buildCeiling(room, plan.wallHeight),
@@ -200,6 +201,6 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
     rooms,
     // Walls first (unchanged contract), then furniture boxes (issue #18).
     collisions: [...buildCollisions(plan), ...furnitureCollisionBoxes(plan)],
-    furniture: furnitureVolumes(plan.furniture),
+    furniture: furnitureVolumes(flatFurniture(plan)),
   };
 }

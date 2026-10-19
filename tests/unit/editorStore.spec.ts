@@ -16,9 +16,8 @@ import {
 } from '../../src/editor/store';
 
 function plan(): FloorplanData {
-  return {
-    ...emptyPlan(),
-    rooms: [
+  const p = emptyPlan();
+  p.floors[0].rooms = [
       // Living: (0,0)->(5,0)->(5,4)->(0,4). Segments: 0 south, 1 EAST
       // (x=5, traversed UP), 2 north, 3 west.
       {
@@ -35,8 +34,8 @@ function plan(): FloorplanData {
         polygon: [[5, 0], [8, 0], [8, 4], [5, 4]],
         floorTexture: null,
       },
-    ],
-  };
+  ];
+  return p;
 }
 
 function newStore(): EditorStore {
@@ -44,7 +43,7 @@ function newStore(): EditorStore {
 }
 
 function openingsOf(st: EditorState): Opening[] {
-  return st.data.openings;
+  return st.data.floors[0].openings;
 }
 
 const DOOR_BASE = {
@@ -117,7 +116,7 @@ describe('tolerance based shared-wall pairing (#36)', () => {
   /** Two-room plan with the kitchen's shared wall shifted by dx meters. */
   function offsetPlan(dx: number): FloorplanData {
     const p = plan();
-    p.rooms[1].polygon = [
+    p.floors[0].rooms[1].polygon = [
       [5 + dx, 0],
       [8 + dx, 0],
       [8 + dx, 4],
@@ -292,9 +291,9 @@ describe('furniture commands', () => {
     });
     expect(add.ok).toBe(true);
     const st0 = store.getState();
-    expect(st0.data.furniture).toHaveLength(1);
-    const fid = st0.data.furniture[0].id;
-    expect(st0.data.furniture[0].roomId).toBe('living');
+    expect(st0.data.floors[0].furniture).toHaveLength(1);
+    const fid = st0.data.floors[0].furniture[0].id;
+    expect(st0.data.floors[0].furniture[0].roomId).toBe('living');
 
     expect(
       store.dispatch({
@@ -303,7 +302,7 @@ describe('furniture commands', () => {
         position: [3, 2],
       }).ok,
     ).toBe(true);
-    expect(store.getState().data.furniture[0].position).toEqual([3, 2]);
+    expect(store.getState().data.floors[0].furniture[0].position).toEqual([3, 2]);
 
     expect(
       store.dispatch({
@@ -312,15 +311,15 @@ describe('furniture commands', () => {
         rotationDeg: 90,
       }).ok,
     ).toBe(true);
-    expect(store.getState().data.furniture[0].rotationDeg).toBe(90);
+    expect(store.getState().data.floors[0].furniture[0].rotationDeg).toBe(90);
 
     // Each atomic command is one undo step.
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture[0].rotationDeg).toBe(0);
+    expect(store.getState().data.floors[0].furniture[0].rotationDeg).toBe(0);
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture[0].position).toEqual([2, 2]);
+    expect(store.getState().data.floors[0].furniture[0].position).toEqual([2, 2]);
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
   });
 
   it('resize + delete + unknown-id routing', () => {
@@ -333,7 +332,7 @@ describe('furniture commands', () => {
       rotationDeg: 0,
       footprint: [2.0, 0.9],
     });
-    const fid = store.getState().data.furniture[0].id;
+    const fid = store.getState().data.floors[0].furniture[0].id;
 
     expect(
       store.dispatch({
@@ -349,12 +348,12 @@ describe('furniture commands', () => {
         footprint: [1.8, 0.9],
       }).ok,
     ).toBe(true);
-    expect(store.getState().data.furniture[0].footprint).toEqual([1.8, 0.9]);
+    expect(store.getState().data.floors[0].furniture[0].footprint).toEqual([1.8, 0.9]);
 
     expect(
       store.dispatch({ type: 'deleteFurniture', furnitureId: fid }).ok,
     ).toBe(true);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
     expect(store.getState().selectedId).toBeNull();
 
     const gone = store.dispatch({
@@ -375,7 +374,7 @@ describe('furniture commands', () => {
       footprint: [0.45, 0.45],
     });
     expect(res.ok).toBe(false);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
   });
 
   it('undo stack respects the 100-cap', () => {
@@ -390,7 +389,7 @@ describe('furniture commands', () => {
         footprint: [0.45, 0.45],
       });
     }
-    expect(store.getState().data.furniture).toHaveLength(130);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(130);
     let undos = 0;
     while (store.undo()) undos += 1;
     expect(undos).toBeLessThanOrEqual(100);
@@ -407,7 +406,7 @@ describe('furniture commands', () => {
       rotationDeg: 0,
       footprint: [1.6, 2.0],
     });
-    const fid = store.getState().data.furniture[0].id;
+    const fid = store.getState().data.floors[0].furniture[0].id;
     store.markSaved();
 
     store.beginGesture();
@@ -418,16 +417,16 @@ describe('furniture commands', () => {
       ).toBe(true);
     }
     store.endGesture();
-    expect(store.getState().data.furniture[0].position).toEqual([2.6, 2]);
+    expect(store.getState().data.floors[0].furniture[0].position).toEqual([2.6, 2]);
 
     // Whole drag = one undo step back to the committed start.
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture[0].position).toEqual([2, 2]);
+    expect(store.getState().data.floors[0].furniture[0].position).toEqual([2, 2]);
     // Underneath the collapsed drag step sits the original addFurniture
     // snapshot — one MORE undo erases the piece entirely.
     expect(store.canUndo()).toBe(true);
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
     expect(store.dirty).toBe(true);
   });
 
@@ -442,17 +441,17 @@ describe('furniture commands', () => {
       footprint: [1.2, 0.8],
     });
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
     expect(store.redo()).toBe(true);
-    expect(store.getState().data.furniture).toHaveLength(1);
-    expect(store.getState().data.furniture[0].type).toBe('table');
+    expect(store.getState().data.floors[0].furniture).toHaveLength(1);
+    expect(store.getState().data.floors[0].furniture[0].type).toBe('table');
   });
 });
 
 describe('reducer purity / store plumbing', () => {
   it('does not mutate the plan instance handed to the constructor', () => {
     const initial = plan();
-    const frozenRooms = JSON.stringify(initial.rooms);
+    const frozenRooms = JSON.stringify(initial.floors[0].rooms);
     const store = new EditorStore(initial);
     store.dispatch({
       type: 'addFurniture',
@@ -462,8 +461,8 @@ describe('reducer purity / store plumbing', () => {
       rotationDeg: 0,
       footprint: [2, 0.9],
     });
-    expect(JSON.stringify(initial.rooms)).toBe(frozenRooms);
-    expect(store.getState().data.furniture).toHaveLength(1);
+    expect(JSON.stringify(initial.floors[0].rooms)).toBe(frozenRooms);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(1);
   });
 
   it('failed commands neither mutate nor grow the undo stack', () => {
@@ -497,7 +496,7 @@ describe('reducer purity / store plumbing', () => {
     store.replaceAll(plan());
     expect(store.canUndo()).toBe(false);
     expect(store.dirty).toBe(false);
-    expect(store.getState().data.furniture).toHaveLength(0);
+    expect(store.getState().data.floors[0].furniture).toHaveLength(0);
   });
 
   it('subscribe sees every notified state change', () => {
@@ -542,7 +541,7 @@ describe('reducer purity / store plumbing', () => {
 });
 function planWithFurniture(): FloorplanData {
   const p = plan();
-  p.furniture = [{
+  p.floors[0].furniture = [{
     id: 'fx1', type: 'chair', roomId: 'living',
     position: [2, 2], rotationDeg: 0, footprint: [0.45, 0.45],
   }];
@@ -552,7 +551,7 @@ function planWithFurniture(): FloorplanData {
 describe('escape-abandoned furniture drag (regression: stuck gesture base)', () => {
   it('endGesture after abandoned drag restores normal atomic dispatch', () => {
     const store = new EditorStore(planWithFurniture());
-    const fid = store.getState().data.furniture[0].id;
+    const fid = store.getState().data.floors[0].furniture[0].id;
     store.markSaved();
 
     // Simulate the glue's abandon path: beginGesture, mutate, then
@@ -597,7 +596,7 @@ describe('double replaceAll is idempotent (regression: double-loadPlan)', () => 
 
 describe('resizeRoom dispatch (#53)', () => {
   const livingPoly = (store: EditorStore): number[][] =>
-    store.getState().data.rooms.find((r) => r.id === 'living')!.polygon;
+    store.getState().data.floors[0].rooms.find((r) => r.id === 'living')!.polygon;
 
   it('atomic resize changes the vertex then undo restores it', () => {
     const store = newStore();
@@ -659,7 +658,7 @@ describe('gesture-streamed moveOpening (issue #61)', () => {
       tCenter: 0.55,
       ...DOOR_BASE,
     });
-    const ids = store.getState().data.openings.map((o) => o.id) as [string, string];
+    const ids = store.getState().data.floors[0].openings.map((o) => o.id) as [string, string];
     return { store, ids };
   }
 
@@ -679,23 +678,23 @@ describe('gesture-streamed moveOpening (issue #61)', () => {
 
   it('N streamed frames collapse to ONE undo step that restores both rows', () => {
     const { store, ids } = doorStore();
-    const before = store.getState().data.openings.map((o) => o.tCenter);
+    const before = store.getState().data.floors[0].openings.map((o) => o.tCenter);
     store.beginGesture();
     for (const t of [0.4, 0.45, 0.5, 0.55, 0.6]) {
       store.dispatch({ type: 'moveOpening', openingId: ids[0], tCenter: t, syncPair: true });
     }
     store.endGesture();
     // Twin stays in lockstep: both rows moved in one gesture.
-    const after = store.getState().data.openings;
+    const after = store.getState().data.floors[0].openings;
     expect(after).toHaveLength(2);
     expect(after[0].tCenter).toBeCloseTo(0.6, 6);
     // ONE undo restores the pre-gesture positions of BOTH rows.
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.openings.map((o) => o.tCenter)).toEqual(before);
+    expect(store.getState().data.floors[0].openings.map((o) => o.tCenter)).toEqual(before);
     // The NEXT undo is the addOpening step (not another drag frame), which
     // proves the N streamed frames formed exactly one history entry.
     expect(store.undo()).toBe(true);
-    expect(store.getState().data.openings).toHaveLength(0);
+    expect(store.getState().data.floors[0].openings).toHaveLength(0);
     expect(store.canUndo()).toBe(false);
   });
 
