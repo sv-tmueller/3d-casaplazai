@@ -2,9 +2,12 @@
  * Debounced autosave of FloorplanData to a pluggable Storage backend
  * (typically window.localStorage).
  *
- * The SLOT format is the frozen v1 wire shape (see schema FloorplanDataV1):
- * callers hand in the current FloorplanData converted at the door
- * (editor/wire.ts) — the manager itself stays format-agnostic.
+ * Since pkg 7.2 (issue #75, ratified decision (a)) the SLOT carries
+ * RAW v2 data — multi-floor plans must round-trip; the loader
+ * migrates-at-the-door so legacy v1 payloads keep loading. The KEY
+ * STRING is unchanged (renaming would orphan every existing save;
+ * key ≠ contract). Callers hand in the payload directly; the manager
+ * itself stays format-agnostic.
  */
 import type { FloorplanData, FloorplanDataV1 } from '../shared/schema';
 

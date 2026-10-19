@@ -279,6 +279,8 @@ test.describe.serial('openings + furniture stamps (issue #4)', () => {
     expect(before.furniture).toHaveLength(1);
 
     // Wait out the autosave debounce, then reload.
+    // pkg 7.2 (issue #75): the slot carries RAW v2 data — openings and
+    // furniture nest under floors[0] (shape-only adaptation).
     await expect
       .poll(async () => {
         const raw = await page.evaluate(() =>
@@ -287,7 +289,8 @@ test.describe.serial('openings + furniture stamps (issue #4)', () => {
         if (raw === null) return 0;
         try {
           const parsed = JSON.parse(raw);
-          return (parsed.openings?.length ?? 0) + (parsed.furniture?.length ?? 0);
+          const fl = parsed.floors?.[0];
+          return (fl?.openings?.length ?? 0) + (fl?.furniture?.length ?? 0);
         } catch {
           return 0;
         }
