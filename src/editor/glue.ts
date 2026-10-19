@@ -661,6 +661,10 @@ export function initEditorInteraction(
     }
     const item = flatFurniture(view).find((f) => f.id === sel);
     if (item) return { kind: "furniture", item };
+    // pkg 13.4 (issue #118): plan-level stairs — resolved only while the
+    // flight departs the ACTIVE floor (its host room is visible here).
+    const stair = activeFloorStairs(view).find((s) => s.id === sel);
+    if (stair) return { kind: "stair", stair };
     return { kind: "none" };
   }
 
