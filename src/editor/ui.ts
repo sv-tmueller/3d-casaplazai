@@ -139,7 +139,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnImport = mkBtn('Import', 'editor-import');
   btnImport.title = 'Load a plan from an exported JSON file.';
   btnImport.setAttribute('data-testid', 'btn-import');
-  const btnExportJson = mkBtn('Export JSON', 'editor-export-json');
+  const btnExportJson = mkBtn('Save JSON', 'editor-export-json');
   btnExportJson.title = 'Download the plan as a JSON file.';
   btnExportJson.setAttribute('data-testid', 'btn-export-json');
 
