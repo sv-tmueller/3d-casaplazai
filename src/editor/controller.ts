@@ -53,6 +53,10 @@ export type InteractionPhase =
   | { tag: 'idle' }
   | { tag: 'drawingRect'; corner1: Pt; cursor: Pt }
   | { tag: 'drawingPoly'; points: Pt[]; cursor: Pt }
+  /* pkg 13.4 (issue #118): staircase drag. `anchor` is the bottom step's
+   * downhill edge centre (fixed at pointerdown), `cursor` the uphill
+   * end; `roomId` is the host room captured at pointerdown. */
+  | { tag: 'drawingStair'; anchor: Pt; cursor: Pt; roomId: string }
   | { tag: 'dragging'; grabOffset: Pt; selectedRoomId: string }
   | { tag: 'resizing'; vertexIndex: number; selectedRoomId: string }
   | { tag: 'draggingFurniture'; furnitureId: string }

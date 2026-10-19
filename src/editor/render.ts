@@ -2,8 +2,9 @@
  * Canvas painter: grid, rooms, selection affordances, in-progress shapes.
  * All drawing happens in CSS-pixel space; world→screen via the camera.
  */
-import type { FloorplanData, FurnitureItem, Opening, Room } from '../shared/schema';
+import type { FloorplanData, FurnitureItem, Opening, Room, Staircase } from '../shared/schema';
 import { flatFurniture, flatRooms } from '../shared/schema';
+import { stairFootprint, stairWorldRect } from '../geom';
 import {
   finalizeRectangle,
   resizeHandlesOf,
@@ -113,6 +114,17 @@ export function paintScene(
     // pkg 13.2 (issue #110): multi-select member highlight.
     if (multiSelectedIds.includes(f.id)) {
       strokeFootprintOutline(ctx, cam, f, MULTI_MEMBER_STROKE);
+    }
+  }
+
+  // pkg 13.4 (issue #118): staircases DEPARTING the floor this view
+  // shows — footprint outline + tread ticks + uphill arrow; selected
+  // wears the amber affordance, marquee members the violet one (same
+  // vocabulary as rooms/furniture).
+  for (const stair of stairsOfActiveFloor(plan)) {
+    drawStair(ctx, cam, stair, stair.id === selectedId);
+    if (multiSelectedIds.includes(stair.id)) {
+      strokeStairOutline(ctx, cam, stair, MULTI_MEMBER_STROKE);
     }
   }
 
@@ -628,6 +640,125 @@ function drawGhost(
     const br = worldToScreen(cam, [ghost.pos[0] + fp[0] / 2, ghost.pos[1] + fp[1] / 2]);
     ctx.fillStyle = color;
     ctx.fillRect(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]);
+  } else if (ghost.kind === 'stairs' && ghost.stair) {
+    // pkg 13.4 (issue #118): translucent candidate footprint — green when
+    // validateGeometry accepts the candidate plan, red when it does not.
+    const corners = stairWorldRect(ghost.stair).map((p) => worldToScreen(cam, p));
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    corners.forEach((p, i) => (i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1])));
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ==================== pkg 13.4 painters (issue #118) ===================== */
+
+const STAIR_FILL = 'rgba(148, 163, 184, 0.30)';
+const STAIR_STROKE = '#64748b';
+const STAIR_SELECTED_STROKE = '#e67e22';
+const STAIR_TICK = '#94a3b8';
+const STAIR_ARROW = '#334155';
+
+/**
+ * Staircases DEPARTING the floor `plan` shows (its rooms host them).
+ * Shared by the painter and glue's hit-testing/purge paths — one filter,
+ * one meaning of "the stairs you can see here".
+ */
+export function stairsOfActiveFloor(plan: FloorplanData): Staircase[] {
+  const rooms = flatRooms(plan);
+  return plan.stairs.filter((s) => rooms.some((r) => r.id === s.roomId));
+}
+
+/** Screen-space outline of a stair's rotated footprint rect. */
+function stairScreenCorners(cam: Camera, stair: Staircase): Pt[] {
+  return stairWorldRect(stair).map((p) => worldToScreen(cam, p));
+}
+
+function traceStairPath(ctx: CanvasRenderingContext2D, corners: Pt[]): void {
+  ctx.beginPath();
+  corners.forEach((p, i) => (i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1])));
+  ctx.closePath();
+}
+
+/** Violet marquee-member outline (the strokeRoomOutline sibling). */
+function strokeStairOutline(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  stair: Staircase,
+  color: string,
+): void {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  traceStairPath(ctx, stairScreenCorners(cam, stair));
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * pkg 13.4 (issue #118): one staircase — footprint outline (grey, amber
+ * when selected), tread ticks at every riser bar the first, and an
+ * uphill arrow along local +x (rotationDeg CCW). Pure readout: geometry
+ * comes from the shared stairFootprint(), never recomputed here.
+ */
+function drawStair(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  stair: Staircase,
+  selected = false,
+): void {
+  const fp = stairFootprint(stair);
+  ctx.save();
+  traceStairPath(ctx, stairScreenCorners(cam, stair));
+  ctx.fillStyle = STAIR_FILL;
+  ctx.fill();
+  ctx.lineWidth = selected ? 2.5 : 1.5;
+  ctx.strokeStyle = selected ? STAIR_SELECTED_STROKE : STAIR_STROKE;
+  ctx.stroke();
+
+  // Tread ticks: stepCount - 1 dividers across the flight.
+  ctx.strokeStyle = STAIR_TICK;
+  ctx.lineWidth = 1;
+  for (let i = 1; i < stair.stepCount; i += 1) {
+    const s = (i * stair.run) / stair.stepCount - fp.halfRun; // from centre
+    const a = worldToScreen(cam, [
+      fp.cx + fp.ux * s + fp.vx * fp.halfWidth,
+      fp.cy + fp.uy * s + fp.vy * fp.halfWidth,
+    ]);
+    const b = worldToScreen(cam, [
+      fp.cx + fp.ux * s - fp.vx * fp.halfWidth,
+      fp.cy + fp.uy * s - fp.vy * fp.halfWidth,
+    ]);
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+  }
+
+  // Uphill arrow: centre → 60% of the way to the top riser.
+  const tail = worldToScreen(cam, [fp.cx, fp.cy]);
+  const tip = worldToScreen(cam, [
+    fp.cx + fp.ux * fp.halfRun * 0.6,
+    fp.cy + fp.uy * fp.halfRun * 0.6,
+  ]);
+  ctx.strokeStyle = STAIR_ARROW;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(tail[0], tail[1]);
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  const ang = Math.atan2(tip[1] - tail[1], tip[0] - tail[0]);
+  const head = 7;
+  for (const d of [-Math.PI / 6, Math.PI / 6]) {
+    ctx.beginPath();
+    ctx.moveTo(tip[0], tip[1]);
+    ctx.lineTo(tip[0] - head * Math.cos(ang - d), tip[1] - head * Math.sin(ang - d));
+    ctx.stroke();
   }
   ctx.restore();
 }
