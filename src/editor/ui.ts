@@ -69,6 +69,8 @@ export interface EditorDomRefs {
   /* Pkg 12.3 (issue #101): inspector panel — toggle + dock. */
   btnInspector: HTMLButtonElement;
   inspectorDock: HTMLDivElement;
+  /* Pkg 13.1 (issue #109): mini-3D inset — toggle (dock lives in glue). */
+  btnMini3d: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -274,6 +276,16 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnInspector.setAttribute("aria-pressed", "false");
   btnInspector.setAttribute("data-testid", "btn-inspector");
 
+  // Pkg 13.1 (issue #109): mini-3D inset toggle — inserted IMMEDIATELY
+  // BEFORE the Inspector button (pre-agreed anchor vs #110/#111; the
+  // inset docks as a flex sibling of the inspector panel). Heavy 3D
+  // modules load lazily on FIRST enable (glue.ts) so the editor chunk
+  // stays lean.
+  const btnMini3d = mkBtn("3D inset", "editor-mini3d");
+  btnMini3d.title = "Toggle the live 3D inset preview (3).";
+  btnMini3d.setAttribute("aria-pressed", "false");
+  btnMini3d.setAttribute("data-testid", "btn-mini3d");
+
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
     btnMeasure, sep,
@@ -283,6 +295,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnClearMeasure, btnUnderlay, sep6, btnSnap,
     sep7, btnPrevFloor, floorBadge, btnNextFloor, btnAddFloor,
     // #101 agreed insertion point: Inspector toggle LAST in the toolbar.
+    // #109: mini-3D toggle sits immediately BEFORE it (pre-agreed).
+    btnMini3d,
     btnInspector,
   ].forEach((el) =>
     toolbar.appendChild(el),
@@ -584,6 +598,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     floorPopover, floorRenameForm, floorRenameInput, btnDeleteFloor,
     leanPopover, leanForm, leanSegFieldset, leanSlider, leanValue, btnClearLean,
     btnInspector, inspectorDock,
+    btnMini3d,
   };
 }
 
