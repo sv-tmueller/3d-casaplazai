@@ -95,12 +95,32 @@
           "headHeight": 2.2
         },
         {
+          "id": "op-kitchen-entry-door",
+          "roomId": "room-kitchen",
+          "kind": "door",
+          "segmentIndex": 1,
+          "tCenter": 0.2105263158,
+          "width": 0.85,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
           "id": "op-entry-door",
           "roomId": "room-entry",
           "kind": "door",
           "segmentIndex": 0,
           "tCenter": 0.5,
           "width": 0.9,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-kitchen-entry-door-twin",
+          "roomId": "room-entry",
+          "kind": "door",
+          "segmentIndex": 3,
+          "tCenter": 0.8571428571,
+          "width": 0.85,
           "sillHeight": 0.0,
           "headHeight": 2.1
         }
@@ -242,6 +262,26 @@
           "width": 0.75,
           "sillHeight": 0.0,
           "headHeight": 2.1
+        },
+        {
+          "id": "op-landing-stairwell-door",
+          "roomId": "room-landing",
+          "kind": "door",
+          "segmentIndex": 0,
+          "tCenter": 0.625,
+          "width": 0.9,
+          "sillHeight": 0.0,
+          "headHeight": 2.7
+        },
+        {
+          "id": "op-bath-stairwell-door-twin",
+          "roomId": "room-bath",
+          "kind": "door",
+          "segmentIndex": 2,
+          "tCenter": 0.375,
+          "width": 0.9,
+          "sillHeight": 0.0,
+          "headHeight": 2.7
         }
       ],
       "furniture": [
@@ -265,7 +305,7 @@
           "id": "furn-bathtub",
           "type": "bathtub",
           "roomId": "room-bath",
-          "position": [8.8, 1.9],
+          "position": [8.8, 0.95],
           "rotationDeg": 90,
           "footprint": [1.7, 0.75]
         }
@@ -276,7 +316,7 @@
     {
       "id": "stair-main",
       "roomId": "room-entry",
-      "position": [9.0, 4.2],
+      "position": [9.0, 3.0],
       "rotationDeg": 90,
       "width": 0.9,
       "run": 2.6,
