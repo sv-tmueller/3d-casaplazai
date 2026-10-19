@@ -343,14 +343,56 @@ export function adaptScene(
   // Emitted AFTER the wall bucket; doors are skipped entirely by
   // windowPaneRects. Undefined openings ⇒ no new buckets (legacy
   // callers keep their exact shape).
+  //
+  // Storey lift (issue #76): when the REAL plan is supplied, every
+  // pane/frame/door-casing rect is lifted by its opening's floor
+  // elevation — the dressing builders speak floor-local z (sill/head
+  // heights), so without the lift an upper-storey window's glass would
+  // hang at ground level, visibly detached from its carved hole.
   const dressGlass: MeshBuffer[] = [];
   const dressFrames: MeshBuffer[] = [];
   if (openings && openings.length > 0) {
+    // Elevation lookup: roomId -> owning floor's elevation. Openings
+    // cite rooms by their plan-unique id, so one map serves both the
+    // window panes and the door casings.
+    const elevationByRoom = new Map<string, number>();
+    if (plan) {
+      for (const floor of plan.floors) {
+        for (const room of floor.rooms) {
+          elevationByRoom.set(room.id, floor.elevation);
+        }
+      }
+    }
+    const liftOf = (opening: Opening): number =>
+      (opening.roomId !== undefined
+        ? elevationByRoom.get(opening.roomId)
+        : undefined) ?? 0;
+    const liftRect = (
+      rect: {
+        corners: [[number, number], [number, number], [number, number], [number, number]];
+        zBottom: number;
+        zTop: number;
+      },
+      dz: number,
+    ): typeof rect => ({
+      corners: rect.corners,
+      zBottom: rect.zBottom + dz,
+      zTop: rect.zTop + dz,
+    });
+
     const panes = windowPaneRects(planFromRooms(roomsById, openings));
+    const paneDz = new Map(panes.map((p) => [p.openingId, 0]));
+    if (plan) {
+      for (const opening of openings) {
+        paneDz.set(opening.id, liftOf(opening));
+      }
+    }
     const thickness = wallThickness;
     for (const pane of panes) {
-      dressGlass.push(buildGlassQuad(pane));
-      dressFrames.push(...buildFrameSlabs(pane, thickness));
+      const dz = paneDz.get(pane.openingId) ?? 0;
+      const lifted = liftRect(pane, dz);
+      dressGlass.push(buildGlassQuad(lifted));
+      dressFrames.push(...buildFrameSlabs(lifted, thickness));
     }
     // ---- Door frames (issue #37) -------------------------------------
     // Doors reuse the EXISTING windowFrame slot (charcoal #3a3f44) — the
@@ -359,8 +401,16 @@ export function adaptScene(
     // centroid so a doorway carved from BOTH adjoining rooms (the demo's
     // living↔kitchen shared door) emits one set instead of two
     // coincident, z-fighting sets.
-    const doorSlabs = doorRects(roomsById, openings).flatMap((rect) =>
-      buildFrameSlabs(rect, thickness, DOOR_MEMBER_M),
+    // doorRects emits one rect per DOOR opening (in order, skipping
+    // windows), so the dz list must be built from the same filtered
+    // sequence — indexing raw openings here would misalign.
+    const doorOpens = openings.filter((o) => o.kind === 'door');
+    const doorSlabs = doorRects(roomsById, openings).flatMap((rect, i) =>
+      buildFrameSlabs(
+        liftRect(rect, plan ? liftOf(doorOpens[i]!) : 0),
+        thickness,
+        DOOR_MEMBER_M,
+      ),
     );
     dressFrames.push(...dedupeWalls(doorSlabs));
   }

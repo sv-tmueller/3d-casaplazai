@@ -8,6 +8,9 @@ import { migrate, validateFloorplan } from '../../src/shared/schema';
 const demo = (): ReturnType<typeof JSON.parse> =>
   JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'));
 
+const townhouse = (): ReturnType<typeof JSON.parse> =>
+  JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8'));
+
 const ALL_FURNITURE_TYPES: FurnitureType[] = ['bed', 'sofa', 'table', 'chair', 'counter', 'bathtub', 'toilet'];
 
 describe('demo/demo-apartment.json — AC coverage', () => {
@@ -49,5 +52,67 @@ describe('demo/demo-apartment.json — AC coverage', () => {
       expect(f.footprint[0]).toBeGreaterThan(0);
       expect(f.footprint[1]).toBeGreaterThan(0);
     }
+  });
+})
+
+describe('demo/demo-townhouse.json — AC coverage (issue #76)', () => {
+  const fixture = townhouse();
+
+  it('validates NATIVELY as schema v2 (no migration involved)', () => {
+    const result = validateFloorplan(fixture);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('declares exactly two floors with elevations 0 and 2.7', () => {
+    expect(fixture.floors).toHaveLength(2);
+    expect(fixture.floors[0].elevation).toBe(0);
+    expect(fixture.floors[1].elevation).toBe(2.7);
+  });
+
+  it('mostly NON-overlapping footprints + exactly one aligned pair', () => {
+    // Ground: living/kitchen/entry; upper: bedroom(=living footprint)/
+    // office/bath/landing. Identical xy footprints must occur ONLY for
+    // the aligned pair (master-bedroom ≡ living) — the z-dedupe
+    // exerciser. Any other identical pair would be an accident.
+    const polys: Array<[string, number[][]]> = fixture.floors.flatMap(
+      (fl: { rooms: { id: string; polygon: number[][] }[] }) =>
+        fl.rooms.map((r) => [r.id, r.polygon]),
+    );
+    const canon = (p: number[][]): string => JSON.stringify(p);
+    const counts = new Map<string, number>();
+    for (const [, poly] of polys) {
+      const key = canon(poly);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const duplicated = [...counts.entries()].filter(([, n]) => n > 1);
+    expect(duplicated).toHaveLength(1);
+    expect(duplicated[0]![1]).toBe(2);
+  });
+
+  it('carries ONE staircase with the #69 shape, anchored to ground', () => {
+    expect(fixture.stairs).toHaveLength(1);
+    const stair = fixture.stairs[0];
+    expect(stair.id).toBe('stair-main');
+    expect(typeof stair.roomId).toBe('string');
+    expect(fixture.floors[0].rooms.some((r: { id: string }) => r.id === stair.roomId))
+      .toBe(true);
+    expect(stair.stepCount).toBeGreaterThanOrEqual(3);
+    expect(stair.rise).toBeCloseTo(fixture.floors[1].elevation, 6);
+  });
+
+  it('declares NO roof field (RoofSpec arrives with 8.1)', () => {
+    expect(fixture.roof).toBeUndefined();
+    expect(fixture.floors.every((f: { roof?: unknown }) => f.roof === undefined))
+      .toBe(true);
+  });
+
+  it('entity ids are unique across BOTH floors (v2 namespace)', () => {
+    const ids: string[] = [
+      ...fixture.floors.flatMap((fl: { id: string }) => [fl.id]),
+      ...fixture.floors.flatMap((fl: { rooms: { id: string }[] }) => fl.rooms.map((r) => r.id)),
+      ...fixture.floors.flatMap((fl: { openings: { id: string }[] }) => fl.openings.map((o) => o.id)),
+      ...fixture.floors.flatMap((fl: { furniture: { id: string }[] }) => fl.furniture.map((f) => f.id)),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
   });
 })

@@ -11,7 +11,7 @@ import type {
   FurnitureItem,
   Room,
 } from '../shared/schema';
-import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
+import { flatOpenings, flatRooms } from '../shared/schema';
 import type {
   CompiledScene,
   FurnitureVolume,
@@ -294,6 +294,16 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
     rooms,
     // Walls first (unchanged contract), then furniture boxes (issue #18).
     collisions,
-    furniture: furnitureVolumes(flatFurniture(plan)),
+    // Render volumes ride their floor's elevation too (issue #76):
+    // zMin/zMax are WORLD z, lifted identically to the collision boxes
+    // so an upstairs bed renders on the upstairs floor, not sunken into
+    // the ground storey.
+    furniture: plan.floors.flatMap((floor) =>
+      furnitureVolumes(floor.furniture).map((vol) => ({
+        ...vol,
+        zMin: vol.zMin + floor.elevation,
+        zMax: vol.zMax + floor.elevation,
+      })),
+    ),
   };
 }
