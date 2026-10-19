@@ -34,6 +34,18 @@ export interface EditorDomRefs {
   btnZoomIn: HTMLButtonElement;
   btnZoomOut: HTMLButtonElement;
   btnDimensions: HTMLButtonElement;
+  /* pkg 12.1 (issue #99): blueprint underlay — import button, hidden
+   * file input, and the controls popover anchored to the button. */
+  btnUnderlay: HTMLButtonElement;
+  underlayFileInput: HTMLInputElement;
+  underlayPopover: HTMLDivElement;
+  underlayOpacity: HTMLInputElement;
+  underlayOpacityValue: HTMLSpanElement;
+  btnUnderlayRotateCCW: HTMLButtonElement;
+  btnUnderlayRotateCW: HTMLButtonElement;
+  underlayLock: HTMLInputElement;
+  underlayHide: HTMLInputElement;
+  btnUnderlayRemove: HTMLButtonElement;
   btnSnap: HTMLButtonElement;
   snapPopover: HTMLDivElement;
   btnAddMeasure: HTMLButtonElement;
@@ -202,6 +214,29 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnClearMeasure.title = 'Remove every dimension annotation.';
   btnClearMeasure.setAttribute('data-testid', 'btn-clear-measurements');
 
+  // pkg 12.1 (issue #99): blueprint underlay. Agreed insertion point vs
+  // #101 — directly AFTER the Dimensions cluster, before the snap
+  // group, so the two PRs' toolbar hunks stay disjoint. Button toggles
+  // the controls popover; importing happens through the hidden file
+  // input (mouseless: the button is Tab-reachable, the picker opens
+  // via its click forwarding).
+  const btnUnderlay = mkBtn('Underlay', 'editor-underlay');
+  btnUnderlay.title = 'Import a blueprint image to trace walls over.';
+  btnUnderlay.setAttribute('aria-expanded', 'false');
+  btnUnderlay.setAttribute('aria-haspopup', 'dialog');
+  btnUnderlay.setAttribute('data-testid', 'btn-underlay');
+
+  // Hidden file input backing the underlay import (importFileInput
+  // precedent): must live in the document for .click() to summon the
+  // picker; hidden keeps it out of layout + a11y tree.
+  const underlayFileInput = document.createElement('input');
+  underlayFileInput.type = 'file';
+  underlayFileInput.accept = 'image/png,image/jpeg,image/webp';
+  underlayFileInput.dataset.testid = 'underlay-file-input';
+  underlayFileInput.setAttribute('aria-hidden', 'true');
+  underlayFileInput.tabIndex = -1;
+  underlayFileInput.hidden = true;
+
   // pkg 7.2 (issue #75): floor selector group — Prev / indicator+menu /
   // Next / Add. Fully mouseless: plain buttons, Tab-reachable, with
   // PageUp/PageDown + [ / ] keyboard aliases (glue.ts).
@@ -228,7 +263,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnShare, btnImport,
     btnExportJson, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
-    btnClearMeasure, sep6, btnSnap,
+    btnClearMeasure, btnUnderlay, sep6, btnSnap,
     sep7, btnPrevFloor, floorBadge, btnNextFloor, btnAddFloor,
   ].forEach((el) =>
     toolbar.appendChild(el),
@@ -381,6 +416,83 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
 
   toolbar.appendChild(leanPopover);
 
+  // pkg 12.1 (issue #99): underlay controls popover — #68/#75/#83
+  // precedent (visibility-toggled div, role=dialog, Escape/outside
+  // close wired in glue.ts). Anchored to the toolbar like its siblings
+  // (NO side panel — deliberate, keeps #101's docking work disjoint).
+  // Controls are seeded from the active floor's underlay on each open.
+  const underlayPopover = document.createElement('div');
+  underlayPopover.className = 'snap-popover underlay-popover';
+  underlayPopover.setAttribute('role', 'dialog');
+  underlayPopover.setAttribute('aria-label', 'Blueprint underlay');
+  underlayPopover.setAttribute('data-testid', 'underlay-popover');
+  underlayPopover.hidden = true;
+
+  const underlayTitle = document.createElement('div');
+  underlayTitle.className = 'snap-popover-title';
+  underlayTitle.textContent = 'Blueprint underlay';
+  underlayPopover.appendChild(underlayTitle);
+
+  const opacityLabel = document.createElement('label');
+  opacityLabel.className = 'snap-master';
+  const underlayOpacity = document.createElement('input');
+  underlayOpacity.type = 'range';
+  underlayOpacity.name = 'underlay-opacity';
+  underlayOpacity.min = '0';
+  underlayOpacity.max = '100';
+  underlayOpacity.step = '1';
+  underlayOpacity.value = '60';
+  underlayOpacity.dataset.testid = 'underlay-opacity';
+  underlayOpacity.setAttribute('aria-label', 'Underlay opacity percent');
+  const underlayOpacityValue = document.createElement('span');
+  underlayOpacityValue.dataset.testid = 'underlay-opacity-value';
+  underlayOpacityValue.textContent = '60%';
+  opacityLabel.append(underlayOpacity, underlayOpacityValue);
+  underlayPopover.appendChild(opacityLabel);
+
+  const rotateRow = document.createElement('div');
+  rotateRow.className = 'underlay-rotate-row';
+  const btnUnderlayRotateCCW = document.createElement('button');
+  btnUnderlayRotateCCW.type = 'button';
+  btnUnderlayRotateCCW.className = 'editor-btn';
+  btnUnderlayRotateCCW.textContent = '↺ 5°';
+  btnUnderlayRotateCCW.title = 'Rotate the underlay 5° counter-clockwise.';
+  btnUnderlayRotateCCW.setAttribute('data-testid', 'btn-underlay-rotate-ccw');
+  const btnUnderlayRotateCW = document.createElement('button');
+  btnUnderlayRotateCW.type = 'button';
+  btnUnderlayRotateCW.className = 'editor-btn';
+  btnUnderlayRotateCW.textContent = '↻ 5°';
+  btnUnderlayRotateCW.title = 'Rotate the underlay 5° clockwise.';
+  btnUnderlayRotateCW.setAttribute('data-testid', 'btn-underlay-rotate-cw');
+  rotateRow.append(btnUnderlayRotateCCW, btnUnderlayRotateCW);
+  underlayPopover.appendChild(rotateRow);
+
+  const lockLabel = document.createElement('label');
+  lockLabel.className = 'snap-radio';
+  const underlayLock = document.createElement('input');
+  underlayLock.type = 'checkbox';
+  underlayLock.dataset.testid = 'underlay-lock';
+  lockLabel.append(underlayLock, document.createTextNode(' Lock'));
+  underlayPopover.appendChild(lockLabel);
+
+  const hideLabel = document.createElement('label');
+  hideLabel.className = 'snap-radio';
+  const underlayHide = document.createElement('input');
+  underlayHide.type = 'checkbox';
+  underlayHide.dataset.testid = 'underlay-hide';
+  hideLabel.append(underlayHide, document.createTextNode(' Hide'));
+  underlayPopover.appendChild(hideLabel);
+
+  const btnUnderlayRemove = document.createElement('button');
+  btnUnderlayRemove.type = 'button';
+  btnUnderlayRemove.className = 'editor-btn editor-underlay-remove';
+  btnUnderlayRemove.textContent = 'Remove image';
+  btnUnderlayRemove.title = 'Remove this floor\u2019s underlay image.';
+  btnUnderlayRemove.setAttribute('data-testid', 'btn-underlay-remove');
+  underlayPopover.appendChild(btnUnderlayRemove);
+
+  toolbar.appendChild(underlayPopover);
+
   // Furniture palette (visible only while the Furnish tool is armed).
   const palette = document.createElement('div');
   palette.className = 'editor-palette';
@@ -421,7 +533,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   canvasWrap.append(canvas, badge, msg);
   // The hidden import input must live IN the document for .click() to
   // summon the file picker; `hidden` keeps it out of layout + a11y tree.
-  pane.append(toolbar, palette, canvasWrap, statusBar, importFileInput);
+  pane.append(toolbar, palette, canvasWrap, statusBar, importFileInput, underlayFileInput);
   parent.appendChild(pane);
 
   return {
@@ -429,6 +541,9 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnExport, btnShare, btnImport, btnExportJson, importFileInput, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
     btnDimensions, btnSnap, snapPopover,
+    btnUnderlay, underlayFileInput, underlayPopover, underlayOpacity,
+    underlayOpacityValue, btnUnderlayRotateCCW, btnUnderlayRotateCW,
+    underlayLock, underlayHide, btnUnderlayRemove,
     btnAddMeasure: btnMeasure, btnClearMeasure,
     btnUndo, btnRedo, btnDelete,
     btnCenter, btnZoomIn, btnZoomOut,
