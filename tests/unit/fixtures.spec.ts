@@ -4,12 +4,16 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FurnitureType } from '../../src/shared/schema';
 import { migrate, validateFloorplan } from '../../src/shared/schema';
+import { validateGeometry } from '../../src/geom';
 
 const demo = (): ReturnType<typeof JSON.parse> =>
   JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'));
 
 const townhouse = (): ReturnType<typeof JSON.parse> =>
   JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8'));
+
+const duplex = (): ReturnType<typeof JSON.parse> =>
+  JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-duplex.json'), 'utf8'));
 
 const ALL_FURNITURE_TYPES: FurnitureType[] = ['bed', 'sofa', 'table', 'chair', 'counter', 'bathtub', 'toilet'];
 
@@ -116,3 +120,76 @@ describe('demo/demo-townhouse.json — AC coverage (issue #76)', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 })
+
+describe('demo/demo-duplex.json — AC coverage (issue #118)', () => {
+  const fixture = duplex();
+
+  it('validates NATIVELY as schema v2 (no migration involved)', () => {
+    expect(validateFloorplan(fixture)).toMatchObject({ ok: true });
+  });
+
+  it('passes the DEEP geometry validation: stair gap match, containment, holes', () => {
+    // The strongest fixture guarantee: the compiler's own validator
+    // accepts the committed plan without any editor mediation.
+    expect(() => validateGeometry(fixture)).not.toThrow();
+  });
+
+  it('ground floor is the apartment, carried verbatim through v1→v2', () => {
+    // Interpretation B (ratified): demo-apartment.json stays v1 pristine;
+    // the duplex's ground storey is exactly what migrate-at-the-door
+    // makes of it — arrays carried by reference, nothing rewritten.
+    const converted = migrate(demo()).data!;
+    expect(fixture.floors[0].rooms).toEqual(converted.floors[0].rooms);
+    expect(fixture.floors[0].openings).toEqual(converted.floors[0].openings);
+    expect(fixture.floors[0].furniture).toEqual(converted.floors[0].furniture);
+  });
+
+  it('second storey sits at the addFloor pitch (wallHeight + 0.3)', () => {
+    // The editor round-trip contract: accepting the stair tool's
+    // "Add floor" offer mints this exact elevation, so the committed
+    // fixture mirrors what the UI produces.
+    expect(fixture.floors).toHaveLength(2);
+    expect(fixture.floors[0].elevation).toBe(0);
+    expect(fixture.floors[1].elevation).toBeCloseTo(fixture.wallHeight + 0.3, 9);
+  });
+
+  it('carries exactly ONE staircase, gap-matched to the upper storey', () => {
+    expect(fixture.stairs).toHaveLength(1);
+    const stair = fixture.stairs[0];
+    expect(stair.roomId).toBe('room-kitchen');
+    expect(
+      fixture.floors[0].rooms.some((r: { id: string }) => r.id === stair.roomId),
+    ).toBe(true);
+    expect(stair.stepCount).toBeGreaterThanOrEqual(3);
+    // rise == arrival − departure, exactly (the never-defaulted rule).
+    expect(stair.rise).toBeCloseTo(
+      fixture.floors[1].elevation - fixture.floors[0].elevation,
+      9,
+    );
+  });
+
+  it('the arrival slab carries a room over the landing hole', () => {
+    // The upper kitchen mirrors the ground kitchen footprint, so the
+    // stair's derived landing hole carves a real slab (compile-time
+    // floorHole catch) rather than a void.
+    const upperKitchen = fixture.floors[1].rooms.find(
+      (r: { id: string }) => r.id === 'room-loft-kitchen',
+    );
+    expect(upperKitchen).toBeDefined();
+    expect(upperKitchen.polygon).toEqual(
+      fixture.floors[0].rooms.find((r: { id: string }) => r.id === 'room-kitchen')
+        .polygon,
+    );
+  });
+
+  it('entity ids are unique across every collection INCLUDING stairs', () => {
+    const ids: string[] = [
+      ...fixture.floors.flatMap((fl: { id: string }) => [fl.id]),
+      ...fixture.floors.flatMap((fl: { rooms: { id: string }[] }) => fl.rooms.map((r) => r.id)),
+      ...fixture.floors.flatMap((fl: { openings: { id: string }[] }) => fl.openings.map((o) => o.id)),
+      ...fixture.floors.flatMap((fl: { furniture: { id: string }[] }) => fl.furniture.map((f) => f.id)),
+      ...fixture.stairs.map((s: { id: string }) => s.id),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
