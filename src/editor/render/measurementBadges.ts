@@ -196,7 +196,7 @@ export function wallLengthLabels(
 }
 
 /** Paint one rounded pill with centred text at (x, y). */
-function drawPill(
+export function drawPill(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
