@@ -147,6 +147,8 @@ test.describe.serial('editor core', () => {
     expect((await getPlan(page)).rooms).toHaveLength(1);
 
     // Autosave debounce (800 ms) then reload must restore.
+    // pkg 7.2 (issue #75): the slot carries RAW v2 data — rooms nest
+    // under floors[0] (shape-only adaptation of this poll).
     await expect
       .poll(async () => {
         const raw = await page.evaluate(() =>
@@ -154,7 +156,7 @@ test.describe.serial('editor core', () => {
         );
         if (raw === null) return 0;
         try {
-          return JSON.parse(raw).rooms?.length ?? 0;
+          return JSON.parse(raw).floors?.[0]?.rooms?.length ?? 0;
         } catch {
           return 0;
         }

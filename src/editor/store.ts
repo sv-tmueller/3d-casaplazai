@@ -82,7 +82,24 @@ export type Command =
   /** Resize a stamp's footprint. */
   | { type: 'resizeFurniture'; furnitureId: string; footprint: Pt }
   /** Delete a stamp. */
-  | { type: 'deleteFurniture'; furnitureId: string };
+  | { type: 'deleteFurniture'; furnitureId: string }
+  /* -------- pkg 7.2 extensions (issue #75): floor commands -------- */
+  /**
+   * Switch the edited floor. NOT a mutating command: activeFloorIdx
+   * lives outside `data`, so floor switches never enter undo history
+   * (add/delete/rename DO snapshot, like any other mutation).
+   */
+  | { type: 'setActiveFloor'; index: number }
+  /**
+   * Append a floor above the current top storey: elevation =
+   * max(elevation) + wallHeight + 0.3 (issue #69 §D — the stored number,
+   * not a derived level×constant). Activates the new floor.
+   */
+  | { type: 'addFloor'; name?: string }
+  /** Rename the ACTIVE floor (non-empty name required). */
+  | { type: 'renameFloor'; name: string }
+  /** Delete the ACTIVE floor; the sole floor is refused. */
+  | { type: 'deleteFloor' };
 
 export type DispatchResult =
   | { ok: true }
@@ -93,15 +110,68 @@ export type DispatchResult =
 export interface EditorState {
   data: FloorplanData;
   selectedId: string | null;
+  /**
+   * pkg 7.2 (issue #75): index into data.floors of the floor being
+   * edited. Lives OUTSIDE `data` on purpose — undo snapshots stringify
+   * `data` only, so floor SWITCHES never pollute history while
+   * add/delete/rename floor snapshot as ordinary mutating commands.
+   * Always read through activeFloor()/clampActiveFloorIdx().
+   */
+  activeFloorIdx: number;
 }
 
 /**
- * The ACTIVE floor of a plan. Until the floor selector arrives (pkg 7.2),
- * the editor edits the GROUND floor; reducers address it through this
- * accessor so 7.2 only swaps the indexing strategy.
+ * Central clamp of activeFloorIdx. History can legally shrink floors[]
+ * beneath the index (undo of deleteFloor, redo of addFloor), and an
+ * unclamped index would corrupt every subsequent reducer — so every
+ * entry point funnels through here.
+ */
+function clampActiveFloorIdx(st: EditorState): void {
+  if (!Number.isInteger(st.activeFloorIdx) || st.activeFloorIdx < 0) {
+    st.activeFloorIdx = 0;
+  }
+  if (st.activeFloorIdx >= st.data.floors.length) {
+    st.activeFloorIdx = st.data.floors.length - 1;
+  }
+  // Selection reconciliation (reviewer #75): a selected entity that does
+  // not live on the (new) active floor is a phantom — the UI would show
+  // "selected: 1" with an enabled Delete that error-flashes on use.
+  // Drop it, mirroring the dangling-selection drop undo already performs.
+  if (st.selectedId !== null) {
+    const fl = st.data.floors[st.activeFloorIdx];
+    const onFloor =
+      fl !== undefined &&
+      (fl.rooms.some((r) => r.id === st.selectedId) ||
+        fl.openings.some((o) => o.id === st.selectedId) ||
+        fl.furniture.some((f) => f.id === st.selectedId));
+    if (!onFloor) st.selectedId = null;
+  }
+}
+
+/**
+ * The ACTIVE floor of a plan (pkg 7.2): the storey addressed by
+ * activeFloorIdx, never floors[0]. Callers must have clamped the state
+ * first (dispatch/undo/redo/replaceAll do).
  */
 function activeFloor(st: EditorState): Floor {
-  return st.data.floors[0];
+  return st.data.floors[st.activeFloorIdx];
+}
+
+/**
+ * SINGLE-FLOOR VIEW of the plan: every entity of the plan replaced by
+ * the active floor's collections. Editor read paths (drawing,
+ * hit-testing, snapping, rendering) operate on this projection so a
+ * multi-floor plan behaves exactly like a single-floor plan of the
+ * active storey (pkg 7.2 retarget; export.ts keeps full-plan scope).
+ */
+export function activeFloorPlan(st: EditorState): FloorplanData {
+  const fl = activeFloor(st);
+  return {
+    ...st.data,
+    floors: [
+      { ...fl, rooms: fl.rooms.slice(), openings: fl.openings.slice(), furniture: fl.furniture.slice() },
+    ],
+  };
 }
 
 export function emptyPlan(): FloorplanData {
@@ -448,6 +518,57 @@ function reduceDeleteFurniture(st: EditorState, furnitureId: string): DispatchRe
   return { ok: true };
 }
 
+/* -------------------- pkg 7.2 floor reducers (issue #75) ------------------- */
+
+/**
+ * Extra clearance layered on top of the wall height when suggesting the
+ * next storey's elevation (issue #69 §D: "+3m" resolves to 2.7+0.3).
+ */
+const FLOOR_GAP_M = 0.3;
+
+function reduceSetActiveFloor(st: EditorState, index: number): DispatchResult {
+  if (!Number.isInteger(index) || index < 0 || index >= st.data.floors.length) {
+    return { ok: false, error: `floor index ${index} out of range` };
+  }
+  st.activeFloorIdx = index;
+  return { ok: true };
+}
+
+function reduceAddFloor(st: EditorState, cmd: { name?: string }): DispatchResult {
+  const top = st.data.floors.reduce((m, f) => Math.max(m, f.elevation), 0);
+  // Trim like renameFloor does, so " Loft " == "Loft".
+  const wanted = cmd.name?.trim();
+  const floor: Floor = {
+    id: makeId('floor'),
+    // Sequential display name ("Floor 2" for storey #2, etc.);
+    // explicit names win when non-empty.
+    name: wanted ? wanted : `Floor ${st.data.floors.length + 1}`,
+    elevation: top + st.data.wallHeight + FLOOR_GAP_M,
+    rooms: [],
+    openings: [],
+    furniture: [],
+  };
+  st.data.floors.push(floor);
+  st.activeFloorIdx = st.data.floors.length - 1;
+  return { ok: true };
+}
+
+function reduceRenameFloor(st: EditorState, cmd: { name: string }): DispatchResult {
+  const name = cmd.name.trim();
+  if (name === '') return { ok: false, error: 'floor name cannot be empty' };
+  activeFloor(st).name = name;
+  return { ok: true };
+}
+
+function reduceDeleteFloor(st: EditorState): DispatchResult {
+  if (st.data.floors.length <= 1) {
+    return { ok: false, error: 'cannot delete the only floor' };
+  }
+  st.data.floors.splice(st.activeFloorIdx, 1);
+  clampActiveFloorIdx(st);
+  return { ok: true };
+}
+
 /* ------------------------------ Store class ------------------------------- */
 
 export class EditorStore {
@@ -459,7 +580,7 @@ export class EditorStore {
   public dirty = false;
 
   constructor(initial: FloorplanData) {
-    this._state = { data: clone(initial), selectedId: null };
+    this._state = { data: clone(initial), selectedId: null, activeFloorIdx: 0 };
   }
 
   getState(): EditorState {
@@ -474,6 +595,9 @@ export class EditorStore {
    * Gesture mode: only room-transform payloads stream (moveRoom /
    * resizeRoom) — pkg 3's furniture drags intentionally DON'T stream;
    * they commit one atomic judged command per pointerup.
+   *
+   * pkg 7.2: setActiveFloor is selection-like (mutates state OUTSIDE
+   * `data`, never snapshots, never dirties the plan).
    */
   dispatch(cmd: Command): DispatchResult {
     if (cmd.type === 'setSelection') {
@@ -486,6 +610,12 @@ export class EditorStore {
       if (entSelRes.ok) this.notify();
       return entSelRes;
     }
+    if (cmd.type === 'setActiveFloor') {
+      const flRes = reduceSetActiveFloor(this._state, cmd.index);
+      if (flRes.ok) this.notify();
+      return flRes;
+    }
+    clampActiveFloorIdx(this._state);
 
     const snapshot =
       this._gestureBase !== null ? this._gestureBase : JSON.stringify(this._state.data);
@@ -534,7 +664,7 @@ export class EditorStore {
   private reduceAtomic(
     cmd: Exclude<
       Command,
-      { type: 'setSelection' } | { type: 'setEntitySelection' }
+      { type: 'setSelection' } | { type: 'setEntitySelection' } | { type: 'setActiveFloor' }
     >,
   ): DispatchResult {
     switch (cmd.type) {
@@ -570,6 +700,13 @@ export class EditorStore {
         return reduceResizeFurniture(this._state, cmd.furnitureId, cmd.footprint);
       case 'deleteFurniture':
         return reduceDeleteFurniture(this._state, cmd.furnitureId);
+      /* ---- pkg 7.2 additions (issue #75) ---- */
+      case 'addFloor':
+        return reduceAddFloor(this._state, cmd);
+      case 'renameFloor':
+        return reduceRenameFloor(this._state, cmd);
+      case 'deleteFloor':
+        return reduceDeleteFloor(this._state);
     }
   }
 
@@ -605,6 +742,9 @@ export class EditorStore {
     if (prev === undefined) return false;
     this._redoStack.push(JSON.stringify(this._state.data));
     this._state = { ...this._state, data: JSON.parse(prev) };
+    // pkg 7.2: undo of deleteFloor can shrink floors[] beneath the
+    // index (and undo of addFloor grows it back) — clamp centrally.
+    clampActiveFloorIdx(this._state);
     // Selection may reference a room undone away — drop it if dangling.
     if (
       this._state.selectedId !== null &&
@@ -625,6 +765,8 @@ export class EditorStore {
     if (nxt === undefined) return false;
     this._undoStack.push(JSON.stringify(this._state.data));
     this._state = { ...this._state, data: JSON.parse(nxt) };
+    // pkg 7.2: mirrored clamp (redo of deleteFloor shrinks floors[]).
+    clampActiveFloorIdx(this._state);
     this.dirty = true;
     this.notify();
     return true;
@@ -644,7 +786,7 @@ export class EditorStore {
 
   /** Swap in a wholly different plan (autosave hydration); resets history. */
   replaceAll(plan: FloorplanData): void {
-    this._state = { data: clone(plan), selectedId: null };
+    this._state = { data: clone(plan), selectedId: null, activeFloorIdx: 0 };
     this._undoStack = [];
     this._redoStack = [];
     this.dirty = false;

@@ -6,10 +6,10 @@
  * Keeps the `.pane[data-screen=editor]` mount contract asserted by
  * tests/stubs/mount.spec.ts.
  *
- * Wire-format note (pkg 7.1): the store is v2-native, but the PUBLIC
- * surfaces owned here — the __casaplaza bridge and the autosave slot —
- * keep speaking the frozen v1 shape (see editor/wire.ts for why and
- * where the conversion happens).
+ * Wire-format note (pkg 7.1, rescoped 7.2): the store is v2-native and
+ * the autosave SLOT carries raw v2 data (multi-floor round-trips, per
+ * issue #75's ratified decision (a)); only the __casaplaza bridge
+ * keeps speaking the frozen v1 shape (see editor/wire.ts).
  */
 import { SCHEMA_VERSION, type FloorplanData, type FloorplanDataV1 } from '../shared/schema';
 import './../style.css';
@@ -57,7 +57,8 @@ export function mountEditor(
       const normalized = normalizeIncoming(plan);
       store.replaceAll(normalized);
       autosave.stop();
-      autosave.persistSync(toLegacyWire(normalized));
+      // Raw v2 in the slot (decision (a)): upper floors survive reload.
+      autosave.persistSync(normalized);
     },
   };
 

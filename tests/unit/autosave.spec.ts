@@ -118,6 +118,36 @@ describe('AutosaveManager', () => {
     mgr.flush();
     expect(spy.mock.calls[0][1]).toContain('\n');
   });
+
+  /**
+   * pkg 7.2 (issue #75, ratified decision (a)): the SLOT carries RAW v2
+   * data — callers no longer flatten through toLegacyWire, so multi-floor
+   * plans round-trip. The KEY STRING stays (renaming orphans saves).
+   */
+  it('slot payload is raw v2 (nested floors) under the unchanged key', () => {
+    const multi = structuredClone(PLAN);
+    multi.floors.push({
+      id: 'floor-2',
+      name: 'Floor 2',
+      elevation: 3.0,
+      rooms: [{
+        id: 'room-2', name: 'Study',
+        polygon: [[0, 0], [2, 0], [2, 1], [0, 1]],
+        floorTexture: null,
+      }],
+      openings: [],
+      furniture: [],
+    });
+    mgr.scheduleSave(multi);
+    vi.advanceTimersByTime(850);
+    const raw = JSON.parse(storage.getItem(AUTOSAVE_KEY)!);
+    expect(raw.schemaVersion).toBe(2);
+    expect(Array.isArray(raw.floors)).toBe(true);
+    expect(raw.floors).toHaveLength(2);
+    expect(raw.floors![1].rooms[0].name).toBe('Study');
+    // Round-trip: the loader's migrate-at-the-door accepts it back.
+    expect(mgr.loadStoredPlan(validateOk)).toEqual(multi);
+  });
 });
 
 function validateOk(p: unknown): boolean {
