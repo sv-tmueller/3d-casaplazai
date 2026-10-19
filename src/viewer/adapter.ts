@@ -19,7 +19,7 @@ import {
   type MeshBuffer,
   windowPaneRects,
 } from '../geom';
-import type { Opening, Room } from '../shared/schema';
+import type { FloorplanData, Opening, Room } from '../shared/schema';
 import type {
   AdaptedScene,
   CollisionBox,
@@ -303,6 +303,7 @@ export function adaptScene(
   roomsById: ReadonlyMap<string, Room>,
   openings?: Opening[],
   wallThickness = 0.24,
+  plan?: FloorplanData,
 ): AdaptedScene {
   const wallBufs: MeshBuffer[] = [];
   const ceilBufs: MeshBuffer[] = [];
@@ -342,14 +343,56 @@ export function adaptScene(
   // Emitted AFTER the wall bucket; doors are skipped entirely by
   // windowPaneRects. Undefined openings ⇒ no new buckets (legacy
   // callers keep their exact shape).
+  //
+  // Storey lift (issue #76): when the REAL plan is supplied, every
+  // pane/frame/door-casing rect is lifted by its opening's floor
+  // elevation — the dressing builders speak floor-local z (sill/head
+  // heights), so without the lift an upper-storey window's glass would
+  // hang at ground level, visibly detached from its carved hole.
   const dressGlass: MeshBuffer[] = [];
   const dressFrames: MeshBuffer[] = [];
   if (openings && openings.length > 0) {
+    // Elevation lookup: roomId -> owning floor's elevation. Openings
+    // cite rooms by their plan-unique id, so one map serves both the
+    // window panes and the door casings.
+    const elevationByRoom = new Map<string, number>();
+    if (plan) {
+      for (const floor of plan.floors) {
+        for (const room of floor.rooms) {
+          elevationByRoom.set(room.id, floor.elevation);
+        }
+      }
+    }
+    const liftOf = (opening: Opening): number =>
+      (opening.roomId !== undefined
+        ? elevationByRoom.get(opening.roomId)
+        : undefined) ?? 0;
+    const liftRect = (
+      rect: {
+        corners: [[number, number], [number, number], [number, number], [number, number]];
+        zBottom: number;
+        zTop: number;
+      },
+      dz: number,
+    ): typeof rect => ({
+      corners: rect.corners,
+      zBottom: rect.zBottom + dz,
+      zTop: rect.zTop + dz,
+    });
+
     const panes = windowPaneRects(planFromRooms(roomsById, openings));
+    const paneDz = new Map(panes.map((p) => [p.openingId, 0]));
+    if (plan) {
+      for (const opening of openings) {
+        paneDz.set(opening.id, liftOf(opening));
+      }
+    }
     const thickness = wallThickness;
     for (const pane of panes) {
-      dressGlass.push(buildGlassQuad(pane));
-      dressFrames.push(...buildFrameSlabs(pane, thickness));
+      const dz = paneDz.get(pane.openingId) ?? 0;
+      const lifted = liftRect(pane, dz);
+      dressGlass.push(buildGlassQuad(lifted));
+      dressFrames.push(...buildFrameSlabs(lifted, thickness));
     }
     // ---- Door frames (issue #37) -------------------------------------
     // Doors reuse the EXISTING windowFrame slot (charcoal #3a3f44) — the
@@ -358,8 +401,27 @@ export function adaptScene(
     // centroid so a doorway carved from BOTH adjoining rooms (the demo's
     // living↔kitchen shared door) emits one set instead of two
     // coincident, z-fighting sets.
-    const doorSlabs = doorRects(roomsById, openings).flatMap((rect) =>
-      buildFrameSlabs(rect, thickness, DOOR_MEMBER_M),
+    // doorRects emits one rect per DOOR opening (in order, skipping
+    // windows), so the dz list must be built from the same filtered
+    // sequence — indexing raw openings here would misalign.
+    const doorOpens = openings.filter((o) => o.kind === 'door');
+    // Positional coupling guard (reviewer #76): doorRects may skip an
+    // opening (missing room, bad segmentIndex, zero-length segment) while
+    // doorOpens keeps it — a silent desync would shift every later door's
+    // lift by a storey. Validation makes skips impossible today; this
+    // hard-fails rather than corrupt if that ever changes.
+    const rects = doorRects(roomsById, openings);
+    if (rects.length !== doorOpens.length) {
+      throw new Error(
+        `adapter: doorRects/doorOpens desync (${rects.length} vs ${doorOpens.length}) — lift alignment invalid`,
+      );
+    }
+    const doorSlabs = rects.flatMap((rect, i) =>
+      buildFrameSlabs(
+        liftRect(rect, plan ? liftOf(doorOpens[i]!) : 0),
+        thickness,
+        DOOR_MEMBER_M,
+      ),
     );
     dressFrames.push(...dedupeWalls(doorSlabs));
   }
@@ -390,18 +452,35 @@ export function adaptScene(
     0,
   );
 
-  const collisions: CollisionBox[] = compiled.collisions.map((c) => ({
-    minX: c.minX,
-    minY: c.minY,
-    maxX: c.maxX,
-    maxY: c.maxY,
-  }));
+  // Collisions pass through WITH their z fences (issue #76): the walk
+  // rig filters them to the active storey, so a flat copy would strand
+  // the upstairs walker behind downstairs walls. Legacy callers without
+  // z data keep the exact old shape.
+  const collisions: CollisionBox[] = compiled.collisions.map((c) => {
+    const box: CollisionBox = {
+      minX: c.minX,
+      minY: c.minY,
+      maxX: c.maxX,
+      maxY: c.maxY,
+    };
+    if (c.minZ !== undefined && c.maxZ !== undefined) {
+      box.minZ = c.minZ;
+      box.maxZ = c.maxZ;
+    }
+    return box;
+  });
 
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const room of roomsById.values()) {
+  // Bounds prefer the plan's floor nesting (rooms may live above the
+  // ground storey; the map alone cannot tell which storey a polygon
+  // came from). Legacy callers keep the roomsById sweep.
+  const boundRooms: readonly Room[] = plan
+    ? plan.floors.flatMap((f) => f.rooms)
+    : [...roomsById.values()];
+  for (const room of boundRooms) {
     for (const pt of room.polygon) {
       minX = Math.min(minX, pt[0]);
       minY = Math.min(minY, pt[1]);
@@ -416,11 +495,19 @@ export function adaptScene(
     maxY = 0;
   }
 
+  // Active storey = LOWEST floor (elevations strictly increase, so
+  // floors[0] is it). Floor-selection UI is deliberately absent here;
+  // 7.4 swaps this resolver for the user-chosen floor.
+  const activeFloorElevation = plan
+    ? plan.floors[0]?.elevation ?? 0
+    : 0;
+
   return {
     buckets,
     collisions,
     triangleCount,
     bounds: { minX, minY, maxX, maxY },
+    activeFloorElevation,
   };
 }
 

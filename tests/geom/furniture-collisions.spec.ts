@@ -103,11 +103,15 @@ describe('furnitureCollisionBoxes', () => {
     const fb = furnitureCollisionBoxes(plan);
     expect(fb).toHaveLength(1);
     const last = scene.collisions.at(-1);
+    // Sofa band [0, 0.8] rides along since issue #76 gave furniture
+    // boxes their z range.
     expect(last).toEqual(expandPlayerRadius({
       minX: 3 - 1,
       minY: 1 - 0.4,
       maxX: 3 + 1,
       maxY: 1 + 0.4,
+      minZ: 0,
+      maxZ: 0.8,
     }));
     // The tail of the combined stream equals the furniture boxes, values-wise.
     expect(scene.collisions.slice(-fb.length)).toEqual(fb);

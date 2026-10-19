@@ -57,12 +57,19 @@ export interface SpawnPose {
 /**
  * Player collision volumes handed over by the adapter. Already
  * player-radius expanded by pkg-4; expressed in floor-plane XY.
+ *
+ * OPTIONAL z bounds (issue #76): present when the box fences a storey
+ * above ground; the adapter filters boxes to the walker's elevation
+ * band, so upstairs walls no longer fence the ground-floor walker.
  */
 export interface CollisionBox {
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
+  /** World-z fences, meters (absent = ground storey). */
+  minZ?: number;
+  maxZ?: number;
 }
 
 /** One drawable bucket of similarly-shaded geometry. */
@@ -99,6 +106,12 @@ export interface AdaptedScene {
   triangleCount: number;
   /** Plan-space xy bounds (light-frustum fitting, orbit framing). */
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  /**
+   * Walking-surface elevation of the LOWEST floor, meters (issue #76).
+   * The walk rig seats the camera at this + EYE_HEIGHT; floor selection
+   * UI is a non-goal here (7.4 swaps the resolver for a chosen floor).
+   */
+  activeFloorElevation: number;
 }
 
 /** Rolling-frame statistics shown by the ?perf=1 overlay. */

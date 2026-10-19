@@ -83,6 +83,24 @@ const Q_PITCH_SCRATCH = new Quaternion();
 const AXIS_Z = new Vector3(0, 0, 1);
 const LOCAL_RIGHT = new Vector3(1, 0, 0);
 
+/**
+ * Boxes fencing the ACTIVE storey (issue #76). A box qualifies when its
+ * z band overlaps the walker's body band [floorZ, floorZ + EYE_HEIGHT]:
+ * a ground-storey walker standing beneath an upstairs wall shares no z
+ * range with it and walks freely. Boxes lacking z fences are
+ * storey-less (legacy data) and always qualify.
+ */
+export function activeCollisions(
+  adapted: Pick<AdaptedScene, 'collisions' | 'activeFloorElevation'>,
+): AdaptedScene['collisions'] {
+  const lo = adapted.activeFloorElevation;
+  const hi = lo + EYE_HEIGHT;
+  return adapted.collisions.filter((box) => {
+    if (box.minZ === undefined || box.maxZ === undefined) return true;
+    return box.maxZ > lo && box.minZ < hi;
+  });
+}
+
 /** Aspect ratio of a canvas, safe against zero-sized elements. */
 function aspectOf(canvas: HTMLCanvasElement): number {
   const w = canvas.clientWidth || canvas.offsetWidth;
@@ -141,6 +159,14 @@ export class WalkRig implements CameraRig {
   private posX: number;
   private posY: number;
 
+  /**
+   * Walking-surface elevation of the active storey, meters (issue #76).
+   * The camera rides at activeFloorElevation + EYE_HEIGHT; collisions
+   * are pre-filtered to this storey's z band so upstairs walls never
+   * fence a downstairs walker (and vice versa).
+   */
+  private readonly floorZ: number;
+
   /** Smoothed plan-space velocity (m/s). */
   private velX = 0;
   private velY = 0;
@@ -161,7 +187,8 @@ export class WalkRig implements CameraRig {
 
   /**
    * @param canvas pointer-lock surface + listener host
-   * @param adapted adapted scene (collisions drive the resolver)
+   * @param adapted adapted scene (collisions filtered to the active
+   *   storey's z band — see activeCollisions)
    * @param spawnX plan-space spawn/disc x
    * @param spawnY plan-space spawn/disc y
    * @param yawRad initial facing yaw around plan +Z (radians)
@@ -175,7 +202,8 @@ export class WalkRig implements CameraRig {
   ) {
     this.posX = spawnX;
     this.posY = spawnY;
-    this.collisions = adapted.collisions;
+    this.floorZ = adapted.activeFloorElevation;
+    this.collisions = activeCollisions(adapted);
 
     this.camera = new PerspectiveCamera(60, aspectOf(canvas), 0.05, 400);
     this.applyDiscToCamera();
@@ -276,13 +304,18 @@ export class WalkRig implements CameraRig {
   }
 
   /** Seat the world camera from the plan-space disc pose.
-   * WORLD IS Z-UP (floors at z=0, ceilings at z=wallHeight): the eye
-   * height belongs on the THIRD coordinate (z). Position is reset
-   * every frame; the LOOK orientation is owned by the quaternion
+   * WORLD IS Z-UP (floors at z=floorZ, ceilings at floorZ+wallHeight):
+   * the eye rides at activeFloorElevation + EYE_HEIGHT (issue #76 —
+   * formerly hardcoded 0 + EYE_HEIGHT). Position is reset every frame;
+   * the LOOK orientation is owned by the quaternion
    * (applyLook/seedYaw), never clobbered here.
    */
   private applyDiscToCamera(): void {
-    this.camera.position.set(this.posX, this.posY, EYE_HEIGHT);
+    this.camera.position.set(
+      this.posX,
+      this.posY,
+      this.floorZ + EYE_HEIGHT,
+    );
   }
 
   /** Z-up mouse-look: yaw about world +Z, pitch about local right. */

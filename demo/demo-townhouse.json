@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 2,
+  "units": "meters",
+  "wallHeight": 2.7,
+  "wallThickness": 0.24,
+  "floors": [
+    {
+      "id": "floor-ground",
+      "name": "Ground",
+      "elevation": 0,
+      "rooms": [
+        {
+          "id": "room-living",
+          "name": "Living Room",
+          "polygon": [
+            [0.0, 0.0],
+            [5.2, 0.0],
+            [5.2, 3.8],
+            [0.0, 3.8]
+          ],
+          "floorTexture": "wood"
+        },
+        {
+          "id": "room-kitchen",
+          "name": "Kitchen",
+          "polygon": [
+            [5.2, 0.0],
+            [8.4, 0.0],
+            [8.4, 3.8],
+            [5.2, 3.8]
+          ],
+          "floorTexture": "tile"
+        },
+        {
+          "id": "room-entry",
+          "name": "Entry Hall",
+          "polygon": [
+            [8.4, 0.0],
+            [9.6, 0.0],
+            [9.6, 5.6],
+            [8.4, 5.6]
+          ],
+          "floorTexture": "concrete"
+        }
+      ],
+      "openings": [
+        {
+          "id": "op-front-door",
+          "roomId": "room-living",
+          "kind": "door",
+          "segmentIndex": 0,
+          "tCenter": 0.3,
+          "width": 0.9,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-living-window",
+          "roomId": "room-living",
+          "kind": "window",
+          "segmentIndex": 2,
+          "tCenter": 0.5,
+          "width": 1.4,
+          "sillHeight": 0.9,
+          "headHeight": 2.2
+        },
+        {
+          "id": "op-living-kitchen-door",
+          "roomId": "room-living",
+          "kind": "door",
+          "segmentIndex": 1,
+          "tCenter": 0.5,
+          "width": 0.85,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-living-kitchen-door-twin",
+          "roomId": "room-kitchen",
+          "kind": "door",
+          "segmentIndex": 3,
+          "tCenter": 0.5,
+          "width": 0.85,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-kitchen-window",
+          "roomId": "room-kitchen",
+          "kind": "window",
+          "segmentIndex": 1,
+          "tCenter": 0.5,
+          "width": 1.2,
+          "sillHeight": 0.9,
+          "headHeight": 2.2
+        },
+        {
+          "id": "op-entry-door",
+          "roomId": "room-entry",
+          "kind": "door",
+          "segmentIndex": 0,
+          "tCenter": 0.5,
+          "width": 0.9,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        }
+      ],
+      "furniture": [
+        {
+          "id": "furn-sofa",
+          "type": "sofa",
+          "roomId": "room-living",
+          "position": [1.4, 0.9],
+          "rotationDeg": 0,
+          "footprint": [2.0, 0.8]
+        },
+        {
+          "id": "furn-table",
+          "type": "table",
+          "roomId": "room-living",
+          "position": [3.6, 2.6],
+          "rotationDeg": 0,
+          "footprint": [1.2, 0.8]
+        },
+        {
+          "id": "furn-counter",
+          "type": "counter",
+          "roomId": "room-kitchen",
+          "position": [6.8, 0.6],
+          "rotationDeg": 0,
+          "footprint": [2.4, 0.6]
+        }
+      ]
+    },
+    {
+      "id": "floor-upper",
+      "name": "Upper",
+      "elevation": 2.7,
+      "rooms": [
+        {
+          "id": "room-master-bedroom",
+          "name": "Master Bedroom",
+          "polygon": [
+            [0.0, 0.0],
+            [5.2, 0.0],
+            [5.2, 3.8],
+            [0.0, 3.8]
+          ],
+          "floorTexture": "carpet"
+        },
+        {
+          "id": "room-office",
+          "name": "Office",
+          "polygon": [
+            [5.2, 0.0],
+            [8.0, 0.0],
+            [8.0, 3.8],
+            [5.2, 3.8]
+          ],
+          "floorTexture": "wood"
+        },
+        {
+          "id": "room-bath",
+          "name": "Bathroom",
+          "polygon": [
+            [8.0, 0.0],
+            [9.6, 0.0],
+            [9.6, 3.8],
+            [8.0, 3.8]
+          ],
+          "floorTexture": "tile"
+        },
+        {
+          "id": "room-landing",
+          "name": "Landing",
+          "polygon": [
+            [8.0, 3.8],
+            [9.6, 3.8],
+            [9.6, 5.6],
+            [8.0, 5.6]
+          ],
+          "floorTexture": "wood"
+        }
+      ],
+      "openings": [
+        {
+          "id": "op-bedroom-window",
+          "roomId": "room-master-bedroom",
+          "kind": "window",
+          "segmentIndex": 2,
+          "tCenter": 0.5,
+          "width": 1.4,
+          "sillHeight": 0.9,
+          "headHeight": 2.2
+        },
+        {
+          "id": "op-bedroom-office-door",
+          "roomId": "room-master-bedroom",
+          "kind": "door",
+          "segmentIndex": 1,
+          "tCenter": 0.5,
+          "width": 0.85,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-office-bedroom-door-twin",
+          "roomId": "room-office",
+          "kind": "door",
+          "segmentIndex": 3,
+          "tCenter": 0.5,
+          "width": 0.85,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-office-window",
+          "roomId": "room-office",
+          "kind": "window",
+          "segmentIndex": 2,
+          "tCenter": 0.5,
+          "width": 1.2,
+          "sillHeight": 0.9,
+          "headHeight": 2.2
+        },
+        {
+          "id": "op-office-bath-door",
+          "roomId": "room-office",
+          "kind": "door",
+          "segmentIndex": 1,
+          "tCenter": 0.5,
+          "width": 0.75,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        },
+        {
+          "id": "op-bath-door-twin",
+          "roomId": "room-bath",
+          "kind": "door",
+          "segmentIndex": 3,
+          "tCenter": 0.5,
+          "width": 0.75,
+          "sillHeight": 0.0,
+          "headHeight": 2.1
+        }
+      ],
+      "furniture": [
+        {
+          "id": "furn-bed",
+          "type": "bed",
+          "roomId": "room-master-bedroom",
+          "position": [1.6, 1.2],
+          "rotationDeg": 0,
+          "footprint": [1.6, 2.0]
+        },
+        {
+          "id": "furn-desk-chair",
+          "type": "chair",
+          "roomId": "room-office",
+          "position": [6.6, 2.8],
+          "rotationDeg": 0,
+          "footprint": [0.5, 0.5]
+        },
+        {
+          "id": "furn-bathtub",
+          "type": "bathtub",
+          "roomId": "room-bath",
+          "position": [8.8, 1.9],
+          "rotationDeg": 90,
+          "footprint": [1.7, 0.75]
+        }
+      ]
+    }
+  ],
+  "stairs": [
+    {
+      "id": "stair-main",
+      "roomId": "room-entry",
+      "position": [9.0, 4.2],
+      "rotationDeg": 90,
+      "width": 0.9,
+      "run": 2.6,
+      "rise": 2.7,
+      "stepCount": 14
+    }
+  ]
+}

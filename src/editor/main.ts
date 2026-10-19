@@ -11,7 +11,7 @@
  * keep speaking the frozen v1 shape (see editor/wire.ts for why and
  * where the conversion happens).
  */
-import { SCHEMA_VERSION, type FloorplanDataV1 } from '../shared/schema';
+import { SCHEMA_VERSION, type FloorplanData, type FloorplanDataV1 } from '../shared/schema';
 import './../style.css';
 import { AutosaveManager } from './autosave';
 import { hydrateFromAutosave, initEditorInteraction } from './glue';
@@ -27,6 +27,14 @@ declare global {
 
 export interface CasaplazaBridge {
   getData(): FloorplanDataV1;
+  /**
+   * CURRENT-schema view of the store (issue #76), ADDITIVE to the
+   * frozen v1 getData surface: the viewer's multi-floor pipeline needs
+   * every storey, which the flattened v1 wire shape cannot carry.
+   * Existing v1 consumers (e2e seeds, embedders, autosave) are
+   * unaffected — getData still speaks v1 exactly as before.
+   */
+  getCurrent(): FloorplanData;
   loadPlan(plan: unknown): void;
 }
 
@@ -44,6 +52,7 @@ export function mountEditor(
 
   window.__casaplaza = {
     getData: () => toLegacyWire(store.getState().data),
+    getCurrent: () => store.getState().data,
     loadPlan: (plan: unknown) => {
       const normalized = normalizeIncoming(plan);
       store.replaceAll(normalized);

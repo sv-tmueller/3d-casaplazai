@@ -11,7 +11,7 @@ import type {
   FurnitureItem,
   Room,
 } from '../shared/schema';
-import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
+import { flatOpenings, flatRooms } from '../shared/schema';
 import type {
   CompiledScene,
   FurnitureVolume,
@@ -25,9 +25,15 @@ import {
   wallHeightForSegment,
   buildSlab,
 } from './walls';
-import { buildCollisions, furnitureCollisionBoxes } from './collision';
+import {
+  expandPlayerRadius,
+  furnitureCollisionBox,
+  furnitureZRange,
+  roomCollisionPieces,
+} from './collision';
 import { validateGeometry } from './validate';
 import { makeSegments } from './mathutil';
+import type { Aabb } from './types';
 
 /** Rotate a vector by deg degrees CCW. */
 function rot(deg: number, x: number, y: number): [number, number] {
@@ -78,10 +84,45 @@ export function sceneBounds(
   return { minX, minY, maxX, maxY };
 }
 
+/**
+ * Bake a floor's elevation (dz) into one mesh buffer by shifting every
+ * z coordinate. The pivot of issue #76's transparency strategy: when
+ * dz is 0 the buffer is RETURNED AS-IS — no allocation, no arithmetic —
+ * so single-storey plans (every existing fixture) compile
+ * BYTE-IDENTICALLY to the pre-floors pipeline. Only elevated floors pay
+ * for the lift.
+ */
+function offsetBufferZ(buffer: MeshBuffer, dz: number): MeshBuffer {
+  if (dz === 0) return buffer;
+  const shifted = new Float32Array(buffer.positions);
+  for (let i = 2; i < shifted.length; i += 3) {
+    shifted[i] += dz;
+  }
+  return { positions: shifted, indices: buffer.indices };
+}
+
+/** Apply the floor lift to one room's whole surface set (meshes only). */
+function offsetRoomMeshesZ(
+  room: RoomMeshes,
+  dz: number,
+): RoomMeshes {
+  if (dz === 0) return room;
+  return {
+    roomId: room.roomId,
+    elevation: room.elevation,
+    floor: offsetBufferZ(room.floor, dz),
+    ceiling: offsetBufferZ(room.ceiling, dz),
+    walls: room.walls.map((w) => offsetBufferZ(w, dz)),
+  };
+}
+
 /** Assemble one room's wall slab meshes around its openings. */
 export function buildRoomWalls(room: Room, plan: FloorplanData): MeshBuffer[] {
   const meshes: MeshBuffer[] = [];
   const segs = makeSegments(room.polygon);
+  // Openings are addressed by roomId, which is UNIQUE across the whole
+  // plan (v2 id namespace), so the flat projection finds them wherever
+  // the owning floor parked them.
   const openingsHere = flatOpenings(plan).filter((o) => o.roomId === room.id);
   const bySeg = new Map<number, typeof openingsHere>();
   for (const o of openingsHere) {
@@ -157,20 +198,9 @@ function furnitureVolumes(items: FurnitureItem[]): FurnitureVolume[] {
     const corners = rotated.map(
       ([rx, ry]) => [item.position[0] + rx, item.position[1] + ry] as [number, number],
     );
-    const zs =
-      item.type === 'bed'
-        ? [0, 0.55]
-        : item.type === 'sofa'
-          ? [0, 0.8]
-          : item.type === 'table'
-            ? [0, 0.75]
-            : item.type === 'chair'
-              ? [0, 0.45]
-              : item.type === 'counter'
-                ? [0, 0.9]
-                : item.type === 'bathtub'
-                  ? [0, 0.6]
-                  : [0, 0.75]; // toilet
+    // Shared with the collision boxes (collision.ts furnitureZRange):
+    // render and fencing must agree on every type's band (issue #76).
+    const [zMin, zMax] = furnitureZRange(item.type);
     return {
       itemId: item.id,
       typeId: item.type,
@@ -180,8 +210,8 @@ function furnitureVolumes(items: FurnitureItem[]): FurnitureVolume[] {
         corners[2] as [number, number],
         corners[3] as [number, number],
       ],
-      zMin: zs[0] as number,
-      zMax: zs[1] as number,
+      zMin,
+      zMax,
     };
   });
 }
@@ -190,17 +220,90 @@ function furnitureVolumes(items: FurnitureItem[]): FurnitureVolume[] {
 export function compilePlan(plan: FloorplanData): CompiledScene {
   validateGeometry(plan);
 
-  const rooms: RoomMeshes[] = flatRooms(plan).map((room) => ({
-    roomId: room.id,
-    floor: buildFloor(room),
-    ceiling: buildCeiling(room, plan.wallHeight),
-    walls: buildRoomWalls(room, plan),
-  }));
+  // PER-FLOOR COMPILE (issue #76): each floor's rooms are built in the
+  // floor's own plan-local frame (surfaces/walls/windowpanes internals
+  // stay elevation-blind) and then POST-LIFTED by dz = floor.elevation.
+  // Elevations are strictly increasing (validator), so the ground floor
+  // is always the lowest; a dz of 0 skips lifting entirely, which keeps
+  // single-storey plans byte-identical to the pre-floors pipeline.
+  const rooms: RoomMeshes[] = [];
+  for (const floor of plan.floors) {
+    for (const room of floor.rooms) {
+      rooms.push(
+        offsetRoomMeshesZ(
+          {
+            roomId: room.id,
+            elevation: floor.elevation,
+            floor: buildFloor(room),
+            ceiling: buildCeiling(room, plan.wallHeight),
+            walls: buildRoomWalls(room, plan),
+          },
+          floor.elevation,
+        ),
+      );
+    }
+  }
+
+  // Collisions carry the SAME per-floor lift (xz planes are baked into
+  // wall slabs; forgetting this would confine walkers with invisible
+  // boxes floating a storey up/down — tested in the townhouse specs).
+  const collisions: Aabb[] = [];
+  for (const floor of plan.floors) {
+    for (const room of floor.rooms) {
+      const pieces = roomCollisionPieces(room, plan);
+      if (floor.elevation === 0) {
+        // NB: wrap expandPlayerRadius in a lambda — map's (elem, index)
+        // arity would feed the INDEX in as the radius.
+        collisions.push(...pieces.map((piece) => expandPlayerRadius(piece)));
+      } else {
+        collisions.push(
+          ...pieces.map((piece) =>
+            expandPlayerRadius({
+              minX: piece.minX,
+              minY: piece.minY,
+              minZ: (piece.minZ ?? 0) + floor.elevation,
+              maxX: piece.maxX,
+              maxY: piece.maxY,
+              maxZ: (piece.maxZ ?? plan.wallHeight) + floor.elevation,
+            }),
+          ),
+        );
+      }
+    }
+  }
+  // Furniture collision boxes ride their floor identically.
+  for (const floor of plan.floors) {
+    for (const item of floor.furniture) {
+      const box = furnitureCollisionBox(item);
+      if (floor.elevation === 0) {
+        collisions.push(box);
+      } else {
+        collisions.push({
+          minX: box.minX,
+          minY: box.minY,
+          minZ: (box.minZ ?? 0) + floor.elevation,
+          maxX: box.maxX,
+          maxY: box.maxY,
+          maxZ: (box.maxZ ?? 0) + floor.elevation,
+        });
+      }
+    }
+  }
 
   return {
     rooms,
     // Walls first (unchanged contract), then furniture boxes (issue #18).
-    collisions: [...buildCollisions(plan), ...furnitureCollisionBoxes(plan)],
-    furniture: furnitureVolumes(flatFurniture(plan)),
+    collisions,
+    // Render volumes ride their floor's elevation too (issue #76):
+    // zMin/zMax are WORLD z, lifted identically to the collision boxes
+    // so an upstairs bed renders on the upstairs floor, not sunken into
+    // the ground storey.
+    furniture: plan.floors.flatMap((floor) =>
+      furnitureVolumes(floor.furniture).map((vol) => ({
+        ...vol,
+        zMin: vol.zMin + floor.elevation,
+        zMax: vol.zMax + floor.elevation,
+      })),
+    ),
   };
 }
