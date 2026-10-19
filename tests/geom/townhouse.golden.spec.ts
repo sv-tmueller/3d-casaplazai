@@ -1,26 +1,25 @@
 /**
- * Townhouse goldens (issue #76; RE-RECORDED for pkg 7.4 / issue #80):
- * vertex/triangle/bound counts of compiling the committed TWO-STOREY
- * fixture WITH its staircase consumed (step solids, landing holes,
- * flank fencing). Constants were MEASURED from a real run of
- * compilePlan on demo/demo-townhouse.json (never hand-computed),
- * rounded to 1e-4 to kill float flakiness.
+ * Townhouse goldens (issue #76; re-recorded for pkg 7.4 / issue #80 and
+ * AGAIN for pkg 8.1 / issue #83): vertex/triangle/bound counts of
+ * compiling the committed TWO-STOREY fixture WITH its staircase
+ * consumed (step solids, landing holes, flank fencing) and its
+ * top-floor MASTER BEDROOM GABLE (two 30° opposing leans, derived
+ * ridge). Constants were MEASURED from a real run of compilePlan on
+ * demo/demo-townhouse.json (never hand-computed), rounded to 1e-4 to
+ * kill float flakiness.
  *
  * Freeze policy: these constants may only change by a DELIBERATE
  * follow-up that alters townhouse geometry; incidental refactors of
  * the compile pipeline must keep them byte-stable (the apartment
  * goldens in golden.spec.ts police the single-storey path; these
- * police the per-floor lift + the stair package).
+ * police the per-floor lift + the stair + the roof packages).
  *
- * 7.4 re-record deltas vs 7.3 (deliberate, issue #80):
- *   - fixture: stair moved to position [9.0, 3.0] (was [9.0, 4.2] —
- *     the old top edge landed inside the landing's north-wall band,
- *     leaving no standable crest) and a kitchen↔entry interior door
- *     added (the entry hall was sealed from the ground floor, making
- *     the stair unreachable indoors).
- *   - compile: +1 stair solid (14 step boxes = 168 tris), landing +
- *     bath floors + entry ceiling punched with the landing hole,
- *     +2 flank collision boxes, +2 door-partition wall slabs.
+ * 8.1 re-record deltas vs 7.4 (deliberate, issue #83):
+ *   - fixture: master bedroom gained roofs [{si 0, 30°}, {si 2, 30°}]
+ *     — a symmetric gable over the 5.2 × 3.8 bedroom.
+ *   - compile: +1 roof solid (2 rising quads + 2 end caps = 14 verts /
+ *     6 tris), ridge at z = 5.4 + tan30° · 1.9 ≈ 6.4970. Collisions
+ *     UNCHANGED (roofs add none — walk mode provably untouched).
  *
  * Regeneration recipe: instrument a scratch vitest spec that logs
  * countVertices/countTriangles/sceneBounds of compilePlan(the parsed
@@ -48,12 +47,13 @@ const townhouseRaw: FloorplanData = parseValidatedPlan(
   ).data!,
 );
 
-// MEASURED (real run, 2026-10-19, post-7.4): 3 ground rooms (living/
+// MEASURED (real run, 2026-10-19, post-8.1): 3 ground rooms (living/
 // kitchen/entry) + 4 upper rooms (bedroom/office/bath/landing), stair
-// solids (168 tris) + landing holes + stairwell partition door.
+// solids (168 tris) + landing holes + stairwell partition door + the
+// master-bedroom gable (14 verts / 6 tris incl. end caps).
 const GOLDEN = {
-  vertices: 692,
-  triangles: 954,
+  vertices: 706,
+  triangles: 960,
   collisions: 56,
   bounds: { minX: 0, minY: 0, maxX: 9.6, maxY: 5.6 },
 };
@@ -205,6 +205,46 @@ describe('golden — demo townhouse compile metrics (issue #76/#80)', () => {
     // their minZ is 0 AND they are player-expanded in xy — disambiguate
     // by counting: walls+furniture gave 52 pre-7.4, now 54).
     expect(flanks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // ---- pkg 8.1 (issue #83): the master-bedroom gable is CONSUMED -----
+
+  it('emits exactly one roof solid: the master-bedroom gable', () => {
+    const scene = compilePlan(townhouseRaw);
+    expect(scene.roofs).toHaveLength(1);
+    expect(scene.roofs![0]!.roomId).toBe('room-master-bedroom');
+    // 2 rising quads (4 verts each) + 2 triangular end caps (3 each).
+    expect(scene.roofs![0]!.mesh.positions.length / 3).toBe(14);
+    expect(scene.roofs![0]!.mesh.indices.length / 3).toBe(6);
+  });
+
+  it("gable AABB spans the bedroom at eave 5.4, ridge ≈ 6.497 (incl. end caps)", () => {
+    const scene = compilePlan(townhouseRaw);
+    const m = scene.roofs![0]!.mesh;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      minX = Math.min(minX, m.positions[i]!);
+      minY = Math.min(minY, m.positions[i + 1]!);
+      minZ = Math.min(minZ, m.positions[i + 2]!);
+      maxX = Math.max(maxX, m.positions[i]!);
+      maxY = Math.max(maxY, m.positions[i + 1]!);
+      maxZ = Math.max(maxZ, m.positions[i + 2]!);
+    }
+    // Eaves at the bedroom's polygon edges; ridge = 5.4 + tan30°·1.9.
+    expect(Number(minX.toFixed(4))).toBe(0);
+    expect(Number(minY.toFixed(4))).toBe(0);
+    expect(Number(maxX.toFixed(4))).toBe(5.2);
+    expect(Number(maxY.toFixed(4))).toBe(3.8);
+    expect(Number(minZ.toFixed(4))).toBe(5.4);
+    expect(Number(maxZ.toFixed(4))).toBeCloseTo(5.4 + Math.tan(Math.PI / 6) * 1.9, 4);
+  });
+
+  it('adds ZERO collision boxes — walk mode provably untouched', () => {
+    const scene = compilePlan(townhouseRaw);
+    // GOLDEN.collisions is the PRE-roof 7.4 count; the roof package
+    // must not move it (proximity guarantee: planes clear play space).
+    expect(scene.collisions).toHaveLength(GOLDEN.collisions);
   });
 });
 

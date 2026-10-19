@@ -353,6 +353,14 @@ export function adaptScene(
   pushBucket('ceiling', ceilBufs);
   pushBucket('wall', resolveCoplanarWallOverlaps(dedupeWalls(wallBufs)));
 
+  // ---- Roof planes (pkg 8.1, issue #83) -----------------------------
+  // Dedicated 'roof' slot (terracotta tile — neither wall nor ceiling
+  // semantically, and piggy-backing on 'wall' would couple interior
+  // repaints to roofs). Absent field (hand-built scenes in pre-8.1
+  // tests) normalizes to []; lean-free plans emit NOTHING — bucket
+  // shape unchanged, e2e count assertions stay honest.
+  pushBucket('roof', (compiled.roofs ?? []).map((r) => r.mesh));
+
   // ---- Window dressing (issue #19): glass panes + frames --------------
   // Emitted AFTER the wall bucket; doors are skipped entirely by
   // windowPaneRects. Undefined openings ⇒ no new buckets (legacy

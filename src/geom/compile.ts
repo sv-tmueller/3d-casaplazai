@@ -34,6 +34,7 @@ import {
 } from './collision';
 import { validateGeometry } from './validate';
 import { makeSegments } from './mathutil';
+import { mergeMeshBuffers } from './meshio';
 import type { Aabb, QuadCorners } from './types';
 import { buildFloorWithHoles } from './floorHole';
 import {
@@ -43,6 +44,8 @@ import {
   stairHoleRect,
   stairWorldRect,
 } from './stairs';
+import { buildRoomRoofs, hasAnyRoof } from './roofs';
+import type { RoofSolid } from './types';
 
 /** Rotate a vector by deg degrees CCW. */
 function rot(deg: number, x: number, y: number): [number, number] {
@@ -65,6 +68,10 @@ export function countTriangles(scene: CompiledScene): number {
   for (const s of scene.stairs ?? []) {
     n += s.mesh.indices.length / 3;
   }
+  // Roof planes (pkg 8.1) likewise: lean-free plans contribute nothing.
+  for (const r of scene.roofs ?? []) {
+    n += r.mesh.indices.length / 3;
+  }
   return n;
 }
 
@@ -78,6 +85,9 @@ export function countVertices(scene: CompiledScene): number {
   }
   for (const s of scene.stairs ?? []) {
     n += s.mesh.positions.length / 3;
+  }
+  for (const r of scene.roofs ?? []) {
+    n += r.mesh.positions.length / 3;
   }
   return n;
 }
@@ -376,12 +386,36 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
         zLower: departureZ,
         rise: stair.rise,
         run: stair.run,
-        mesh: mergeBuffers(buildStairSteps(stair, departureZ)),
+        mesh: mergeMeshBuffers(buildStairSteps(stair, departureZ)),
       });
       // Flank fencing: thin boxes along the run's sides, z-band
       // [departureZ, departureZ+rise] via the minZ/maxZ seam. RAW
       // (unexpanded) — see stairFlankBoxes for the radius rationale.
       collisions.push(...stairFlankBoxes(stair, departureZ));
+    }
+  }
+
+  // ---- Roof solids (pkg 8.1, issue #83) -------------------------------
+  // STRICTLY GUARDED by hasAnyRoof (mirrors the stairs length>0 guard
+  // at the top of this function): lean-free plans (the apartment demo
+  // and every pre-8.1 fixture) compile BYTE-IDENTICALLY to the
+  // pre-roof pipeline — the apartment goldens police this.
+  // Roofs attach to the TOP floor's rooms only (validator-enforced);
+  // buildRoomRoofs receives the floor's elevation so every emitted z
+  // is already world z.
+  const roofSolids: RoofSolid[] = [];
+  if (hasAnyRoof(plan)) {
+    const topFloor = plan.floors[plan.floors.length - 1]!;
+    for (const room of topFloor.rooms) {
+      const buffers = buildRoomRoofs(room, plan.wallHeight, topFloor.elevation);
+      if (buffers.length > 0) {
+        roofSolids.push({
+          roomId: room.id,
+          // Shared exported merge (meshio.ts, reviewer #83 dedup): same
+          // rebasing merge the stair step boxes use.
+          mesh: mergeMeshBuffers(buffers),
+        });
+      }
     }
   }
 
@@ -401,30 +435,6 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
       })),
     ),
     stairs: stairSolids,
+    roofs: roofSolids,
   };
-}
-
-/** Concatenate mesh buffers, rebasing indices (adapter-free merge). */
-function mergeBuffers(buffers: MeshBuffer[]): MeshBuffer {
-  let posTotal = 0;
-  let idxTotal = 0;
-  for (const b of buffers) {
-    posTotal += b.positions.length;
-    idxTotal += b.indices.length;
-  }
-  const positions = new Float32Array(posTotal);
-  const indices = new Uint32Array(idxTotal);
-  let posCur = 0;
-  let idxCur = 0;
-  let vertBase = 0;
-  for (const b of buffers) {
-    positions.set(b.positions, posCur);
-    for (let i = 0; i < b.indices.length; i += 1) {
-      indices[idxCur + i] = b.indices[i] + vertBase;
-    }
-    posCur += b.positions.length;
-    idxCur += b.indices.length;
-    vertBase += b.positions.length / 3;
-  }
-  return { positions, indices };
 }

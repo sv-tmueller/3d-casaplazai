@@ -11,6 +11,7 @@ export type {
   MeshBuffer,
   QuadCorners,
   RoomMeshes,
+  RoofSolid,
   StairSolid,
 } from './types';
 export {
@@ -57,6 +58,12 @@ export {
   roomCollisionPieces,
   segmentHitsBoxes,
 } from './collision';
-export { packRingFan } from './meshio';
+export { packRingFan, mergeMeshBuffers } from './meshio';
 export { compilePlan, countTriangles, countVertices, sceneBounds } from './compile';
 export { windowPaneRects, type PaneRect } from './windowpanes';
+export {
+  buildRoomRoofs,
+  hasAnyRoof,
+  positiveLeans,
+  roofPlateHeight,
+} from './roofs';

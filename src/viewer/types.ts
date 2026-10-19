@@ -90,6 +90,7 @@ export interface MaterialBucket {
 export type MaterialSlotId =
   | 'wall'
   | 'ceiling'
+  | 'roof'
   | Exclude<FloorTexture, null>
   | 'glass'
   | 'windowFrame'

@@ -545,6 +545,9 @@ export class ViewerApp {
       // Furniture ships as ONE merged mesh per material family (draw-call
       // budget); the plan-parity figure is the VOLUME count (8 verts each).
       furnitureVolumeCount: this.countPrefixVerts('furn-', 8),
+      // Roof planes (pkg 8.1): triangles in the dedicated 'roof' slot —
+      // the e2e parity figure for shed/gable presence (0 when absent).
+      roofTriangleCount: this.countSlotTriangles('roof'),
     });
   }
 
@@ -564,6 +567,24 @@ export class ViewerApp {
       }
     });
     return quads;
+  }
+
+  /** Count raw triangles within meshes whose userData.slot matches. */
+  private countSlotTriangles(slot: string): number {
+    if (!this.sceneRoot) return 0;
+    let tris = 0;
+    this.sceneRoot.scene.traverse((obj) => {
+      const mesh = obj as {
+        isMesh?: boolean;
+        userData?: { slot?: string };
+        geometry?: { index?: { count: number } | null };
+      };
+      if (mesh.isMesh === true && mesh.userData?.slot === slot) {
+        const idx = mesh.geometry?.index;
+        if (idx) tris += idx.count / 3;
+      }
+    });
+    return tris;
   }
 
   /** Sum verts/stride across meshes whose userData.slot starts with prefix. */

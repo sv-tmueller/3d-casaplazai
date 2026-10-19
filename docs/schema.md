@@ -48,6 +48,20 @@ imports via the barrel `src/shared/schema/index.ts`.
 | `polygon` | `[x,y][]` | >= 3 vertices, CCW, finite coords. |
 | `floorTexture` | `"wood" \| "tile" \| "carpet" \| "concrete" \| null` | Enum or explicit null (null = unset/default renderer choice). |
 | `wallsOverride` | `{segmentIndex, height}[]` | Optional. `segmentIndex` indexes the room's OWN polygon segments, `0 <= segmentIndex < nVertices`; `height` positive. |
+| `roofs` | `{segmentIndex, leanDeg}[]` | Optional (pkg 8.1, issue #83). Per-wall lean, degrees from horizontal, `0 <= leanDeg <= 75`; one row per segment; only rooms of the TOPMOST floor may carry roofs. Composition: at most one shed lean or one gable pair (two opposing, parallel, equal-length, aligned segments whose planes meet inside the room). Ridge is DERIVED at compile time — never stored. |
+
+### Roof-derived error codes
+
+| Code | Meaning |
+| --- | --- |
+| `roof-not-top-floor` | `roofs` set on a non-topmost floor's room. |
+| `duplicate-roof-segment` | Two `RoofSpec` rows on the same segment. |
+| `bad-lean` | `leanDeg` outside `[0, 75]` or not finite. |
+| `roof-plate-too-low` | Leaned segment's effective plate (wallsOverride-aware) dips below `wallHeight` — the plane would enter the walkable volume. |
+| `roof-unsupported-config` | 3+ positive leans (valleys/hips out of scope). |
+| `roof-invalid-gable` | Two leans that are not opposing/parallel, misaligned along the ridge, or non-facing. |
+| `roof-length-mismatch` | Opposing pair unequal in length beyond tolerance. |
+| `roof-no-ridge` | Pair planes never meet inside the room span. |
 
 ## Opening
 
@@ -104,6 +118,7 @@ Stable machine identifiers carried by `{path, code, message}`:
 | `opening-too-wide` | Cutout interval escapes its segment. |
 | `bad-rotation` | Non-numeric `rotationDeg`. |
 | `degenerate-footprint` | Non-positive footprint extent. |
+| `roof-*` | Family of roof composition faults — see the Room section above. |
 
 ## Migration hook convention
 

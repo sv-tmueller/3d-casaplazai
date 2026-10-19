@@ -97,6 +97,22 @@ export interface CompiledScene {
    * stair-free plans) and the adapter normalizes absence to [].
    */
   stairs?: StairSolid[];
+  /**
+   * Roof planes (pkg 8.1, issue #83): one merged mesh per room carrying
+   * positive wall leans (shed quad or gable pair + end caps), world z.
+   * OPTIONAL for the same reason as stairs — compilePlan ALWAYS emits
+   * it ([] for lean-free plans) and the adapter normalizes absence.
+   */
+  roofs?: RoofSolid[];
+}
+
+/**
+ * One room's roof contribution (pkg 8.1): the merged plane mesh, world
+ * z. The adapter routes it into the dedicated 'roof' material slot.
+ */
+export interface RoofSolid {
+  roomId: string;
+  mesh: MeshBuffer;
 }
 
 /**
