@@ -8,10 +8,13 @@ import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
 import {
   WINDOW_SILL_EPSILON_M,
+  clampTForDrag,
   derivePairRows,
   nearestSegment,
   openingAt,
+  openingDragClash,
   openingFitError,
+  openingTwinIds,
   openingsOverlap,
   pairConsistencyErrors,
   pointAtT,
@@ -19,6 +22,7 @@ import {
   roomSegments,
   validateOpeningCandidate,
 } from '../../src/editor/model/openings';
+import { validateOpeningDraft } from '../../src/editor/controller';
 
 function squareRoom(id: string, x0 = 0, y0 = 0, w = 5, h = 4): Room {
   return {
@@ -285,5 +289,111 @@ describe('openingAt hit-testing (issue #52)', () => {
     const plan = twoRoomSharedWall();
     plan.openings = [opening({ roomId: 'ghost' })];
     expect(openingAt([2.5, 0], plan)).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Issue #61: drag-time clash exclusion + corner clamp                *
+ * ------------------------------------------------------------------ */
+
+/** Two linked rows for a door on the shared wall x=5 (living seg 1). */
+function pairedDoorPlan(): FloorplanData {
+  const plan = twoRoomSharedWall();
+  const rows = derivePairRows(plan, {
+    roomId: 'living',
+    segmentIndex: 1,
+    tCenter: 0.55,
+    width: 1,
+  });
+  plan.openings = rows.map((r, i) => ({
+    id: i === 0 ? 'd-living' : `d-pair-${i}`,
+    roomId: r.roomId,
+    kind: 'door' as const,
+    segmentIndex: r.segmentIndex,
+    tCenter: r.tCenter,
+    width: r.width ?? 1,
+    sillHeight: 0,
+    headHeight: 2.1,
+  }));
+  return plan;
+}
+
+/** Minimal solo door row on the living room's south wall (seg 0). */
+function soloDoor(plan: FloorplanData, id: string): FloorplanData {
+  plan.openings = [
+    {
+      id,
+      roomId: 'living',
+      kind: 'door',
+      segmentIndex: 0,
+      tCenter: 0.5,
+      width: 1,
+      sillHeight: 0,
+      headHeight: 2.1,
+    },
+  ];
+  return plan;
+}
+
+describe('openingTwinIds (issue #61)', () => {
+  it('returns just the id for an unpaired row', () => {
+    const plan = soloDoor(twoRoomSharedWall(), 'solo');
+    expect(openingTwinIds(plan, 'solo')).toEqual(new Set(['solo']));
+  });
+
+  it('includes the collinear partner row of a paired door', () => {
+    const plan = pairedDoorPlan();
+    expect(plan.openings).toHaveLength(2);
+    expect(openingTwinIds(plan, 'd-living')).toEqual(
+      new Set(['d-living', 'd-pair-1']),
+    );
+  });
+});
+
+describe('openingDragClash — self/twin exclusion (issue #61)', () => {
+  it('does NOT flag the dragged pair against itself (the trap)', () => {
+    const plan = pairedDoorPlan();
+    // Sanity: the naive draft validator DOES flag the dragged row as a
+    // clash with itself — exactly the false positive this helper avoids.
+    expect(
+      validateOpeningDraft(plan, 'living', 1, 'door', 0.55, 1, 0, 2.1),
+    ).toBe('CLASHES_EXISTING_OPENING');
+    // Sliding along its own wall to a free spot stays clash-free.
+    expect(openingDragClash(plan, 'd-living', 0.6)).toBe(false);
+    expect(openingDragClash(plan, 'd-living', 0.55)).toBe(false);
+  });
+
+  it('still flags a genuine overlap with ANOTHER opening on the segment', () => {
+    const plan = pairedDoorPlan();
+    plan.openings.push({
+      id: 'other',
+      roomId: 'living',
+      kind: 'door',
+      segmentIndex: 1,
+      tCenter: 0.2,
+      width: 0.85,
+      sillHeight: 0,
+      headHeight: 2.1,
+    });
+    expect(openingDragClash(plan, 'd-living', 0.6)).toBe(false);
+    expect(openingDragClash(plan, 'd-living', 0.2)).toBe(true);
+  });
+
+  it('is false for an unknown id', () => {
+    expect(openingDragClash(pairedDoorPlan(), 'nope', 0.5)).toBe(false);
+  });
+});
+
+describe('clampTForDrag (issue #61)', () => {
+  it('keeps the cutout inside the corner margins', () => {
+    // segLen 4, width 1 → half 0.125, margin 0.0125 ⇒ band [.1375,.8625].
+    expect(clampTForDrag(4, 1, 0)).toBeCloseTo(0.1375, 6);
+    expect(clampTForDrag(4, 1, 1)).toBeCloseTo(0.8625, 6);
+    expect(clampTForDrag(4, 1, 0.5)).toBeCloseTo(0.5, 6);
+  });
+
+  it('collapses to mid-span on a degenerate/too-short wall', () => {
+    expect(clampTForDrag(0, 1, 0.3)).toBe(0.5);
+    expect(clampTForDrag(0.5, 4, 0.3)).toBe(0.5); // cutout wider than wall
   });
 });

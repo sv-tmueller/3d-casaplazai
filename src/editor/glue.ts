@@ -30,7 +30,16 @@ import {
   type InteractionPhase,
 } from './controller';
 import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from './model/constants';
-import { nearestSegment, openingAt, pointAtT, projectOntoSegment } from './model/openings';
+import {
+  clampTForDrag,
+  nearestSegment,
+  openingAt,
+  openingDragClash,
+  pointAtT,
+  projectOntoSegment,
+  roomSegments,
+  validateOpeningCandidate,
+} from './model/openings';
 import { itemCorners } from './model/furniture';
 import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
@@ -47,6 +56,34 @@ import { snapVec, vecAdd, vecSub } from './geom';
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
 const INITIAL_SCALE = 80; // px per meter
+/** Issue #61: pointer travel (screen px) before a click becomes a drag. */
+const OPENING_DRAG_THRESHOLD_PX = 3;
+
+/**
+ * Glue-local drag candidate for an opening (issue #61). Mirrors the
+ * `draggingFurnitureId` precedent: no InteractionPhase variant is added
+ * to controller.ts — the candidate lives here and only becomes a live
+ * drag (beginGesture) once the pointer clears the click threshold.
+ */
+interface OpeningDragCandidate {
+  id: string;
+  roomId: string;
+  segIndex: number;
+  kind: 'door' | 'window';
+  width: number;
+  sillHeight: number;
+  headHeight: number;
+  /** tCenter at pick-up (used for the click-vs-drag decision). */
+  startT: number;
+  /** Last t that validated + streamed — the fallback on invalid release. */
+  lastValidT: number;
+  /** Pointer-down screen position. */
+  startXY: Pt;
+  /** True once beginGesture() has fired (threshold crossed). */
+  engaged: boolean;
+  /** Reason code of the most recent frame (null = valid), for flash-on-release. */
+  lastErr: string | null;
+}
 
 /**
  * Notice text for a just-committed opening, derived from the opening-row
@@ -157,6 +194,8 @@ export function initEditorInteraction(
   let ghost: GhostPreview | null = null;
   let hoverSeg: { roomId: string; segIndex: number } | null = null;
   let draggingFurnitureId: string | null = null;
+  // Issue #61: opening drag candidate (null = no opening drag in flight).
+  let dragOpening: OpeningDragCandidate | null = null;
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
@@ -258,6 +297,7 @@ export function initEditorInteraction(
   /* ---------- toolbar ---------- */
   function setActiveTool(next: AnyToolMode): void {
     tool = next;
+    dragOpening = null; // #61: switching tools abandons any opening candidate
     if (next === 'select') {
       phase = { tag: 'idle' };
     } else {
@@ -647,11 +687,30 @@ export function initEditorInteraction(
     }
 
     // pkg 1 (issue #52): an opening under the cursor wins over the room
-    // wall it is cut into. Selection only — no drag phase, no pointer
-    // capture (opening dragging is a non-goal).
+    // wall it is cut into. pkg 3 (issue #61): select immediately, then
+    // stash a drag candidate — the gesture only begins once the pointer
+    // clears the click threshold, so a plain click stays a click.
     const openingHit = openingAt(worldPt, st.data);
     if (openingHit) {
+      const hitRoom = st.data.rooms.find((r) => r.id === openingHit.roomId);
+      const hitSeg = hitRoom ? roomSegments(hitRoom)[openingHit.segmentIndex] : undefined;
       store.dispatch({ type: 'setEntitySelection', entityId: openingHit.id });
+      dragOpening = hitSeg
+        ? {
+            id: openingHit.id,
+            roomId: openingHit.roomId,
+            segIndex: openingHit.segmentIndex,
+            kind: openingHit.kind,
+            width: openingHit.width,
+            sillHeight: openingHit.sillHeight,
+            headHeight: openingHit.headHeight,
+            startT: openingHit.tCenter,
+            lastValidT: openingHit.tCenter,
+            startXY: evPos(ev),
+            engaged: false,
+            lastErr: null,
+          }
+        : null;
       phase = { tag: 'idle' };
       return;
     }
@@ -685,8 +744,79 @@ export function initEditorInteraction(
     return Math.hypot(a[0] - b[0], a[1] - b[1]);
   }
 
+  /**
+   * Issue #61: advance an in-flight opening drag. Below the click
+   * threshold this is a no-op (pointerdown already selected). Past it:
+   * begin the gesture once, project the cursor onto the opening's OWN
+   * segment, clamp t to the corner margins, validate (self/twin-aware
+   * clash), and stream moveOpening{syncPair} for VALID frames only —
+   * invalid frames keep the last streamed position and paint a red ghost
+   * band under the raw cursor as the invalid feedback.
+   */
+  function handleOpeningDrag(ev: PointerEvent, worldPt: Pt): void {
+    const d = dragOpening;
+    if (!d) return;
+    // Reviewer should-fix (#61): a stale candidate (pointer released off-canvas
+    // before engage, capture only taken at engage) must not arm a button-less
+    // drag on the next hover — tear it down instead.
+    if ((ev.buttons & 1) === 0) {
+      dragOpening = null;
+      ghost = null;
+      repaint();
+      return;
+    }
+    if (!d.engaged) {
+      const s = evPos(ev);
+      if (dist(s, d.startXY) < OPENING_DRAG_THRESHOLD_PX) return;
+      store.beginGesture();
+      canvas.setPointerCapture(ev.pointerId);
+      d.engaged = true;
+    }
+    const plan = store.getState().data;
+    const room = plan.rooms.find((r) => r.id === d.roomId);
+    const seg = room ? roomSegments(room)[d.segIndex] : undefined;
+    if (!seg || seg.length === 0) return;
+    const rawT = projectOntoSegment(worldPt, seg);
+    const t = clampTForDrag(seg.length, d.width, rawT);
+    const fitErr = validateOpeningCandidate({
+      kind: d.kind,
+      segLen: seg.length,
+      tCenter: t,
+      width: d.width,
+      sillHeight: d.sillHeight,
+      headHeight: d.headHeight,
+    });
+    const err =
+      fitErr ??
+      (openingDragClash(plan, d.id, t) ? 'CLASHES_EXISTING_OPENING' : null);
+    d.lastErr = err;
+    ghost = {
+      kind: d.kind,
+      seg,
+      t: err === null ? t : rawT,
+      width: d.width,
+      valid: err === null,
+    };
+    if (err === null) {
+      d.lastValidT = t;
+      store.dispatch({
+        type: 'moveOpening',
+        openingId: d.id,
+        tCenter: t,
+        syncPair: true,
+      });
+    }
+    repaint();
+  }
+
   canvas.addEventListener('pointermove', (ev) => {
     const worldPt = evWorld(ev);
+
+    // Issue #61: an in-flight opening drag owns the pointer.
+    if (dragOpening) {
+      handleOpeningDrag(ev, worldPt);
+      return;
+    }
 
     // pkg 3: opening-tool ghost slide + wall highlight (any phase-less move).
     if (tool === 'door' || tool === 'window') {
@@ -827,12 +957,30 @@ export function initEditorInteraction(
   });
 
   function endDrag(): void {
+    dragOpening = null;
     store.endGesture();
     phase = { tag: 'idle' };
     repaint();
   }
 
   canvas.addEventListener('pointerup', (ev) => {
+    // Issue #61: release an in-flight opening drag. Never streamed an
+    // invalid frame, so state already sits at lastValidT; flash the
+    // banner when the release frame was invalid.
+    if (dragOpening) {
+      const d = dragOpening;
+      dragOpening = null;
+      if (d.engaged) {
+        if (d.lastErr !== null) {
+          flashMessage(refs, openingErrorMessage(d.lastErr, d.kind));
+        }
+        store.endGesture();
+        ghost = null;
+        repaint();
+      }
+      phase = { tag: 'idle' };
+      return;
+    }
     if (phase.tag === 'drawingRect' && ev.button === 0) {
       const worldPt = snapPoint(evWorld(ev));
       const minSide = Math.abs(worldPt[0] - phase.corner1[0]) * cam.scale;
@@ -893,6 +1041,13 @@ export function initEditorInteraction(
       // ("non-streamable command inside gesture").
       if (phase.tag === 'draggingFurniture') {
         draggingFurnitureId = null;
+        endDrag();
+        return;
+      }
+      // Issue #61: abandoning an opening drag closes its gesture too
+      // (a leaked _gestureBase would make later atomic commands throw).
+      if (dragOpening) {
+        ghost = null;
         endDrag();
         return;
       }
