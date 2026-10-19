@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { parseQualityLevel } from '../../src/viewer/appController';
+import { isHighQuality } from '../../src/viewer/quality';
 import {
   fadeStepOpacity,
   isIndoorFromRay,
@@ -55,22 +55,25 @@ describe('renderConstants (issue #86 CP1)', () => {
   });
 });
 
-describe('parseQualityLevel (issue #86 CP2)', () => {
+describe('isHighQuality (issue #86 CP2 — absorbed into #87 quality.ts per batch-#85 arbitration)', () => {
   it('parses low and high explicitly', () => {
-    expect(parseQualityLevel('?quality=low')).toBe('low');
-    expect(parseQualityLevel('?quality=high')).toBe('high');
+    expect(isHighQuality('?quality=low')).toBe(false);
+    expect(isHighQuality('?quality=high')).toBe(true);
   });
 
   it('parses alongside other query parameters', () => {
-    expect(parseQualityLevel('?perf=1&quality=low')).toBe('low');
-    expect(parseQualityLevel('?quality=high&perf=1')).toBe('high');
+    expect(isHighQuality('?perf=1&quality=low')).toBe(false);
+    expect(isHighQuality('?quality=high&perf=1')).toBe(true);
   });
 
-  it('defaults to high when absent or unrecognized', () => {
-    expect(parseQualityLevel('')).toBe('high');
-    expect(parseQualityLevel('?foo=1')).toBe('high');
-    expect(parseQualityLevel('?quality=medium')).toBe('high');
-    expect(parseQualityLevel('?quality=lower')).toBe('high');
+  it('defaults to high when absent or unrecognized (end-anchored)', () => {
+    expect(isHighQuality('')).toBe(true);
+    expect(isHighQuality('?foo=1')).toBe(true);
+    expect(isHighQuality('?quality=medium')).toBe(true);
+    // End-anchor (adopted from #86's stricter parse): prefixed values
+    // no longer degrade to LOW — unrecognized ⇒ HIGH.
+    expect(isHighQuality('?quality=lower')).toBe(true);
+    expect(isHighQuality('?quality=lowest')).toBe(true);
   });
 });
 

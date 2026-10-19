@@ -720,7 +720,6 @@ export class ViewerApp {
       // Roof planes (pkg 8.1): triangles in the dedicated 'roof' slot —
       // the e2e parity figure for shed/gable presence (0 when absent).
       roofTriangleCount: this.countSlotTriangles('roof'),
-<<<<<<< HEAD
       // Quality tier (#87): 'high' unless ?quality=low opted out.
       qualityLevel: this.hiQuality ? 'high' : 'low',
       // Populated slots carrying a procedural MAP (#87): the high-tier
