@@ -34,6 +34,7 @@ import {
 } from './collision';
 import { validateGeometry } from './validate';
 import { makeSegments } from './mathutil';
+import { mergeMeshBuffers } from './meshio';
 import type { Aabb, QuadCorners } from './types';
 import { buildFloorWithHoles } from './floorHole';
 import {
@@ -385,7 +386,7 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
         zLower: departureZ,
         rise: stair.rise,
         run: stair.run,
-        mesh: mergeBuffers(buildStairSteps(stair, departureZ)),
+        mesh: mergeMeshBuffers(buildStairSteps(stair, departureZ)),
       });
       // Flank fencing: thin boxes along the run's sides, z-band
       // [departureZ, departureZ+rise] via the minZ/maxZ seam. RAW
@@ -410,9 +411,9 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
       if (buffers.length > 0) {
         roofSolids.push({
           roomId: room.id,
-          // Local mergeBuffers (below): same rebasing merge the stair
-          // step boxes use.
-          mesh: mergeBuffers(buffers),
+          // Shared exported merge (meshio.ts, reviewer #83 dedup): same
+          // rebasing merge the stair step boxes use.
+          mesh: mergeMeshBuffers(buffers),
         });
       }
     }
@@ -436,29 +437,4 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
     stairs: stairSolids,
     roofs: roofSolids,
   };
-}
-
-/** Concatenate mesh buffers, rebasing indices (adapter-free merge). */
-function mergeBuffers(buffers: MeshBuffer[]): MeshBuffer {
-  let posTotal = 0;
-  let idxTotal = 0;
-  for (const b of buffers) {
-    posTotal += b.positions.length;
-    idxTotal += b.indices.length;
-  }
-  const positions = new Float32Array(posTotal);
-  const indices = new Uint32Array(idxTotal);
-  let posCur = 0;
-  let idxCur = 0;
-  let vertBase = 0;
-  for (const b of buffers) {
-    positions.set(b.positions, posCur);
-    for (let i = 0; i < b.indices.length; i += 1) {
-      indices[idxCur + i] = b.indices[i] + vertBase;
-    }
-    posCur += b.positions.length;
-    idxCur += b.indices.length;
-    vertBase += b.positions.length / 3;
-  }
-  return { positions, indices };
 }

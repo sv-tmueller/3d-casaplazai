@@ -187,4 +187,63 @@ describe('validateFloorplan — roof leans (pkg 8.1)', () => {
     delete upper.roofs;
     expect(codes(p)).toContain('roof-not-top-floor');
   });
+
+  // ---- reviewer #83 should-fix: the three previously-untested arms ----
+
+  it('rejects extreme-asymmetry leans whose planes meet outside the span (roof-no-ridge)', () => {
+    // 75° meets 0.05°: the near-flat plane crosses essentially the whole
+    // span before the steep one rises — the meeting point collapses to
+    // the 75° wall, inside the 1 mm collar, so no ridge exists.
+    expect(
+      codes(
+        plan({
+          roofs: [
+            { segmentIndex: 0, leanDeg: 75 },
+            { segmentIndex: 2, leanDeg: 0.05 },
+          ],
+        }),
+      ),
+    ).toContain('roof-no-ridge');
+  });
+
+  it('rejects gable segments staggered along the ridge (roof-invalid-gable)', () => {
+    // Trapezoid: south and north walls parallel + equal-ish but offset
+    // along their own direction, so spans do not coincide.
+    const trap: Array<[number, number]> = [
+      [0, 0],
+      [4, 0],
+      [5, 3],
+      [1, 3],
+    ];
+    const p = plan({});
+    (p.floors[0].rooms[0] as { polygon: Array<[number, number]> }).polygon = trap;
+    (p.floors[0].rooms[0] as { roofs?: RoofSpec[] }).roofs = [
+      { segmentIndex: 0, leanDeg: 30 },
+      { segmentIndex: 2, leanDeg: 30 },
+    ];
+    expect(codes(p)).toContain('roof-invalid-gable');
+  });
+
+  it('rejects parallel-leaning segments that are not opposing (roof-invalid-gable)', () => {
+    // Step-top outline: segments 2 ([10,5]->[6,5]) and 4 ([6,3]->[3,3])
+    // are parallel with the SAME traversal direction (tangent dot +1),
+    // not antiparallel — the opposition check must fire.
+    const step: Array<[number, number]> = [
+      [0, 0],
+      [10, 0],
+      [10, 5],
+      [6, 5],
+      [6, 3],
+      [3, 3],
+      [3, 5],
+      [0, 5],
+    ];
+    const p = plan({});
+    (p.floors[0].rooms[0] as { polygon: Array<[number, number]> }).polygon = step;
+    (p.floors[0].rooms[0] as { roofs?: RoofSpec[] }).roofs = [
+      { segmentIndex: 2, leanDeg: 30 },
+      { segmentIndex: 4, leanDeg: 30 },
+    ];
+    expect(codes(p)).toContain('roof-invalid-gable');
+  });
 });
