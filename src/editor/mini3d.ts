@@ -304,8 +304,12 @@ export class Mini3DInset {
     // Unrecovered context loss → stub (listener re-added per boot).
     this.canvas.addEventListener("webglcontextlost", this.onContextLost);
 
-    this.resizeObserver = new ResizeObserver(() => this.syncSize());
-    this.resizeObserver.observe(this.bodyEl);
+    // Stub/DOM-shim environments may lack ResizeObserver — degrade to
+    // a single initial sizing pass instead of crashing the editor.
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.syncSize());
+      this.resizeObserver.observe(this.bodyEl);
+    }
     this.bindDragLook();
     this.syncSize();
     // First paint: build NOW from the latest plan (no debounce lag).
