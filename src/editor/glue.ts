@@ -2241,6 +2241,14 @@ export function initEditorInteraction(
     // Issue #110: an armed marquee candidate advances once the pointer
     // crosses the engage threshold, then tracks the band every frame.
     if (marquee !== null) {
+      // Reviewer #110 should-fix: a marquee candidate that missed its
+      // pointerup (released outside the window pre-engage — no capture
+      // is held yet) would turn the next hover-move into a buttonless
+      // band; disarm instead.
+      if ((ev.buttons & 1) === 0) {
+        marquee = null;
+        return;
+      }
       marquee.cur = evPos(ev);
       if (!marquee.engaged) {
         if (dist(marquee.cur, marquee.start) < MARQUEE_ENGAGE_PX) return;
