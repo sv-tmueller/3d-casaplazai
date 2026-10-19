@@ -146,9 +146,10 @@ test.describe.serial('multi-select marquee (issue #110)', () => {
     expect(before).toHaveLength(2);
 
     await marquee(page, 0, -0.2, 7, -3.8);
-    // Grab bed 1 (a member) and drag it 0.5 m LEFT; bed 2 follows by the
-    // same delta. Leftward keeps every member inside living (followers
-    // move unjudged — the grabbed piece alone is containment-checked).
+    // Grab bed 1 (a member) and drag it 0.5 m LEFT; bed 2 follows by
+    // the same delta. The grabbed piece clamps at living's west wall
+    // (1.5 → 1.3), leaving the kitchen follower at 4.8 — well inside
+    // its own room, so per-follower judgment (#117) changes nothing.
     const b1 = await aim(page, before[0].position[0], before[0].position[1]);
     const to = await aim(
       page,
@@ -168,6 +169,47 @@ test.describe.serial('multi-select marquee (issue #110)', () => {
     expect(d1).toBeCloseTo(d0, 5);
 
     // ONE Ctrl+Z rolls the WHOLE bulk move back.
+    await page.locator('.editor-canvas').press('Control+z');
+    const restored = await furniture(page);
+    expect(restored.map((f) => f.position)).toEqual(
+      before.map((f) => f.position),
+    );
+  });
+
+  test('bulk move clamps a follower at ITS room wall (issue #117)', async ({
+    page,
+  }) => {
+    const before = await furniture(page);
+    expect(before).toHaveLength(2);
+
+    await marquee(page, 0, -0.2, 7, -3.8);
+    // Grab the LIVING bed and drag it 1.5 m RIGHT toward the shared
+    // wall. The grabbed piece clamps at 2.7 (living east wall 3.5 minus
+    // half-width 0.8); the kitchen follower would ride the raw delta to
+    // 6.2 — poking through the kitchen's east wall at 6.5 — so #117
+    // clamps it at 5.7 instead.
+    const b1 = await aim(page, before[0].position[0], before[0].position[1]);
+    const to = await aim(
+      page,
+      before[0].position[0] + 1.5,
+      before[0].position[1],
+    );
+    await page.mouse.move(b1.x, b1.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    await page.mouse.up();
+
+    const moved = await furniture(page);
+    const grabbed = moved.find((f) => f.id === before[0].id)!;
+    const follower = moved.find((f) => f.id === before[1].id)!;
+    // Grabbed bed stops at living's east wall…
+    expect(grabbed.position[0]).toBeCloseTo(2.7, 5);
+    // …and the kitchen follower stops at ITS east wall, not the raw
+    // 6.2: the whole 1.6 m footprint stays inside kitchen.
+    expect(follower.position[0]).toBeCloseTo(5.7, 5);
+    expect(follower.position[1]).toBeCloseTo(before[1].position[1], 5);
+
+    // ONE Ctrl+Z still rolls the whole (partially clamped) move back.
     await page.locator('.editor-canvas').press('Control+z');
     const restored = await furniture(page);
     expect(restored.map((f) => f.position)).toEqual(

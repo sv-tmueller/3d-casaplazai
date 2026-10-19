@@ -1,9 +1,9 @@
 /**
  * Unit tests for pkg 13.2 marquee band geometry (issue #110, SUB_PLAN
- * step 1). Pure predicates in controller.ts: bandRect normalization,
- * pointInBand half-open edges, furniture AABB∩ (deliberately loose for
- * rotated stamps — disclosed non-goal), room bbox-overlap OR
- * any-vertex-in-rect.
+ * step 1; SAT-exact furniture membership since issue #117). Pure
+ * predicates in controller.ts: bandRect normalization, pointInBand
+ * half-open edges, furniture SAT ∩ oriented quad (the #110 AABB
+ * looseness is retired), room bbox-overlap OR any-vertex-in-rect.
  */
 import { describe, expect, it } from 'vitest';
 import type { FurnitureItem, Room } from '../../src/shared/schema';
@@ -66,7 +66,7 @@ describe('pointInBand (issue #110)', () => {
   });
 });
 
-describe('furnitureInBand (issue #110)', () => {
+describe('furnitureInBand (issue #110; SAT-exact since #117)', () => {
   it('selects an axis-aligned stamp whose AABB overlaps the band', () => {
     // Sofa centered at (5,5), 1x2 footprint → AABB roughly [4.5,4]-[5.5,6].
     const f = furn('f1', [5, 5]);
@@ -80,14 +80,28 @@ describe('furnitureInBand (issue #110)', () => {
     expect(furnitureInBand(f, bandRect([5.5, 0], [10, 10]))).toBe(false);
   });
 
-  it('uses the ROTATED corner AABB (loose for angled stamps, disclosed)', () => {
-    // 45°-rotated 1x2 stamp: its AABB inflates beyond the axis-aligned
-    // footprint, so a band clipping only the inflated corner still
-    // selects — deliberate looseness (exact SAT is a non-goal).
+  it('excludes a band that only clips the inflated rotated AABB (SAT pin)', () => {
+    // 45°-rotated 1x2 stamp at (5,5): its (+,+) edge lies on the
+    // diagonal x + y = 10 + √2/2 ≈ 10.707. The band corner (5.8,5.8)
+    // sums 11.6 — strictly beyond the true footprint — so SAT excludes
+    // it even though the old AABB filter admitted it (the #110 "loose"
+    // pin, deliberately INVERTED by #117).
     const f = furn('f1', [5, 5], 45);
-    // Far corner of the rotated AABB sits ≈ 0.707·1.5 ≈ 1.06 from center.
-    const r = bandRect([5.8, 5.8], [7, 7]);
-    expect(furnitureInBand(f, r)).toBe(true);
+    expect(furnitureInBand(f, bandRect([5.8, 5.8], [7, 7]))).toBe(false);
+  });
+
+  it('selects a band clipping the actual rotated footprint', () => {
+    const f = furn('f1', [5, 5], 45);
+    expect(furnitureInBand(f, bandRect([5, 5], [7, 7]))).toBe(true);
+  });
+
+  it('excludes a band edge lying exactly on the rotated edge (degenerate touch)', () => {
+    // Min corner placed ON the (+,+) edge: minX + minY = 10 + √2/2.
+    // Touching ≠ hit (half-open, as intervalsOverlap); the 1e-9 SAT
+    // slack absorbs float noise from the cos(45°) projections.
+    const f = furn('f1', [5, 5], 45);
+    const r = bandRect([5, 5 + Math.SQRT1_2], [7, 7]);
+    expect(furnitureInBand(f, r)).toBe(false);
   });
 });
 

@@ -21,6 +21,7 @@ import {
   finalizeRectangle,
   furnitureInBand,
   HANDLE_HIT_PX,
+  judgeBulkFollow,
   judgeMoveTarget,
   nextRotation,
   openingErrorMessage,
@@ -667,9 +668,9 @@ export function initEditorInteraction(
   /**
    * Sweep the marquee band (SCREEN px) through the camera into a world
    * rect and collect the member ids it covers on the ACTIVE floor:
-   * furniture by rotated-corner AABB ∩ band, rooms by bbox-overlap OR
-   * any-vertex-in-rect (controller.ts predicates — loose by design;
-   * exact SAT is a #110 non-goal).
+   * furniture by SAT-exact oriented-quad ∩ band (issue #117 — the #110
+   * AABB looseness is retired), rooms by bbox-overlap OR
+   * any-vertex-in-rect (rooms stay loose by design).
    */
   function marqueeMembers(start: Pt, cur: Pt): Set<string> {
     const rect = bandRect(screenToWorld(cam, start), screenToWorld(cam, cur));
@@ -843,6 +844,16 @@ export function initEditorInteraction(
         target.isContentEditable;
       if (ev.key === "Escape") {
         if (drawGestureInProgress()) return;
+        // Issue #117: a pending measure anchor outranks the panel close
+        // — the first Escape drops the draft (panel stays open, focus
+        // unmoved), the second closes the panel. Same precedence the
+        // canvas strand already honors.
+        if (measureDraft !== null) {
+          measureDraft = null;
+          repaint();
+          ev.stopPropagation();
+          return;
+        }
         ev.stopPropagation();
         setInspectorOpen(false);
         refs.btnInspector.focus();
@@ -1105,6 +1116,13 @@ export function initEditorInteraction(
       !drawGestureInProgress()
     ) {
       ev.stopPropagation();
+      // Issue #117 (ratified amendment): a pending measure anchor dies
+      // FIRST — the popover stays open for a second Escape.
+      if (measureDraft !== null) {
+        measureDraft = null;
+        repaint();
+        return;
+      }
       setUnderlayPopoverOpen(false);
     }
   }, true);
@@ -1193,6 +1211,13 @@ export function initEditorInteraction(
         !drawGestureInProgress()
       ) {
         ev.stopPropagation();
+        // Issue #117 (ratified amendment): a pending measure anchor dies
+        // FIRST — the popover stays open for a second Escape.
+        if (measureDraft !== null) {
+          measureDraft = null;
+          repaint();
+          return;
+        }
         setFloorPopoverOpen(false);
       }
     },
@@ -1345,6 +1370,13 @@ export function initEditorInteraction(
         !drawGestureInProgress()
       ) {
         ev.stopPropagation();
+        // Issue #117 (ratified amendment): a pending measure anchor dies
+        // FIRST — the popover stays open for a second Escape.
+        if (measureDraft !== null) {
+          measureDraft = null;
+          repaint();
+          return;
+        }
         setLeanPopoverOpen(false);
       }
     },
@@ -1680,6 +1712,13 @@ export function initEditorInteraction(
   (
     window as unknown as { __editorDimsVisible?: () => boolean }
   ).__editorDimsVisible = () => dimensionsVisible;
+  // Issue #117 read-only seam (same precedent): the pending measure
+  // anchor (null when none, copied out) — canvas-drawn state, so e2e
+  // pins the Escape precedence (anchor first, panel/popover second).
+  (
+    window as unknown as { __editorMeasureDraft?: () => { a: Pt } | null }
+  ).__editorMeasureDraft = () =>
+    measureDraft === null ? null : { a: [measureDraft.a[0], measureDraft.a[1]] };
 
   // Issue #100 (Pkg 12.2) read-only seam (same precedent): the live
   // angle-pill TEXTS for the current gesture — canvas-drawn, so e2e
@@ -2291,11 +2330,13 @@ export function initEditorInteraction(
     if (phase.tag === "draggingFurniture") {
       const fid = draggingFurnitureId;
       if (fid) {
-        // Issue #110: bulk drag — move every member by the SAME world
-        // delta the single-item path resolves for the grabbed piece.
-        // Streams moveFurniture ×N inside the one open gesture; the
-        // collapse at endGesture() yields ONE undo step (ratified
-        // deviation: no dedicated bulk-move command).
+        // Issue #110: bulk drag — move every member by the world delta
+        // the single-item path resolves for the grabbed piece.
+        // Issue #117: followers are re-judged PER ITEM (judgeBulkFollow)
+        // so a follower clamps near a wall or parks when rejected,
+        // instead of clipping through. Streams moveFurniture ×N inside
+        // the one open gesture; the collapse at endGesture() yields ONE
+        // undo step (ratified deviation: no dedicated bulk-move command).
         if (bulkDragIds !== null) {
           const plan = activeFloorPlan(store.getState());
           const grabbedItem = flatFurniture(plan).find((f) => f.id === fid);
@@ -2310,13 +2351,17 @@ export function initEditorInteraction(
               const dx = verdict.resolved[0] - grabbedItem.position[0];
               const dy = verdict.resolved[1] - grabbedItem.position[1];
               if (dx !== 0 || dy !== 0) {
-                for (const oid of bulkDragIds) {
-                  const other = flatFurniture(plan).find((f) => f.id === oid);
-                  if (!other) continue; // raced a delete mid-drag
+                // Issue #117: per-follower judgment — each member rides
+                // the delta only as far as ITS OWN room allows.
+                for (const { id, pos } of judgeBulkFollow(
+                  plan,
+                  bulkDragIds,
+                  [dx, dy],
+                )) {
                   store.dispatch({
                     type: "moveFurniture",
-                    furnitureId: oid,
-                    position: [other.position[0] + dx, other.position[1] + dy],
+                    furnitureId: id,
+                    position: pos,
                   });
                 }
               }
