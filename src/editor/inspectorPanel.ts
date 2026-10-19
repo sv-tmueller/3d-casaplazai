@@ -24,6 +24,7 @@ import type {
   Room,
 } from '../shared/schema';
 import { roomAreaM2 } from './measures';
+import { compassAngleBetween } from './model/angles';
 import { ROOF_MAX_LEAN_EDITOR_DEG } from './store';
 
 /** UI-local address of a wall segment (walls are not entities). */
@@ -66,7 +67,7 @@ export function sameSegmentAddress(
   return a.roomId === b.roomId && a.segIndex === b.segIndex;
 }
 
-/** Segment length + compass-ish bearing of a room's polygon segment. */
+/** Segment length + compass bearing of a room's polygon segment. */
 function segmentMetrics(
   room: Room,
   segIndex: number,
@@ -74,9 +75,11 @@ function segmentMetrics(
   const a = room.polygon[segIndex];
   const b = room.polygon[(segIndex + 1) % room.polygon.length];
   const lengthM = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  // atan2(dx, dy): 0° = north (+y), CW-positive — the heading a reader
-  // expects from a floorplan (up = 0°, right = 90°).
-  const angleDeg = (Math.atan2(b[0] - a[0], b[1] - a[1]) * 180) / Math.PI;
+  // Issue #100: the bearing now derives from the SHARED compass helper
+  // (angles.ts) — the same source the angle pills and the type-in
+  // fields use, so all three surfaces can never diverge. Formula is
+  // unchanged (atan2(dx, dy): 0° = north (+y), CW-positive).
+  const angleDeg = compassAngleBetween(a, b);
   return { lengthM, angleDeg };
 }
 

@@ -78,19 +78,24 @@ describe('angleReadoutLabels — pure selector (issue #67)', () => {
     };
     const rows = angleReadoutLabels(sq, phase, null);
     expect(rows).toHaveLength(2);
-    // prev segment (0,0)->(4,0): east wall, 0.0°, mid (2,0)
+    // Issue #100 (Interpretation A): pills speak COMPASS now — east is
+    // 90°, north is 0° (values flipped from the pre-#100 CCW-from-+X
+    // pins; the assertion SHAPE is unchanged).
+    // prev segment (0,0)->(4,0): east wall, 90.0°, mid (2,0)
     expect(rows[0].mid).toEqual([2, 0]);
-    expect(rows[0].text).toBe('0.0°');
-    // next segment (4,0)->(4,3): north wall, 90.0°, mid (4,1.5)
+    expect(rows[0].text).toBe('90.0\u00B0');
+    // next segment (4,0)->(4,3): north wall, 0.0°, mid (4,1.5)
     expect(rows[1].mid).toEqual([4, 1.5]);
-    expect(rows[1].text).toBe('90.0°');
+    expect(rows[1].text).toBe('0.0\u00B0');
   });
 
   it('hoverSeg (opening ghost): one row at that segment midpoint', () => {
     const rows = angleReadoutLabels(sq, idle, { roomId: 'r', segIndex: 0 });
     expect(rows).toHaveLength(1);
     expect(rows[0].mid).toEqual([2, 0]);
-    expect(rows[0].text).toBe('0.0°');
+    // Issue #100 (Interpretation A): east wall reads 90° under the
+    // unified compass convention (was 0° under CCW-from-+X).
+    expect(rows[0].text).toBe('90.0\u00B0');
   });
 
   it('idle with no hover: no rows', () => {
