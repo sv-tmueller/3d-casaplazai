@@ -33,8 +33,23 @@ export interface WallOverride {
   height: number;
 }
 
+/**
+ * Per-wall lean specification (pkg 8.1, issue #83): one wall segment of
+ * the owning room slopes INWARD from its top plate at `leanDeg` degrees
+ * from horizontal. NO style enum, NO ridge fields — a gable is the
+ * composition of two leaning OPPOSING segments and the ridge is always
+ * DERIVED at compile time (ratified per-wall ruling on batch #82),
+ * satisfying the #69 no-unconsumed-fields constraint.
+ */
+export interface RoofSpec {
+  /** Index into the owning room's polygon segments (0..segments.length-1). */
+  segmentIndex: number;
+  /** Lean from horizontal, degrees. 0 = flat parapet (no roof contribution). */
+  leanDeg: number;
+}
+
 export interface Room {
-  /** Unique, non-empty string (slugs encouraged; not necessarily a UUID). */
+  /** Unique, non-empty string (slug encouraged; not necessarily a UUID). */
   id: string;
   name: string;
   /**
@@ -45,6 +60,14 @@ export interface Room {
   floorTexture: FloorTexture;
   /** Per-segment wall-height overrides; omit for uniform wallHeight. */
   wallsOverride?: WallOverride[];
+  /**
+   * Per-wall roof leans (pkg 8.1, issue #83). Absent/empty = flat
+   * (invisible from above — the pre-8.1 rendering of every plan).
+   * Only meaningful on rooms of the TOPMOST floor (validator rejects
+   * elsewhere); a lean of 0 contributes nothing and is discouraged
+   * (clearWallLean removes the row instead).
+   */
+  roofs?: RoofSpec[];
 }
 
 export interface Opening {

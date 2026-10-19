@@ -138,6 +138,239 @@ interface ParsedEntities {
   segLens: Map<string, Seg[]>;
 }
 
+/**
+ * Roof validation (pkg 8.1, issue #83). Scoped per room, exhaustive and
+ * REJECTING (never degrading — determinism over repair):
+ *   - leanDeg ∈ [0, 75];
+ *   - segmentIndex in the room's segment bounds (wallsOverride precedent);
+ *   - one RoofSpec per segment (duplicate rows are a modelling error);
+ *   - roofs only on rooms of the TOPMOST floor (nothing can sit above a
+ *     mid-storey room's "roof");
+ *   - proximity sanity: a leaned wall's plate (wallsOverride aware) must
+ *     sit at or above the GLOBAL wallHeight, so the derived plane's
+ *     lowest point (the eave) clears the top-floor play space — walk
+ *     mode provably needs no collision change;
+ *   - configuration scope (#83 risk ruling): exactly ONE positive lean
+ *     (shed) or exactly one OPPOSING pair (gable). Anything else — 3+
+ *     leans, non-opposing pairs — would demand valley synthesis, which
+ *     is excluded from this package;
+ *   - gable pair consistency: opposing segments must be antiparallel,
+ *     equal-length and tangentially coincident within tolerance, and
+ *     their planes must MEET inside the room span (derived ridge).
+ */
+const ROOF_MAX_LEAN_DEG = 75;
+/** Antiparallel tolerance for gable pairing, degrees of angle error. */
+const ROOF_PARALLEL_TOL_DEG = 0.5;
+/** Length/offset coincidence tolerance for gable pairs, meters. */
+const ROOF_PAIR_TOL_M = 1e-3;
+
+function checkRoomRoofs(
+  rp: string,
+  room: Record<string, unknown>,
+  poly: Vec2[],
+  wallHeight: number,
+  isTopFloor: boolean,
+  c: Collector,
+): void {
+  const roofs = room.roofs;
+  if (roofs === undefined || roofs === null) return;
+  if (!Array.isArray(roofs)) {
+    c.add(`${rp}.roofs`, 'invalid-type', 'roofs must be an array');
+    return;
+  }
+  if (Number.isFinite(wallHeight) && !isTopFloor && roofs.length > 0) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-not-top-floor',
+      'roofs may only be set on rooms of the topmost floor',
+    );
+  }
+
+  /** Effective plate height of segment si (wallsOverride "min wins" is policed by the caller). */
+  const plateOf = (si: number): number => {
+    const ov = Array.isArray(room.wallsOverride)
+      ? (room.wallsOverride as Array<Record<string, unknown>>)
+      : [];
+    for (const w of ov) {
+      if (w?.segmentIndex === si && isNum(w.height)) return w.height;
+    }
+    return wallHeight;
+  };
+
+  const nSeg = poly.length;
+  const seenSeg = new Set<number>();
+  // First pass: shallow rules on every row (even zero leans).
+  for (let j = 0; j < roofs.length; j += 1) {
+    const spec = roofs[j] as Record<string, unknown> | null;
+    const spp = `${rp}.roofs[${j}]`;
+    if (
+      !checkSegmentBounds(spec?.segmentIndex, spp, nSeg, c) ||
+      spec?.segmentIndex === undefined
+    ) {
+      continue;
+    }
+    const si = spec.segmentIndex as number;
+    if (seenSeg.has(si)) {
+      c.add(
+        `${spp}.segmentIndex`,
+        'duplicate-roof-segment',
+        `segment ${si} already carries a roof lean`,
+      );
+    } else {
+      seenSeg.add(si);
+    }
+    if (!isNum(spec?.leanDeg) || spec.leanDeg < 0 || spec.leanDeg > ROOF_MAX_LEAN_DEG) {
+      c.add(
+        `${spp}.leanDeg`,
+        'bad-lean',
+        `leanDeg must be a finite number in [0, ${ROOF_MAX_LEAN_DEG}]`,
+      );
+    } else if (spec.leanDeg > 0) {
+      // Proximity sanity: the eave (= effective plate height) must not
+      // dip below the global wallHeight, else the roof plane enters the
+      // walkable volume (wallsOverride "min wins" would sink it).
+      const plate = plateOf(si);
+      if (plate < wallHeight - 1e-9) {
+        c.add(
+          spp,
+          'roof-plate-too-low',
+          `leaned segment ${si} has a wallsOverride plate (${plate}) below wallHeight ` +
+            `(${wallHeight}); the roof would dip into the walkable space`,
+        );
+      }
+    }
+  }
+
+  if (!Number.isFinite(wallHeight)) return; // wallHeight fault already reported
+
+  // Second pass: composition analysis over POSITIVE leans only (a 0
+  // lean contributes nothing — flat parapet per #83).
+  const leans: Array<{ si: number; leanDeg: number }> = [];
+  for (const spec of roofs) {
+    const s = spec as Record<string, unknown> | null;
+    if (isNum(s?.leanDeg) && (s.leanDeg as number) > 0 && isInt(s?.segmentIndex)) {
+      leans.push({ si: s.segmentIndex as number, leanDeg: s.leanDeg as number });
+    }
+  }
+  if (leans.length === 0 || leans.length === 1) return; // flat or shed: OK
+  if (leans.length > 2) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-unsupported-config',
+      'a room supports at most one shed lean or one gable pair (2 leans); ' +
+        'valleys/hips are out of scope',
+    );
+    return;
+  }
+
+  // Exactly two leans: they must form a valid gable pair.
+  const [a, b] = leans as [{ si: number; leanDeg: number }, { si: number; leanDeg: number }];
+  const segA = segInfo(poly, a.si);
+  const segB = segInfo(poly, b.si);
+  if (!segA || !segB) return; // bounds fault already reported
+  const dot = segA.ux * segB.ux + segA.uy * segB.uy;
+  const minDot = -Math.cos((ROOF_PARALLEL_TOL_DEG * Math.PI) / 180);
+  if (dot > minDot) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-invalid-gable',
+      `segments ${a.si} and ${b.si} are not opposing (tangent dot ${dot.toFixed(4)}); ` +
+        'two leans must form a gable',
+    );
+    return;
+  }
+  if (Math.abs(segA.len - segB.len) > ROOF_PAIR_TOL_M) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-length-mismatch',
+      `gable segments ${a.si} (${segA.len.toFixed(3)} m) and ${b.si} ` +
+        `(${segB.len.toFixed(3)} m) must be equal-length within ${ROOF_PAIR_TOL_M} m`,
+    );
+    return;
+  }
+  // Tangential coincidence: the pair's start points must align along the
+  // ridge axis (a staggered pair would twist the ridge).
+  const alongRidge = (p: Vec2): number => segA.ux * p[0] + segA.uy * p[1];
+  if (Math.abs(alongRidge(segA.start) - alongRidge(segB.start)) > ROOF_PAIR_TOL_M) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-invalid-gable',
+      `gable segments ${a.si} and ${b.si} are staggered along the ridge; ` +
+        'their spans must coincide',
+    );
+    return;
+  }
+  // Derived ridge existence: solve for the meeting point of the two
+  // planes along the span between the walls; it must land strictly
+  // inside the room so both planes rise to a shared ridge.
+  const dist = (from: SegInfo, to: Vec2): number =>
+    from.nx * (to[0] - from.start[0]) + from.ny * (to[1] - from.start[1]);
+  const midB: Vec2 = [
+    (segB.start[0] + segB.end[0]) / 2,
+    (segB.start[1] + segB.end[1]) / 2,
+  ];
+  const midA: Vec2 = [
+    (segA.start[0] + segA.end[0]) / 2,
+    (segA.start[1] + segA.end[1]) / 2,
+  ];
+  const spanA = dist(segA, midB);
+  const spanB = dist(segB, midA);
+  if (spanA <= ROOF_PAIR_TOL_M || spanB <= ROOF_PAIR_TOL_M) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-invalid-gable',
+      `gable segments ${a.si} and ${b.si} do not face each other`,
+    );
+    return;
+  }
+  const pa = plateOf(a.si);
+  const pb = plateOf(b.si);
+  const ta = Math.tan((a.leanDeg * Math.PI) / 180);
+  const tb = Math.tan((b.leanDeg * Math.PI) / 180);
+  const span = (spanA + spanB) / 2;
+  const meet = (pb - pa + tb * span) / (ta + tb);
+  if (meet <= ROOF_PAIR_TOL_M || meet >= span - ROOF_PAIR_TOL_M) {
+    c.add(
+      `${rp}.roofs`,
+      'roof-no-ridge',
+      `leans on segments ${a.si}/${b.si} produce no ridge inside the room ` +
+        `(meeting point ${meet.toFixed(3)} m of ${span.toFixed(3)} m span)`,
+    );
+  }
+}
+
+/** Minimal segment descriptor used by the roof gable checks. */
+interface SegInfo {
+  start: Vec2;
+  end: Vec2;
+  len: number;
+  ux: number;
+  uy: number;
+  /** Left-facing unit normal (-uy, ux): points INTO a CCW polygon. */
+  nx: number;
+  ny: number;
+}
+
+function segInfo(poly: Vec2[], si: number): SegInfo | undefined {
+  const a = poly[si];
+  const b = poly[(si + 1) % poly.length];
+  if (!a || !b) return undefined;
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return undefined;
+  return {
+    start: a,
+    end: b,
+    len,
+    ux: dx / len,
+    uy: dy / len,
+    nx: -dy / len,
+    ny: dx / len,
+  };
+}
+
+
 function parseRooms(
   raw: unknown,
   basePath: string,
@@ -145,6 +378,10 @@ function parseRooms(
   /** Shared plan-wide id namespace (issue #74): entity ids are unique
    * across the WHOLE plan, so callers pass one Set walked floor by floor. */
   roomIds: Set<string>,
+  /** Global wallHeight (NaN-safe: roof checks self-guard on finiteness). */
+  wallHeight: number,
+  /** Whether THIS floor is the plan's topmost (only it may carry roofs). */
+  isTopFloor: boolean,
 ): ParsedEntities {
   const entities: ParsedEntities = { roomIds, segLens: new Map() };
   if (!Array.isArray(raw)) {
@@ -187,6 +424,8 @@ function parseRooms(
         });
       }
     }
+
+    checkRoomRoofs(rp, r ?? {}, poly ?? [], wallHeight, isTopFloor, c);
   });
   return entities;
 }
@@ -342,7 +581,9 @@ export function validateFloorplan(json: unknown): ValidationResult<FloorplanData
       }
       if (isNum(fl?.elevation)) prevElevation = fl.elevation;
 
-      const ents = parseRooms(fl?.rooms, `${bp}.rooms`, c, idNamespace);
+      const isTopFloor = fi === (d.floors as unknown[]).length - 1;
+      const wh = isNum(d.wallHeight) ? (d.wallHeight as number) : NaN;
+      const ents = parseRooms(fl?.rooms, `${bp}.rooms`, c, idNamespace, wh, isTopFloor);
       parseOpenings(fl?.openings, `${bp}.openings`, ents, c);
       parseFurniture(fl?.furniture, `${bp}.furniture`, ents, c);
     });
