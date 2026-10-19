@@ -37,9 +37,12 @@ export function formatDistanceLabel(meters: number): string {
   return `${meters.toFixed(2)} m`;
 }
 
-/** "53.1°" — one decimal. */
+/** "53.1°" — one decimal, clamped to [0, 360) after rounding (a raw
+ * angle in [~359.95, 360) would otherwise format as "360.0°"; same
+ * clamp as angleReadouts.ts — reviewer should-fix, cross-package parity). */
 export function formatAngleLabel(degrees: number): string {
-  return `${degrees.toFixed(1)}\u00B0`;
+  const shown = Number(degrees.toFixed(1)) % 360;
+  return `${shown.toFixed(1)}\u00B0`;
 }
 
 /** Combined pill text, e.g. "5.00 m · 53.1°". */
