@@ -36,11 +36,13 @@ async function loadTwoRooms(page: Page): Promise<void> {
         {
           id: 'r1',
           name: 'Studio A',
+          // CCW winding (positive shoelace) — the autosave hydrate leg
+          // VALIDATES the slot, and the v2 validator rejects CW polygons.
           polygon: [
             [0.5, -0.5],
-            [4.5, -0.5],
-            [4.5, -3.5],
             [0.5, -3.5],
+            [4.5, -3.5],
+            [4.5, -0.5],
           ],
           floorTexture: null,
         },
@@ -49,9 +51,9 @@ async function loadTwoRooms(page: Page): Promise<void> {
           name: 'Studio B',
           polygon: [
             [5, -0.5],
-            [7, -0.5],
-            [7, -3.5],
             [5, -3.5],
+            [7, -3.5],
+            [7, -0.5],
           ],
           floorTexture: 'carpet',
         },
@@ -222,5 +224,51 @@ test.describe.serial('floor texture picker (issue #119)', () => {
     expect(errors).toEqual([]);
     expect(recipientErrors).toEqual([]);
     await ctx.close();
+  });
+
+  test('raw payload WITHOUT the floorTexture key: None checked, pickable, no crash', async ({
+    page,
+  }) => {
+    // The loadPlan bridge takes raw payloads (the mini-3D specs seed a
+    // plan whose rooms omit floorTexture entirely) — the painter AND the
+    // picker must tolerate the missing field: no page errors, "None"
+    // reads as checked, and the first pick still commits.
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(String(err)));
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__casaplaza.loadPlan({
+        schemaVersion: 1,
+        units: 'meters',
+        wallHeight: 2.7,
+        wallThickness: 0.24,
+        rooms: [
+          {
+            id: 'r1',
+            name: 'Studio A',
+            polygon: [
+              [0.5, -0.5],
+              [0.5, -3.5],
+              [4.5, -3.5],
+              [4.5, -0.5],
+            ],
+            // floorTexture intentionally OMITTED.
+          },
+        ],
+        openings: [],
+        furniture: [],
+      });
+    });
+
+    await openPanelOn(page, 2.5, -2);
+    await expect(page.getByTestId('insp-tex-none')).toBeChecked();
+
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByTestId('insp-tex-wood')).toBeChecked();
+    expect(await textures(page)).toMatchObject({ r1: 'wood' });
+
+    expect(errors).toEqual([]);
   });
 });

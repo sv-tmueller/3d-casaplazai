@@ -193,7 +193,9 @@ function recordingProxy(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   ) as unknown as CanvasRenderingContext2D;
 }
 
-/** The cached pattern canvas for a kind (drawn on first use). */
+/** The cached pattern canvas for a kind (drawn on first use). Kind must
+ * be a KNOWN FLOOR_PATTERN_KIND — getFloorPattern() is the guarded entry
+ * point; everything downstream may assume a real drawer. */
 export function getFloorPatternCanvas(kind: FloorPatternKind): HTMLCanvasElement {
   const cached = canvasCache.get(kind);
   if (cached) return cached;
@@ -208,14 +210,27 @@ export function getFloorPatternCanvas(kind: FloorPatternKind): HTMLCanvasElement
 }
 
 /**
+ * Membership guard. Raw payloads (the loadPlan bridge, rogue JSON) can
+ * omit the floorTexture key entirely (=> undefined) or carry a value
+ * outside the enum — the painter must degrade to the plain room fill,
+ * never crash (pkg 14.4 fix round: the mini-3D specs seed exactly such
+ * a plan).
+ */
+function isFloorPatternKind(value: unknown): value is FloorPatternKind {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(DRAWERS, value);
+}
+
+/**
  * A repeat pattern for the kind, memoized per 2D context. Returns null
- * when the context cannot create patterns (unit-spec stubs) — callers
- * fall back to the plain room fill.
+ * when the kind is unknown/missing OR the context cannot create
+ * patterns (unit-spec stubs) — callers fall back to the plain room
+ * fill.
  */
 export function getFloorPattern(
   kind: FloorPatternKind,
   ctx: CanvasRenderingContext2D,
 ): CanvasPattern | null {
+  if (!isFloorPatternKind(kind)) return null;
   let perCtx = patternCache.get(ctx);
   if (!perCtx) {
     perCtx = new Map();

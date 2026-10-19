@@ -88,6 +88,16 @@ describe('getFloorPattern — per-context memoized CanvasPattern', () => {
     expect(getFloorPattern('wood', stub)).toBeNull();
   });
 
+  it('unknown or MISSING kinds yield no pattern (raw payloads may omit the field)', () => {
+    // loadPlan accepts payloads that the validator would later refuse:
+    // a room may carry floorTexture === undefined (key omitted) or a
+    // value outside the enum. Neither may CRASH the painter — both must
+    // degrade to the plain room fill (null pattern).
+    const { ctx } = fakeCtx();
+    expect(getFloorPattern('marble' as FloorPatternKind, ctx)).toBeNull();
+    expect(getFloorPattern(undefined as unknown as FloorPatternKind, ctx)).toBeNull();
+  });
+
   it('a cleared cache still serves a valid pattern', () => {
     const { ctx } = fakeCtx();
     expect(getFloorPattern('carpet', ctx)).not.toBeNull();
