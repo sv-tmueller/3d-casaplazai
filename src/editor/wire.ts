@@ -28,12 +28,35 @@ export function toLegacyWire(plan: FloorplanData): FloorplanDataV1 {
 }
 
 /**
+ * FIX ROUND 1 (issue #119, finding 1 — data loss): raw payloads may omit
+ * the floorTexture key entirely (the mini-3D specs and hand-written JSON
+ * do). migrate() leaves the field undefined, JSON.stringify then DROPS
+ * the key on persist, and the next boot's hydrate validation rejects the
+ * slot (`undefined !== null` → unknown-floor-texture) — which wiped the
+ * plan back to emptyPlan. Canonicalize AT INTAKE: every room of every
+ * floor leaves with an explicit null, so the persistence lane never
+ * writes a payload its own reader refuses.
+ */
+function backfillFloorTextures(plan: FloorplanData): FloorplanData {
+  return {
+    ...plan,
+    floors: plan.floors.map((floor) => ({
+      ...floor,
+      rooms: floor.rooms.map((room) => ({
+        ...room,
+        floorTexture: room.floorTexture ?? null,
+      })),
+    })),
+  };
+}
+
+/**
  * Normalize ANY incoming plan (v1 wire or v2 native) to current v2.
  * Falls back to the empty plan when the payload is unusable — mirrors
  * the pre-v2 behavior where a bad loadPlan simply swapped the plan.
  */
 export function normalizeIncoming(plan: unknown): FloorplanData {
   const migrated = migrate(plan);
-  if (migrated.ok && migrated.data) return migrated.data;
+  if (migrated.ok && migrated.data) return backfillFloorTextures(migrated.data);
   return emptyPlan();
 }

@@ -12,20 +12,22 @@
  * to a recording proxy whose call trail lands on
  * globalThis.__casaFloorTrails for structural assertions.
  */
-import type { FloorTexture } from '../../shared/schema';
+import { FLOOR_TEXTURES } from '../../shared/schema';
 
-export type FloorPatternKind = NonNullable<FloorTexture>;
+/**
+ * FIX ROUND 1 (issue #119, finding 2 — drift): the kind union and the
+ * picker list are DERIVED from the schema's FLOOR_TEXTURES tuple. The
+ * previous hand-written literals could silently drift when a 5th
+ * material lands; DRAWERS below is a Record over the same union, so a
+ * NEW tuple member fails compilation until its drawer exists.
+ */
+export type FloorPatternKind = (typeof FLOOR_TEXTURES)[number];
 
 /** Pattern cell edge, CSS px (screen-space fill — no camera scaling). */
 export const FLOOR_PATTERN_CELL_PX = 48;
 
-/** The four kinds in picker order (schema stays the source of truth). */
-export const FLOOR_PATTERN_KINDS: readonly FloorPatternKind[] = [
-  'wood',
-  'tile',
-  'carpet',
-  'concrete',
-];
+/** The kinds in picker order — the schema tuple IS the order. */
+export const FLOOR_PATTERN_KINDS: readonly FloorPatternKind[] = FLOOR_TEXTURES;
 
 const canvasCache = new Map<FloorPatternKind, HTMLCanvasElement>();
 let patternCache = new WeakMap<

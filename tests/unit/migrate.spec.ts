@@ -17,6 +17,7 @@ import { SCHEMA_VERSION, migrate, registerTransform, validateFloorplan } from '.
 import { AUTOSAVE_KEY, AutosaveManager } from '../../src/editor/autosave';
 import { EditorStore, emptyPlan } from '../../src/editor/store';
 import { hydrateFromAutosave } from '../../src/editor/glue';
+import { normalizeIncoming } from '../../src/editor/wire';
 
 /** Minimal but REAL v1 payload (localStorage-autosave shaped). */
 function v1Payload(): FloorplanDataV1 {
@@ -167,6 +168,40 @@ describe('loader path 1 — editor autosave hydration (glue.hydrateFromAutosave)
     hydrateFromAutosave(store, autosave);
     expect(store.getState().data.floors[0].rooms).toHaveLength(0);
     expect(storage.getItem(AUTOSAVE_KEY)).toBeNull();
+  });
+
+  /**
+   * Pkg 14.4 (#119) fix round, reviewer finding 1 (MUST-FIX, data loss).
+   *
+   * Raw payloads (mini-3D/e2e seeds, hand-written JSON) may OMIT the
+   * floorTexture key. At tip: migrate leaves the field undefined -> the
+   * slot's JSON.stringify DROPS the key -> the NEXT boot's hydrate
+   * validation rejects it (unknown-floor-texture) -> the autosave slot is
+   * cleared -> emptyPlan replaces the user's whole plan. Intake must
+   * canonicalize the field to an explicit null so the persistence lane
+   * never writes a payload its own reader refuses.
+   */
+  it('key-omitted floorTexture survives the loadPlan -> reload cycle (with null)', () => {
+    const storage = new FakeStorage();
+    const autosave = new AutosaveManager(storage);
+    const keyless = structuredClone(v1Payload()) as unknown as {
+      rooms: Array<Record<string, unknown>>;
+    };
+    delete keyless.rooms[0].floorTexture;
+
+    // 1) loadPlan intake (main.ts bridge) — backfill must land here.
+    const normalized = normalizeIncoming(keyless);
+    expect(normalized.floors[0].rooms[0].floorTexture).toBeNull();
+
+    // 2) loadPlan persists synchronously right after replaceAll …
+    autosave.persistSync(normalized);
+
+    // 3) … and the NEXT boot must HYDRATE (not wipe) the plan.
+    const store = new EditorStore(emptyPlan());
+    hydrateFromAutosave(store, autosave);
+    expect(store.getState().data.floors[0].rooms).toHaveLength(1);
+    expect(store.getState().data.floors[0].rooms[0].floorTexture).toBeNull();
+    expect(storage.getItem(AUTOSAVE_KEY)).not.toBeNull();
   });
 });
 

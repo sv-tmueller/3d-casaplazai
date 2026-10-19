@@ -617,7 +617,6 @@ function renderRoom(
     const input = document.createElement('input');
     input.type = 'radio';
     input.name = 'insp-floor-material';
-    input.value = opt.value ?? 'none';
     input.checked = (room.floorTexture ?? null) === opt.value;
     input.dataset.testid = opt.testid;
     input.addEventListener('change', () => {

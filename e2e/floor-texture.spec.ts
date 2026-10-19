@@ -147,12 +147,14 @@ test.describe.serial('floor texture picker (issue #119)', () => {
     await expect(page.getByTestId('insp-tex-wood')).toBeChecked();
     await expect(page.getByTestId('insp-tex-none')).not.toBeChecked();
     expect(await textures(page)).toMatchObject({ r1: 'wood', r2: 'carpet' });
-    await page.waitForTimeout(50);
+    // FIX ROUND 1 (finding 3): no fixed sleeps. glue repaints
+    // SYNCHRONOUSLY off the store subscribe (glue.ts) and sampleRegion
+    // reads the live canvas backing store, so the committed-state
+    // assertion above IS the repaint signal.
     const wood = await sampleRegion(page, 2.5, -2);
 
     await page.keyboard.press('ArrowRight');
     await expect(page.getByTestId('insp-tex-tile')).toBeChecked();
-    await page.waitForTimeout(50);
     const tile = await sampleRegion(page, 2.5, -2);
 
     // The 2D canvas: material vs no-material changes the region, and
@@ -179,8 +181,32 @@ test.describe.serial('floor texture picker (issue #119)', () => {
 
     await closePanel(page);
 
-    // AUTOSAVE LEG: wait out the debounce, reload, hydrate from the slot.
-    await page.waitForTimeout(1100);
+    // AUTOSAVE LEG: poll the SLOT itself instead of waiting out the
+    // debounce (fix round 1, finding 3) — "slot holds both picks" is the
+    // deterministic signal; the 800 ms debounce is an implementation
+    // detail. The slot carries RAW v2 data (pkg 7.2/issue #75), so rooms
+    // nest under floors[0] — and an explicit null when untextured
+    // (finding 1: the intake backfill keeps this payload reload-safe).
+    await expect
+      .poll(async () => {
+        const raw = await page.evaluate(() =>
+          localStorage.getItem('casaplaza.autosave.v1'),
+        );
+        if (raw === null) return null;
+        try {
+          const rooms = (
+            JSON.parse(raw) as {
+              floors?: { rooms?: { id: string; floorTexture?: string | null }[] }[];
+            }
+          ).floors?.[0]?.rooms ?? [];
+          const byId: Record<string, string | null> = {};
+          for (const r of rooms) byId[r.id] = r.floorTexture ?? null;
+          return { r1: byId['r1'], r2: byId['r2'] };
+        } catch {
+          return null;
+        }
+      })
+      .toEqual({ r1: 'wood', r2: 'carpet' });
     await page.reload();
     await page.locator('.editor-canvas').waitFor();
     expect(await textures(page)).toMatchObject({ r1: 'wood', r2: 'carpet' });
@@ -259,6 +285,18 @@ test.describe.serial('floor texture picker (issue #119)', () => {
         furniture: [],
       });
     });
+
+    await openPanelOn(page, 2.5, -2);
+    await expect(page.getByTestId('insp-tex-none')).toBeChecked();
+
+    // FIX ROUND 1 (finding 1, data loss): the keyless payload was
+    // persisted WITHOUT the floorTexture key. At tip the next boot's
+    // hydrate validation rejected the slot (undefined is not null) and
+    // emptyPlan silently replaced the whole plan — reload must keep it,
+    // with an explicit null.
+    await page.reload();
+    await page.locator('.editor-canvas').waitFor();
+    expect(await textures(page)).toMatchObject({ r1: null });
 
     await openPanelOn(page, 2.5, -2);
     await expect(page.getByTestId('insp-tex-none')).toBeChecked();
