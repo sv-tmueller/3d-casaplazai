@@ -454,6 +454,32 @@ function segmentProbesInterior(p: Vec2, q: Vec2, poly: Vec2[]): boolean {
 }
 
 /**
+ * True when both polygons describe the same footprint: equal vertex
+ * counts with a one-to-one correspondence of vertices within
+ * OVERLAP_EPS (start vertex and winding are irrelevant).
+ */
+function polygonsCoincide(polyA: Vec2[], polyB: Vec2[]): boolean {
+  if (polyA.length !== polyB.length) return false;
+  const matched = new Array<boolean>(polyB.length).fill(false);
+  for (const v of polyA) {
+    let hit = false;
+    for (let j = 0; j < polyB.length; j += 1) {
+      if (
+        !matched[j] &&
+        Math.abs(v[0] - polyB[j][0]) <= OVERLAP_EPS &&
+        Math.abs(v[1] - polyB[j][1]) <= OVERLAP_EPS
+      ) {
+        matched[j] = true;
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) return false;
+  }
+  return true;
+}
+
+/**
  * True interior overlap between two room polygons (issue #112): the
  * impostor purge's honest probe, replacing the vertex-AVERAGE
  * containment proxy, which misses overlaps whose centroids happen to
@@ -468,7 +494,22 @@ function segmentProbesInterior(p: Vec2, q: Vec2, poly: Vec2[]): boolean {
  *       other — the T-junction impostor signature (a wall floating
  *       just inside a neighbour's footprint, both endpoints on the
  *       neighbour's boundary), which produces NO proper crossings
- *       and NO interior vertices (the 8 mm-east cross-pair repro).
+ *       and NO interior vertices (the 8 mm-east cross-pair repro), or
+ *   (d) the two footprints are exactly coincident (equal vertex sets
+ *       up to winding/start). Full coincidence is invisible to
+ *       (a)-(c): every boundary point is a contact, nothing is ever
+ *       "strictly" inside. Stacked storeys sharing a footprint must
+ *       stay purged — without this the upper twin leaks a phantom
+ *       cross-storey row that carves real geometry via flatOpenings
+ *       roomId resolution in compile.ts (fix round #112 regression).
+ *
+ * (a) is subsumed by (b)/(c) for every non-degenerate pair — a proper
+ * crossing forces a strictly-interior stretch adjacent to it, which
+ * (c) probes — so no test can isolate (a): deleting it is an
+ * equivalent mutant (verified over an adversarial 164k-pair search,
+ * including 3,927 collinear-aligned pairs). It is kept as the direct
+ * expression of the crossing signature.
+ *
  * A cheap AABB pre-filter rejects disjoint pairs first (rectilinear
  * plans resolve instantly).
  */
@@ -512,6 +553,7 @@ function roomsOverlap(polyA: Vec2[], polyB: Vec2[]): boolean {
   for (let i = 0; i < polyB.length; i += 1) {
     if (segmentProbesInterior(polyB[i], polyB[(i + 1) % polyB.length], polyA)) return true;
   }
+  if (polygonsCoincide(polyA, polyB)) return true;
   return false;
 }
 
