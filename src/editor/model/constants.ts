@@ -32,6 +32,17 @@ export const UNDO_STACK_CAP = 100;
  */
 export const PAIR_TOLERANCE_M = 0.01;
 
+/**
+ * Absolute sane-extent bound for plan vertices, meters (issue #107).
+ * Deliberately NOT relative to the current bounding box — a bbox-
+ * coupled bound would make a legit outward drag near the edge flake
+ * depending on unrelated rooms. Deterministic, far beyond any real
+ * floorplan, and catches the typed-99999 case. INCLUSIVE: a vertex at
+ * exactly ±this limit is a legal reshape; beyond it resizeRoom
+ * rejects with 'vertex beyond plan extent limit'.
+ */
+export const PLAN_EXTENT_LIMIT_M = 1000;
+
 /** Sensible default footprints [extentA, extentB] in meters. */
 export const FURNITURE_DEFAULTS: Record<
   string,

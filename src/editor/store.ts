@@ -11,6 +11,7 @@ import type { FloorplanData, Floor, Opening, Room, Vec2 } from '../shared/schema
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
 import type { UnderlayState } from './model/underlay';
+import { PLAN_EXTENT_LIMIT_M } from './model/constants';
 import {
   mirrorT,
   overlapHosts,
@@ -272,6 +273,19 @@ function reduceResizeRoom(
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
   if (cmd.vertexIndex < 0 || cmd.vertexIndex >= room.polygon.length) {
     return { ok: false, error: `vertexIndex ${cmd.vertexIndex} out of range` };
+  }
+  // Issue #107: shared sane-extent guard. Both commit paths (typed
+  // inspector fields AND drag frames) funnel into this reducer, so the
+  // bound here rejects both IDENTICALLY by construction — no per-path
+  // code. REJECT, not clamp: clamping a typed 99999 to 1000 would
+  // silently lie about the geometry; rejection rides the existing
+  // Result plumbing (typed path flashes res.error, drag keeps the old
+  // vertex) and stays undo-rescuable. Inclusive at the limit.
+  if (
+    Math.abs(cmd.newPos[0]) > PLAN_EXTENT_LIMIT_M ||
+    Math.abs(cmd.newPos[1]) > PLAN_EXTENT_LIMIT_M
+  ) {
+    return { ok: false, error: 'vertex beyond plan extent limit' };
   }
   room.polygon[cmd.vertexIndex] = [cmd.newPos[0], cmd.newPos[1]];
   return { ok: true };
