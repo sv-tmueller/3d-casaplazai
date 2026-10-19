@@ -6,6 +6,7 @@
  */
 import type { FloorplanData, Opening, Room, Vec2 } from '../../shared/schema';
 import { flatOpenings, flatRooms } from '../../shared/schema';
+import { pointInPolygon } from './furniture';
 import {
   EDGE_MARGIN_M,
   PAIR_TOLERANCE_M,
@@ -299,11 +300,218 @@ export function mirrorT(worldPoint: Vec2, cand: SegmentInfo): number {
 }
 
 /**
+ * Depth of `room`'s interior along the wall-normal line through the
+ * cut point (issue #40, part b): the length of the FIRST interior
+ * band the normal line crosses, taken as the max over both normal
+ * orientations (so the measure is independent of the segment's
+ * traversal winding).
+ *
+ * Computed EXACTLY by ray-edge crossing (no sampling): the cut sits
+ * on the host wall, so the first band the line meets is the interior
+ * stretch adjacent to the candidate wall — the honest measure of
+ * "can a doorway breathe on this side". A sub-tolerance sliver
+ * closet (band < PAIR_TOLERANCE_M) therefore can never host a mirror
+ * row: the cut walks through to the real room across the sliver
+ * instead of stamping faces on both closet walls. Offset walls are
+ * handled naturally — the band starts at the wall, not at the cut.
+ */
+export function interiorDepthThrough(
+  room: Room,
+  cutWorld: Vec2,
+  cand: SegmentInfo,
+): number {
+  const [nx, ny] = segmentNormal(cand);
+  const band = (dx: number, dy: number): number => {
+    const ts: number[] = [];
+    const poly = room.polygon;
+    for (let i = 0; i < poly.length; i += 1) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      // Half-open crossing rule (PNPOLY heritage): each genuine
+      // crossing of the line {cutWorld + t*(dx,dy)} counts exactly
+      // once, immune to vertex-grazing double counts.
+      const ca = dx * (a[1] - cutWorld[1]) - dy * (a[0] - cutWorld[0]);
+      const cb = dx * (b[1] - cutWorld[1]) - dy * (b[0] - cutWorld[0]);
+      if (ca > 0 === cb > 0) continue;
+      const ex = b[0] - a[0];
+      const ey = b[1] - a[1];
+      const denom = dx * ey - dy * ex;
+      if (denominatorZero(denom)) continue;
+      const t = ((a[0] - cutWorld[0]) * ey - (a[1] - cutWorld[1]) * ex) / denom;
+      if (t >= -1e-9) ts.push(t);
+    }
+    ts.sort((p, q) => p - q);
+    // Dedupe near-identical crossings (corner grazes).
+    const uniq: number[] = [];
+    for (const t of ts) {
+      if (uniq.length === 0 || t - uniq[uniq.length - 1] > 1e-9) uniq.push(t);
+    }
+    // The cut lies on the candidate room's boundary line (never
+    // strictly inside), so the first interior band is [ts0, ts1].
+    return uniq.length >= 2 ? uniq[1] - uniq[0] : 0;
+  };
+  return Math.max(band(nx, ny), band(-nx, -ny));
+}
+
+/** Denominator guard for the ray-edge solve (parallel / degenerate). */
+function denominatorZero(d: number): boolean {
+  return Math.abs(d) < 1e-12;
+}
+
+/** Vertex-average centroid proxy (stable side probe for gate 1). */
+function vertexAverage(poly: Vec2[]): Vec2 {
+  let x = 0;
+  let y = 0;
+  for (const v of poly) {
+    x += v[0];
+    y += v[1];
+  }
+  return [x / poly.length, y / poly.length];
+}
+
+/**
+ * Candidate-segment qualification for mirror emission (issue #40):
+ * the candidate must represent the FAR face of a genuine shared-edge
+ * relationship, not merely a wall that happens to sit within
+ * PAIR_TOLERANCE_M of the host line.
+ *
+ * Gates, in order:
+ *  1. opposite-sided: the origin room and the candidate room must lie
+ *     on OPPOSITE sides of the candidate's line — the two rooms meet
+ *     ACROSS the wall, the defining trait of a shared edge.
+ *  2. depth: the candidate room's interior must reach at least
+ *     PAIR_TOLERANCE_M deep along the wall normal at the cut — a
+ *     sub-tolerance sliver closet cannot host a doorway on this face.
+ *
+ * Returns the mirror tCenter when the candidate qualifies, else null.
+ */
+export function qualifyMirrorCandidate(
+  seg: SegmentInfo,
+  cand: SegmentInfo,
+  originRoom: Room,
+  candRoom: Room,
+  tCenter: number,
+  width: number,
+): number | null {
+  const t = pairMirrorTHosted(seg, cand, tCenter, width);
+  if (t === null) return null;
+
+  // Gate 1 — opposite-sided across the candidate's line.
+  const [ux, uy] = segmentDirection(cand);
+  const side = (p: Vec2): number =>
+    -uy * (p[0] - cand.a[0]) + ux * (p[1] - cand.a[1]);
+  if (side(vertexAverage(originRoom.polygon)) * side(vertexAverage(candRoom.polygon)) >= 0) {
+    return null;
+  }
+
+  // Gate 2 — interior depth at the cut beats the pairing tolerance.
+  if (interiorDepthThrough(candRoom, pointAtT(seg, tCenter), cand) < PAIR_TOLERANCE_M) {
+    return null;
+  }
+
+  return t;
+}
+
+/** Hosted mirror tCenter (pure geometric hosting test), or null. */
+function pairMirrorTHosted(
+  seg: SegmentInfo,
+  cand: SegmentInfo,
+  tCenter: number,
+  width: number,
+): number | null {
+  const ov = sharedWallOverlap(seg, cand);
+  if (!ov) return null;
+  const half = width / 2;
+  const cutLo = tCenter * seg.length - half;
+  const cutHi = tCenter * seg.length + half;
+  if (!overlapHosts(ov, cutLo, cutHi)) return null;
+  return mirrorT(pointAtT(seg, tCenter), cand);
+}
+
+/**
+ * The honest mirror set for a freshly committed cut (issue #40):
+ * for every OTHER room, the SINGLE nearest qualifying counterpart
+ * segment (if any), then an IMPOSTOR PURGE — in a valid plan the
+ * rooms sharing a wall have disjoint interiors, so when two
+ * surviving candidate rooms overlap each other (an unrelated wall
+ * floated within the pairing tolerance of a genuine shared wall, as
+ * in the 8 mm-east cross-pair repro), the one FARTHER from the host
+ * line is spurious and is dropped. Genuine multi-neighbor walls
+ * (two rooms adjoining different stretches of the host wall) have
+ * disjoint interiors and both keep their rows.
+ *
+ * Single source of truth: derivePairRows (model) and the store's
+ * addOpening emission loop BOTH route through here, so the two layers
+ * agree by construction.
+ */
+export function mirrorCounterparts(
+  plan: FloorplanData,
+  originRoomId: string,
+  seg: SegmentInfo,
+  tCenter: number,
+  width: number,
+): Array<{ roomId: string; segmentIndex: number; t: number }> {
+  const originRoom = flatRooms(plan).find((r) => r.id === originRoomId);
+  if (!originRoom) return [];
+
+  // Per-room nearest qualifying counterpart.
+  const perRoom = new Map<
+    string,
+    { segmentIndex: number; t: number; perp: number }
+  >();
+  for (const other of flatRooms(plan)) {
+    if (other.id === originRoomId) continue;
+    let best: { segmentIndex: number; t: number; perp: number } | null = null;
+    for (const cand of roomSegments(other)) {
+      const t = qualifyMirrorCandidate(seg, cand, originRoom, other, tCenter, width);
+      if (t === null) continue;
+      // Perpendicular distance of the candidate wall from the host
+      // line: nearer (smaller) = more likely the genuine shared edge.
+      const mx = (cand.a[0] + cand.b[0]) / 2;
+      const my = (cand.a[1] + cand.b[1]) / 2;
+      const hl = seg.length || 1;
+      const hx = (seg.b[0] - seg.a[0]) / hl;
+      const hy = (seg.b[1] - seg.a[1]) / hl;
+      const perp = Math.abs(-hy * (mx - seg.a[0]) + hx * (my - seg.a[1]));
+      if (!best || perp < best.perp) best = { segmentIndex: cand.index, t, perp };
+    }
+    if (best) perRoom.set(other.id, best);
+  }
+
+  // Impostor purge: overlapping candidate rooms cannot both be genuine
+  // neighbours of the host wall — keep the nearer to the host line.
+  const drop = new Set<string>();
+  for (const [idA, a] of perRoom) {
+    if (drop.has(idA)) continue;
+    const roomA = flatRooms(plan).find((r) => r.id === idA)!;
+    const avgA = vertexAverage(roomA.polygon);
+    for (const [idB, b] of perRoom) {
+      if (idB === idA || drop.has(idB)) continue;
+      const roomB = flatRooms(plan).find((r) => r.id === idB)!;
+      const overlap = pointInPolygon(avgA, roomB.polygon) ||
+        pointInPolygon(vertexAverage(roomB.polygon), roomA.polygon);
+      if (!overlap) continue;
+      // Farther from the host line is the impostor; ties drop the
+      // higher id for determinism.
+      if (a.perp < b.perp) drop.add(idB);
+      else if (b.perp < a.perp) drop.add(idA);
+      else if (idA < idB) drop.add(idB);
+      else drop.add(idA);
+    }
+  }
+
+  return [...perRoom.entries()]
+    .filter(([id]) => !drop.has(id))
+    .map(([roomId, v]) => ({ roomId, segmentIndex: v.segmentIndex, t: v.t }));
+}
+
+
+/**
  * Emit BOTH rows for a door committed on a possibly-shared wall:
- * the originating row plus, for each OTHER room holding a coincident
- * counterpart segment, a mirrored row with complementary tCenter when
- * that segment traverses the shared edge in the opposite direction
- * (canonical shared-wall case) or identical t when co-directed.
+ * the originating row plus the honest mirror set (issue #40 — see
+ * mirrorCounterparts: opposite-sided across the overlap, interior-
+ * deep enough to host a doorway, nearest counterpart per room,
+ * overlapping-room impostors purged).
  */
 export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRowSpec[] {
   const originRoom = flatRooms(plan).find((r) => r.id === origin.roomId);
@@ -311,25 +519,15 @@ export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRo
   const seg = roomSegments(originRoom)[origin.segmentIndex];
   if (!seg) return [origin];
 
-  const cutHalf = (origin.width ?? 0) / 2;
-  const cutLo = origin.tCenter * seg.length - cutHalf;
-  const cutHi = origin.tCenter * seg.length + cutHalf;
-  const world = pointAtT(seg, origin.tCenter);
-
   const rows: PairRowSpec[] = [origin];
-  for (const other of flatRooms(plan)) {
-    if (other.id === origin.roomId) continue;
-    for (const cand of roomSegments(other)) {
-      const ov = sharedWallOverlap(seg, cand);
-      if (!ov || !overlapHosts(ov, cutLo, cutHi)) continue;
-      const mirror: PairRowSpec = {
-        roomId: other.id,
-        segmentIndex: cand.index,
-        tCenter: mirrorT(world, cand),
-      };
-      if (origin.width !== undefined) mirror.width = origin.width;
-      rows.push(mirror);
-    }
+  for (const m of mirrorCounterparts(plan, origin.roomId, seg, origin.tCenter, origin.width ?? 0)) {
+    const mirror: PairRowSpec = {
+      roomId: m.roomId,
+      segmentIndex: m.segmentIndex,
+      tCenter: m.t,
+    };
+    if (origin.width !== undefined) mirror.width = origin.width;
+    rows.push(mirror);
   }
   return rows;
 }
