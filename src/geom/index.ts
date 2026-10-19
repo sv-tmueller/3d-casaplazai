@@ -9,7 +9,9 @@ export type {
   CompiledScene,
   FurnitureVolume,
   MeshBuffer,
+  QuadCorners,
   RoomMeshes,
+  StairSolid,
 } from './types';
 export {
   FloorplanCompileError,
@@ -18,10 +20,24 @@ export {
   OpeningOverflowError,
   OverlappingOpeningsError,
   FurnitureOutOfBoundsError,
+  OverlappingStairHolesError,
+  StairGapMismatchError,
+  StairOutOfBoundsException,
+  UnknownStairRoomError,
 } from './errors';
-export { parseValidatedPlan, validateGeometry } from './validate';
+export { parseValidatedPlan, validateGeometry, validateStairs } from './validate';
 export { earClipIndices } from './earclip';
 export { buildFloor, buildCeiling, effectiveCeilingHeight } from './surfaces';
+export { buildFloorWithHoles } from './floorHole';
+export {
+  buildStairSteps,
+  stairFlankBoxes,
+  stairFootprint,
+  stairHoleRect,
+  stairProgress,
+  stairWorldRect,
+  STAIR_FLANK_THICKNESS,
+} from './stairs';
 export {
   buildSlab,
   partitionLongitudinal,

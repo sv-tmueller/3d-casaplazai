@@ -25,6 +25,7 @@ import type {
   CollisionBox,
   MaterialBucket,
   MaterialSlotId,
+  StairWalkSurface,
 } from './types';
 
 /** Centers closer than this (meters) count as duplicated wall slabs. */
@@ -333,6 +334,19 @@ export function adaptScene(
     });
   };
 
+  // ---- Stair solids (issue #80) ---------------------------------------
+  // Step boxes ride the WOOD floor slot (sub-plan: reuse an existing
+  // material slot — no new slot plumbing): folded into the wood floor
+  // bucket BEFORE it is flushed below, so a plan with wooden floors
+  // draws them exactly once. Freestanding solids — the wall dedupe /
+  // coplanar passes never see them.
+  const stairMeshes = compiled.stairs ?? [];
+  if (stairMeshes.length > 0) {
+    const arr = floorByTex.get('wood') ?? [];
+    arr.push(...stairMeshes.map((s) => s.mesh));
+    floorByTex.set('wood', arr);
+  }
+
   for (const [slot, bufs] of [...floorByTex.entries()].sort(sortSlots)) {
     pushBucket(slot, bufs);
   }
@@ -502,12 +516,28 @@ export function adaptScene(
     ? plan.floors[0]?.elevation ?? 0
     : 0;
 
+  // Stair walk surfaces (issue #80): forwarded verbatim (mesh aside)
+  // for the grounding resolver. Order preserved from the compiler;
+  // absent field (hand-built scenes in old tests) normalizes to [].
+  const stairs: StairWalkSurface[] = (compiled.stairs ?? []).map((s) => ({
+    rect: s.rect.map((c) => [c[0], c[1]] as [number, number]),
+    hole: s.hole.map((c) => [c[0], c[1]] as [number, number]),
+    ux: s.ux,
+    uy: s.uy,
+    ax: s.ax,
+    ay: s.ay,
+    zLower: s.zLower,
+    rise: s.rise,
+    run: s.run,
+  }));
+
   return {
     buckets,
     collisions,
     triangleCount,
     bounds: { minX, minY, maxX, maxY },
     activeFloorElevation,
+    stairs,
   };
 }
 

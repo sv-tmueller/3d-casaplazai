@@ -51,6 +51,17 @@ export interface MeshBuffer {
 }
 
 /**
+ * A quadrilateral in plan coordinates, corners CCW starting at the
+ * downhill/left corner (stair footprints + landing holes, pkg 7.4).
+ */
+export type QuadCorners = [
+  [number, number],
+  [number, number],
+  [number, number],
+  [number, number],
+];
+
+/**
  * Surfaces belonging to a single room. Additive (issue #76): the owning
  * floor's elevation is carried per-room so the viewer can attribute
  * rooms to storeys WITHOUT re-deriving the mapping from plan.floors.
@@ -78,4 +89,44 @@ export interface CompiledScene {
   collisions: Aabb[];
   /** Oriented volumes for furniture stamps. */
   furniture: FurnitureVolume[];
+  /**
+   * Walkable staircases (pkg 7.4): footprint rect + grounding
+   * parameters + merged step-box mesh, one per Staircase, in plan
+   * order. OPTIONAL only so hand-built CompiledScene literals in
+   * pre-7.4 tests stay valid — compilePlan ALWAYS emits it ([] for
+   * stair-free plans) and the adapter normalizes absence to [].
+   */
+  stairs?: StairSolid[];
+}
+
+/**
+ * One straight-flight staircase as the walk resolver consumes it
+ * (pkg 7.4): world-space footprint rect plus the z parameters the
+ * grounding interpolates over, bundled with the merged step-box MESH
+ * (already world-z; the adapter routes it into the wood floor slot).
+ */
+export interface StairSolid {
+  /** Footprint corners, CCW, downhill-left first (stairWorldRect). */
+  rect: QuadCorners;
+  /**
+   * Landing-hole corners (footprint extended one tread past the top
+   * riser — stairHoleRect). The grounding resolver works in THIS
+   * rect: the arrival slab is holed across it and the ramp spans the
+   * extension level with the arrival plane (seamless cresting).
+   */
+  hole: QuadCorners;
+  /** Uphill unit direction (stair local +x). */
+  ux: number;
+  uy: number;
+  /** Downhill edge midpoint (progress 0). */
+  ax: number;
+  ay: number;
+  /** Elevation of the departure (lower) floor, meters. */
+  zLower: number;
+  /** Vertical climb to the arrival floor, meters. */
+  rise: number;
+  /** Horizontal length of the flight, meters. */
+  run: number;
+  /** Merged solid step boxes (stepCount prisms), world z. */
+  mesh: MeshBuffer;
 }

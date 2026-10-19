@@ -17,8 +17,9 @@ import type {
   FurnitureVolume,
   MeshBuffer,
   RoomMeshes,
+  StairSolid,
 } from './types';
-import { buildFloor, buildCeiling } from './surfaces';
+import { buildCeiling, buildFloor, effectiveCeilingHeight } from './surfaces';
 import {
   partitionLongitudinal,
   partitionVertical,
@@ -33,7 +34,15 @@ import {
 } from './collision';
 import { validateGeometry } from './validate';
 import { makeSegments } from './mathutil';
-import type { Aabb } from './types';
+import type { Aabb, QuadCorners } from './types';
+import { buildFloorWithHoles } from './floorHole';
+import {
+  buildStairSteps,
+  stairFlankBoxes,
+  stairFootprint,
+  stairHoleRect,
+  stairWorldRect,
+} from './stairs';
 
 /** Rotate a vector by deg degrees CCW. */
 function rot(deg: number, x: number, y: number): [number, number] {
@@ -51,6 +60,11 @@ export function countTriangles(scene: CompiledScene): number {
       n += buf.indices.length / 3;
     }
   }
+  // Stair solids (pkg 7.4) are scene geometry too — the honest count
+  // includes their merged step meshes (empty for stair-free plans).
+  for (const s of scene.stairs ?? []) {
+    n += s.mesh.indices.length / 3;
+  }
   return n;
 }
 
@@ -61,6 +75,9 @@ export function countVertices(scene: CompiledScene): number {
     for (const buf of [rm.floor, rm.ceiling, ...rm.walls]) {
       n += buf.positions.length / 3;
     }
+  }
+  for (const s of scene.stairs ?? []) {
+    n += s.mesh.positions.length / 3;
   }
   return n;
 }
@@ -220,6 +237,41 @@ function furnitureVolumes(items: FurnitureItem[]): FurnitureVolume[] {
 export function compilePlan(plan: FloorplanData): CompiledScene {
   validateGeometry(plan);
 
+  // ---- Stair preprocessing (issue #80) -------------------------------
+  // STRICTLY GUARDED by plan.stairs.length > 0: stair-free plans (the
+  // apartment demo and every single-storey fixture) compile
+  // BYTE-IDENTICALLY to the pre-7.4 pipeline — the guard mirrors the
+  // skip-when-0 pattern the floors lift uses to protect goldens.
+  const elevationByRoom = new Map<string, number>();
+  if (plan.stairs.length > 0) {
+    for (const floor of plan.floors) {
+      for (const room of floor.rooms) {
+        elevationByRoom.set(room.id, floor.elevation);
+      }
+    }
+  }
+  // Landing holes grouped by the WORLD z of the plane they punch
+  // (insertion order = plan order ⇒ deterministic). Both surfaces at
+  // the arrival elevation take the punch: the upper floor's slab (the
+  // visible hole) AND the departure room's ceiling at the same z —
+  // without the latter the stair's top tread z-fights the coplanar
+  // ceiling fan and the walker's head pierces it mid-crest.
+  const holesByArrivalZ = new Map<number, QuadCorners[]>();
+  for (const stair of plan.stairs) {
+    const departureZ = elevationByRoom.get(stair.roomId)!;
+    const arrivalZ = departureZ + stair.rise;
+    const list = holesByArrivalZ.get(arrivalZ);
+    if (list) list.push(stairHoleRect(stair));
+    else holesByArrivalZ.set(arrivalZ, [stairHoleRect(stair)]);
+  }
+  /** Holes destined for a horizontal plane at world z (tol 1 mm). */
+  const holesForPlane = (z: number): QuadCorners[] => {
+    for (const [arrivalZ, holes] of holesByArrivalZ) {
+      if (Math.abs(arrivalZ - z) <= 1e-3) return holes;
+    }
+    return [];
+  };
+
   // PER-FLOOR COMPILE (issue #76): each floor's rooms are built in the
   // floor's own plan-local frame (surfaces/walls/windowpanes internals
   // stay elevation-blind) and then POST-LIFTED by dz = floor.elevation.
@@ -229,13 +281,28 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
   const rooms: RoomMeshes[] = [];
   for (const floor of plan.floors) {
     for (const room of floor.rooms) {
+      // Landing-hole punch (issue #80): floors at the arrival elevation
+      // and ceilings whose plane coincides with it lose the hole rect.
+      // buildFloorWithHoles returns null when the hole misses the room
+      // (or stairs[] is empty) — the plain fan keeps byte-identity.
+      const floorHoles = holesForPlane(floor.elevation);
+      const floorMesh =
+        (floorHoles.length > 0
+          ? buildFloorWithHoles(room.polygon, floorHoles, 0, false)
+          : null) ?? buildFloor(room);
+      const ceilZLocal = effectiveCeilingHeight(room, plan.wallHeight);
+      const ceilHoles = holesForPlane(floor.elevation + ceilZLocal);
+      const ceilMesh =
+        (ceilHoles.length > 0
+          ? buildFloorWithHoles(room.polygon, ceilHoles, ceilZLocal, true)
+          : null) ?? buildCeiling(room, plan.wallHeight);
       rooms.push(
         offsetRoomMeshesZ(
           {
             roomId: room.id,
             elevation: floor.elevation,
-            floor: buildFloor(room),
-            ceiling: buildCeiling(room, plan.wallHeight),
+            floor: floorMesh,
+            ceiling: ceilMesh,
             walls: buildRoomWalls(room, plan),
           },
           floor.elevation,
@@ -290,6 +357,34 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
     }
   }
 
+  // ---- Stair solids + flank fencing (issue #80) ----------------------
+  // Step boxes + grounding descriptors, in plan order (deterministic).
+  // STRICTLY inside the length>0 guard so stair-free plans compile
+  // byte-identically (apartment goldens).
+  const stairSolids: StairSolid[] = [];
+  if (plan.stairs.length > 0) {
+    for (const stair of plan.stairs) {
+      const departureZ = elevationByRoom.get(stair.roomId)!;
+      const fp = stairFootprint(stair);
+      stairSolids.push({
+        rect: stairWorldRect(stair),
+        hole: stairHoleRect(stair),
+        ux: fp.ux,
+        uy: fp.uy,
+        ax: fp.cx - fp.ux * fp.halfRun,
+        ay: fp.cy - fp.uy * fp.halfRun,
+        zLower: departureZ,
+        rise: stair.rise,
+        run: stair.run,
+        mesh: mergeBuffers(buildStairSteps(stair, departureZ)),
+      });
+      // Flank fencing: thin boxes along the run's sides, z-band
+      // [departureZ, departureZ+rise] via the minZ/maxZ seam. RAW
+      // (unexpanded) — see stairFlankBoxes for the radius rationale.
+      collisions.push(...stairFlankBoxes(stair, departureZ));
+    }
+  }
+
   return {
     rooms,
     // Walls first (unchanged contract), then furniture boxes (issue #18).
@@ -305,5 +400,31 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
         zMax: vol.zMax + floor.elevation,
       })),
     ),
+    stairs: stairSolids,
   };
+}
+
+/** Concatenate mesh buffers, rebasing indices (adapter-free merge). */
+function mergeBuffers(buffers: MeshBuffer[]): MeshBuffer {
+  let posTotal = 0;
+  let idxTotal = 0;
+  for (const b of buffers) {
+    posTotal += b.positions.length;
+    idxTotal += b.indices.length;
+  }
+  const positions = new Float32Array(posTotal);
+  const indices = new Uint32Array(idxTotal);
+  let posCur = 0;
+  let idxCur = 0;
+  let vertBase = 0;
+  for (const b of buffers) {
+    positions.set(b.positions, posCur);
+    for (let i = 0; i < b.indices.length; i += 1) {
+      indices[idxCur + i] = b.indices[i] + vertBase;
+    }
+    posCur += b.positions.length;
+    idxCur += b.indices.length;
+    vertBase += b.positions.length / 3;
+  }
+  return { positions, indices };
 }

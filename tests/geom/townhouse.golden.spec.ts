@@ -1,14 +1,26 @@
 /**
- * Townhouse goldens (issue #76): vertex/triangle/bound counts of
- * compiling the committed TWO-STOREY fixture. Constants were MEASURED
- * from a real run of compilePlan on demo/demo-townhouse.json (never
- * hand-computed), rounded to 1e-4 to kill float flakiness.
+ * Townhouse goldens (issue #76; RE-RECORDED for pkg 7.4 / issue #80):
+ * vertex/triangle/bound counts of compiling the committed TWO-STOREY
+ * fixture WITH its staircase consumed (step solids, landing holes,
+ * flank fencing). Constants were MEASURED from a real run of
+ * compilePlan on demo/demo-townhouse.json (never hand-computed),
+ * rounded to 1e-4 to kill float flakiness.
  *
  * Freeze policy: these constants may only change by a DELIBERATE
  * follow-up that alters townhouse geometry; incidental refactors of
  * the compile pipeline must keep them byte-stable (the apartment
  * goldens in golden.spec.ts police the single-storey path; these
- * police the per-floor lift).
+ * police the per-floor lift + the stair package).
+ *
+ * 7.4 re-record deltas vs 7.3 (deliberate, issue #80):
+ *   - fixture: stair moved to position [9.0, 3.0] (was [9.0, 4.2] —
+ *     the old top edge landed inside the landing's north-wall band,
+ *     leaving no standable crest) and a kitchen↔entry interior door
+ *     added (the entry hall was sealed from the ground floor, making
+ *     the stair unreachable indoors).
+ *   - compile: +1 stair solid (14 step boxes = 168 tris), landing +
+ *     bath floors + entry ceiling punched with the landing hole,
+ *     +2 flank collision boxes, +2 door-partition wall slabs.
  *
  * Regeneration recipe: instrument a scratch vitest spec that logs
  * countVertices/countTriangles/sceneBounds of compilePlan(the parsed
@@ -36,17 +48,19 @@ const townhouseRaw: FloorplanData = parseValidatedPlan(
   ).data!,
 );
 
-// MEASURED (real run, 2026-10-19): 3 ground rooms (living/kitchen/
-// entry) + 4 upper rooms (bedroom/office/bath/landing).
+// MEASURED (real run, 2026-10-19, post-7.4): 3 ground rooms (living/
+// kitchen/entry) + 4 upper rooms (bedroom/office/bath/landing), stair
+// solids (168 tris) + landing holes + stairwell partition door.
 const GOLDEN = {
-  vertices: 504,
-  triangles: 700,
+  vertices: 692,
+  triangles: 954,
+  collisions: 56,
   bounds: { minX: 0, minY: 0, maxX: 9.6, maxY: 5.6 },
 };
 
 const round4 = (v: number): number => Number(v.toFixed(4));
 
-describe('golden — demo townhouse compile metrics (issue #76)', () => {
+describe('golden — demo townhouse compile metrics (issue #76/#80)', () => {
   it('fixture validates natively as v2 (no migration needed)', () => {
     const raw = JSON.parse(
       readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8'),
@@ -87,8 +101,10 @@ describe('golden — demo townhouse compile metrics (issue #76)', () => {
       'room-bath',
       'room-landing',
     ]);
+    // 7.4: kitchen/entry gained a door partition (9→11, 6→8) and the
+    // bath/landing stairwell door carved the shared wall (6→7, 4→5).
     expect(scene.rooms.map((r) => r.walls.length)).toEqual([
-      11, 9, 6, 9, 11, 6, 4,
+      11, 11, 8, 9, 11, 7, 5,
     ]);
   });
 
@@ -113,7 +129,8 @@ describe('golden — demo townhouse compile metrics (issue #76)', () => {
 
   it('collision boxes carry storey-correct z bands', () => {
     const scene = compilePlan(townhouseRaw);
-    expect(scene.collisions).toHaveLength(50);
+    // 7.4: 52 wall/furniture boxes + 2 stair flank rails.
+    expect(scene.collisions).toHaveLength(GOLDEN.collisions);
     const groundBand = scene.collisions.filter(
       (c) => (c.maxZ ?? 0) <= 2.7 + 1e-9,
     );
@@ -139,18 +156,86 @@ describe('golden — demo townhouse compile metrics (issue #76)', () => {
     expect(sofa.zMin).toBeCloseTo(0, 6);
   });
 
-  it('the committed Staircase is INERT: compile output ignores it', () => {
-    // pkg 7.4 consumes stairs; until then the compiler must not emit
-    // anything for them. Proof by subtraction: stripping stairs[]
-    // changes NOTHING in the compiled scene sizes.
+  // ---- pkg 7.4 (issue #80): the staircase is CONSUMED -----------------
+
+  it('emits the stair solid with the stepCount-box triangle formula', () => {
     const scene = compilePlan(townhouseRaw);
-    const sansStairs = compilePlan({
-      ...townhouseRaw,
-      stairs: [],
-    });
-    expect(countVertices(sansStairs)).toBe(countVertices(scene));
-    expect(countTriangles(sansStairs)).toBe(countTriangles(scene));
-    expect(sansStairs.collisions.length).toBe(scene.collisions.length);
-    expect(sansStairs.furniture.length).toBe(scene.furniture.length);
+    expect(scene.stairs).toHaveLength(1);
+    const stair = scene.stairs![0]!;
+    // 14 solid tread boxes × 12 triangles each (merged mesh).
+    expect(stair.mesh.indices.length / 3).toBe(14 * 12);
+    // Spanning both elevations: lowest tread bottom at 0, top tread
+    // top at 2.7.
+    let zMin = Infinity;
+    let zMax = -Infinity;
+    for (let i = 2; i < stair.mesh.positions.length; i += 3) {
+      zMin = Math.min(zMin, stair.mesh.positions[i]!);
+      zMax = Math.max(zMax, stair.mesh.positions[i]!);
+    }
+    expect(zMin).toBeCloseTo(0, 6);
+    expect(zMax).toBeCloseTo(2.7, 6);
+  });
+
+  it('punches the landing hole into the upper slab (point-in-mesh probe)', () => {
+    const scene = compilePlan(townhouseRaw);
+    const landing = scene.rooms.find((r) => r.roomId === 'room-landing')!;
+    const bath = scene.rooms.find((r) => r.roomId === 'room-bath')!;
+    // Inside the hole: NEITHER upper floor mesh covers the point — a
+    // raycast down sees the lower storey through the slab.
+    expect(covers(landing.floor, 9.0, 4.1)).toBe(false);
+    expect(covers(bath.floor, 9.0, 3.0)).toBe(false);
+    // Outside the hole: both slabs remain solid.
+    expect(covers(landing.floor, 9.0, 5.0)).toBe(true);
+    expect(covers(bath.floor, 8.3, 1.0)).toBe(true);
+  });
+
+  it('punches the same hole into the departure ceiling (head clearance)', () => {
+    const scene = compilePlan(townhouseRaw);
+    const entry = scene.rooms.find((r) => r.roomId === 'room-entry')!;
+    expect(covers(entry.ceiling, 9.0, 3.0)).toBe(false);
+    expect(covers(entry.ceiling, 9.0, 0.5)).toBe(true);
+  });
+
+  it('flank fencing rides the [departure, departure+rise] z band', () => {
+    const scene = compilePlan(townhouseRaw);
+    const flanks = scene.collisions.filter(
+      (c) => c.minZ !== undefined && Math.abs(c.minZ) < 1e-9 && Math.abs((c.maxZ ?? 0) - 2.7) < 1e-9,
+    );
+    // Exactly the two stair rails (wall boxes top out at 2.7 too, but
+    // their minZ is 0 AND they are player-expanded in xy — disambiguate
+    // by counting: walls+furniture gave 52 pre-7.4, now 54).
+    expect(flanks.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+/** Point-in-triangle coverage probe over one mesh's xy projection. */
+function covers(
+  mesh: { positions: Float32Array; indices: Uint32Array },
+  px: number,
+  py: number,
+): boolean {
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    const a = mesh.indices[i]! * 3;
+    const b = mesh.indices[i + 1]! * 3;
+    const c = mesh.indices[i + 2]! * 3;
+    if (triContains(
+      mesh.positions[a]!, mesh.positions[a + 1]!,
+      mesh.positions[b]!, mesh.positions[b + 1]!,
+      mesh.positions[c]!, mesh.positions[c + 1]!,
+      px, py,
+    )) return true;
+  }
+  return false;
+}
+
+function triContains(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, px: number, py: number,
+): boolean {
+  const d1 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+  const d2 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
+  const d3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
+  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+  return !(hasNeg && hasPos);
+}

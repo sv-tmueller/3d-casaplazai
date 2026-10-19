@@ -98,7 +98,9 @@ export type MaterialSlotId =
   | 'furn-porcelain'
   | 'furn-laminate';
 
-/** Fully translated scene the renderer consumes. */
+/**
+ * Fully translated scene the renderer consumes.
+ */
 export interface AdaptedScene {
   buckets: MaterialBucket[];
   collisions: CollisionBox[];
@@ -108,10 +110,45 @@ export interface AdaptedScene {
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   /**
    * Walking-surface elevation of the LOWEST floor, meters (issue #76).
-   * The walk rig seats the camera at this + EYE_HEIGHT; floor selection
-   * UI is a non-goal here (7.4 swaps the resolver for a chosen floor).
+   * The walk rig SPAWNS here; per-frame grounding hands over to the
+   * stair resolver (issue #80) once the walker climbs.
    */
   activeFloorElevation: number;
+  /**
+   * Walkable staircases (issue #80): footprint rect + grounding z
+   * parameters, forwarded from the compiler by the adapter. Empty for
+   * stair-free plans — the walk rig then behaves exactly as before.
+   */
+  stairs: StairWalkSurface[];
+}
+
+/**
+ * One staircase as the grounding resolver consumes it (issue #80):
+ * the rotated footprint in plan coordinates plus the linear ramp
+ * parameters. Mirrors geom's StairSolid minus the mesh (rendering
+ * travels through the buckets, not this list).
+ */
+export interface StairWalkSurface {
+  /** Footprint corners, CCW, downhill-left first. */
+  rect: [number, number][];
+  /**
+   * Landing-hole corners (footprint + one-tread extension): the
+   * grounding resolver's active zone — arrival slab holed, ramp
+   * spans the extension level with the arrival plane.
+   */
+  hole: [number, number][];
+  /** Uphill unit direction (stair local +x). */
+  ux: number;
+  uy: number;
+  /** Downhill edge midpoint (longitudinal progress 0). */
+  ax: number;
+  ay: number;
+  /** Elevation of the departure (lower) floor, meters. */
+  zLower: number;
+  /** Vertical climb to the arrival floor, meters. */
+  rise: number;
+  /** Horizontal length of the flight, meters. */
+  run: number;
 }
 
 /** Rolling-frame statistics shown by the ?perf=1 overlay. */
