@@ -235,6 +235,7 @@ export function buildMaterial(
   slot:
     | 'wall'
     | 'ceiling'
+    | 'roof'
     | TextureKind
     | 'glass'
     | 'windowFrame'
@@ -305,6 +306,18 @@ export function buildMaterial(
     return new MeshStandardMaterial({
       color: new Color('#fafafa'),
       roughness: 1,
+      metalness: 0,
+    });
+  }
+  if (slot === 'roof') {
+    // Exterior clay-tile plane (pkg 8.1): terracotta, matte, textured
+    // with the concrete drawer's mineral speckle — visually distinct
+    // from interior plaster ('wall') so painting walls never touches
+    // roof planes (decoupled repaint, sub-plan justification).
+    return new MeshStandardMaterial({
+      map: getTexture('concrete'),
+      color: new Color('#b0623f'),
+      roughness: 0.85,
       metalness: 0,
     });
   }
