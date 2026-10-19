@@ -668,6 +668,69 @@ describe('resizeRoom dispatch (#53)', () => {
     expect(res.ok).toBe(false);
     expect(livingPoly(store)).toEqual(before);
   });
+
+  // Issue #107: shared plan-extent guard. Both commit paths (typed
+  // inspector fields and drag frames) funnel into THIS reducer, so the
+  // bound lives here and both paths are rejected identically by
+  // construction. The typed path is simulated exactly as
+  // inspectorPanel.ts does it: polarEndpoint(anchor, len, bearing).
+  it('rejects a typed 99999 m wall length (inspector path simulation)', async () => {
+    const { polarEndpoint } = await import('../../src/editor/model/angles');
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    // Wall row for living seg 1 anchors at vertex 1 (5,0); typing 99999
+    // at bearing 90° (due east) lands the far vertex at ~(100004, 0).
+    const newPos = polarEndpoint([5, 0], 99999, 90);
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 2,
+      newPos,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('vertex beyond plan extent limit');
+    expect(livingPoly(store)).toEqual(before);
+  });
+
+  it('rejects a programmatic extreme drag identically (no typed parse involved)', () => {
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 2,
+      newPos: [1, -1e6],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('vertex beyond plan extent limit');
+    expect(livingPoly(store)).toEqual(before);
+  });
+
+  it('a vertex AT the extent limit is still a legit reshape (boundary inclusive)', () => {
+    const store = newStore();
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 1,
+      newPos: [1000, 0],
+    });
+    expect(res.ok).toBe(true);
+    expect(livingPoly(store)[1]).toEqual([1000, 0]);
+  });
+
+  it('just past the limit rejects (1000 + 1mm)', () => {
+    const store = newStore();
+    const before = JSON.parse(JSON.stringify(livingPoly(store)));
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 1,
+      newPos: [1000.001, 0],
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('vertex beyond plan extent limit');
+    expect(livingPoly(store)).toEqual(before);
+  });
 });
 
 /* ------------------------------------------------------------------ *

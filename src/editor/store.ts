@@ -11,7 +11,9 @@ import type { FloorplanData, Floor, Opening, Room, Vec2 } from '../shared/schema
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
 import type { UnderlayState } from './model/underlay';
+import { PLAN_EXTENT_LIMIT_M } from './model/constants';
 import {
+  mirrorCounterparts,
   mirrorT,
   overlapHosts,
   pointAtT,
@@ -273,6 +275,19 @@ function reduceResizeRoom(
   if (cmd.vertexIndex < 0 || cmd.vertexIndex >= room.polygon.length) {
     return { ok: false, error: `vertexIndex ${cmd.vertexIndex} out of range` };
   }
+  // Issue #107: shared sane-extent guard. Both commit paths (typed
+  // inspector fields AND drag frames) funnel into this reducer, so the
+  // bound here rejects both IDENTICALLY by construction — no per-path
+  // code. REJECT, not clamp: clamping a typed 99999 to 1000 would
+  // silently lie about the geometry; rejection rides the existing
+  // Result plumbing (typed path flashes res.error, drag keeps the old
+  // vertex) and stays undo-rescuable. Inclusive at the limit.
+  if (
+    Math.abs(cmd.newPos[0]) > PLAN_EXTENT_LIMIT_M ||
+    Math.abs(cmd.newPos[1]) > PLAN_EXTENT_LIMIT_M
+  ) {
+    return { ok: false, error: 'vertex beyond plan extent limit' };
+  }
   room.polygon[cmd.vertexIndex] = [cmd.newPos[0], cmd.newPos[1]];
   return { ok: true };
 }
@@ -388,24 +403,21 @@ function reduceAddOpening(
   };
   activeFloor(st).openings.push(base);
 
-  // Two-row shared-door convention: emit the mirror row for every OTHER
-  // room whose wall is collinear-overlapping with this one and can host
-  // the cutout, atomically in the same transaction (issue #41: pairing is
-  // overlap-based, the mirror tCenter comes from projecting the door's
-  // world point onto that partner segment).
-  for (const other of flatRooms(st.data)) {
-    if (other.id === room.id) continue;
-    for (const oseg of roomSegments(other)) {
-      const t = pairMirrorT(seg, oseg, cmd.tCenter, cmd.width);
-      if (t === null) continue;
-      activeFloor(st).openings.push({
-        ...base,
-        id: makeId(cmd.kind),
-        roomId: other.id,
-        segmentIndex: oseg.index,
-        tCenter: t,
-      });
-    }
+  // Two-row shared-door convention: emit the honest mirror set (issue
+  // #40 — mirrorCounterparts: opposite-sided across the overlap,
+  // interior-deep enough to host a doorway, nearest counterpart per
+  // room, overlapping-room impostors purged), atomically in the same
+  // transaction (issue #41: pairing is overlap-based, the mirror
+  // tCenter comes from projecting the door's world point onto that
+  // partner segment). Model layer and store share the ONE routine.
+  for (const m of mirrorCounterparts(st.data, room.id, seg, cmd.tCenter, cmd.width)) {
+    activeFloor(st).openings.push({
+      ...base,
+      id: makeId(cmd.kind),
+      roomId: m.roomId,
+      segmentIndex: m.segmentIndex,
+      tCenter: m.t,
+    });
   }
 
   st.selectedId = base.id;

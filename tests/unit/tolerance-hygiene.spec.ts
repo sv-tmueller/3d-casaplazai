@@ -7,12 +7,16 @@
  *     overlap copies NOTHING and implicitly unlinks the pair; narrowing
  *     back into the overlap re-syncs. Residual effects are a SILENT
  *     DESYNC (implicit unlink), not an unhosted mirror cut.
- *   - #40a ACCEPTED: an 8 mm-east same-span impostor wall still receives a
- *     mirror row — sub-1 cm pairing is the documented purpose of
- *     PAIR_TOLERANCE_M; excluding it is a geometry redesign (non-goal).
- *   - #40b DEGENERATE-ACCEPTED: a 5 mm sliver room acquires rows on BOTH
- *     faces from one commit — sub-tolerance rooms are out of modeling
- *     scope (a room-depth guard needs new predicate machinery).
+ *   - #40a SUPERSEDED by #111 (still holds): an 8 mm-east same-span
+ *     impostor wall still receives a mirror row WHEN it is the only
+ *     neighbour — sub-1 cm pairing is the documented purpose of
+ *     PAIR_TOLERANCE_M; the cross-pair variant (impostor NEXT TO a
+ *     genuine shared wall) is killed in emission-honesty.spec.ts.
+ *   - #40b RESCINDED by #111 (issue #40 fix): a 5 mm sliver room no
+ *     longer acquires rows on BOTH faces from one commit — the
+ *     interior-depth gate (< PAIR_TOLERANCE_M cannot host) kills the
+ *     closet double-face; the cut walks through to the real room
+ *     across the sliver (now 2 rows, pinned in emission-honesty).
  *   - #40c INCLUSIVE: the perpendicular tie pairs (`perp <= tol`), one
  *     convention everywhere; exact-10 mm pairs, 10.0001 mm-plus rejects.
  */
@@ -120,7 +124,7 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
   });
 });
 
-describe('#47 #40a — 8 mm-east same-span impostor is ACCEPTED (pinned)', () => {
+describe('#47 #40a — 8 mm-east impostor as SOLE neighbour still pairs (superseded nuance)', () => {
   it('a wall 8 mm east of a same-span host still receives a mirror row', () => {
     const p = plan([[5.008, 0], [8.008, 0], [8.008, 4], [5.008, 4]]);
     const rows = derivePairRows(p, {
@@ -135,8 +139,8 @@ describe('#47 #40a — 8 mm-east same-span impostor is ACCEPTED (pinned)', () =>
   });
 });
 
-describe('#47 #40b — 5 mm sliver is DEGENERATE-ACCEPTED (pinned)', () => {
-  it('one commit yields rows on BOTH sliver faces (4 rows total)', () => {
+describe('#47 #40b — 5 mm sliver: closet double-face KILLED by #111', () => {
+  it('one commit yields 2 rows; the sliver acquires NOTHING', () => {
     const p = emptyPlan();
     p.floors[0].rooms = [
         mkRoom('living', LIVING),
@@ -153,10 +157,11 @@ describe('#47 #40b — 5 mm sliver is DEGENERATE-ACCEPTED (pinned)', () => {
       ...DOOR,
     });
     const ops = store.getState().data.floors[0].openings;
-    // Degenerate sub-tolerance rooms are out of modeling scope; both sliver
-    // faces acquiring rows is accepted as-is (geometry redesign = non-goal).
-    expect(ops).toHaveLength(4);
-    expect(ops.filter((o) => o.roomId === 'sliver')).toHaveLength(2);
+    // Issue #40 fix (Pkg 13.3): the sliver's interior depth (5 mm <
+    // PAIR_TOLERANCE_M) cannot host a doorway, so neither face gets a
+    // row — the cut walks through to the kitchen across the sliver.
+    expect(ops).toHaveLength(2);
+    expect(ops.filter((o) => o.roomId === 'sliver')).toHaveLength(0);
   });
 });
 
