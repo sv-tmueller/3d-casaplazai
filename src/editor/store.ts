@@ -99,7 +99,12 @@ export type Command =
   /** Rename the ACTIVE floor (non-empty name required). */
   | { type: 'renameFloor'; name: string }
   /** Delete the ACTIVE floor; the sole floor is refused. */
-  | { type: 'deleteFloor' };
+  | { type: 'deleteFloor' }
+  /* ---- pkg 8.1 additions (issue #83) ---- */
+  /** Set one wall segment's roof lean (degrees, [0,75]); 0 REMOVES the row. */
+  | { type: 'setWallLean'; roomId: string; segmentIndex: number; leanDeg: number }
+  /** Remove one wall segment's lean row outright. */
+  | { type: 'clearWallLean'; roomId: string; segmentIndex: number };
 
 export type DispatchResult =
   | { ok: true }
@@ -569,6 +574,65 @@ function reduceDeleteFloor(st: EditorState): DispatchResult {
   return { ok: true };
 }
 
+/* ------------------- pkg 8.1 roof reducers (issue #83) -------------------- */
+
+/** Maximum lean from horizontal the editor will express, degrees. */
+export const ROOF_MAX_LEAN_EDITOR_DEG = 75;
+
+function reduceSetWallLean(
+  st: EditorState,
+  cmd: { roomId: string; segmentIndex: number; leanDeg: number },
+): DispatchResult {
+  // Roofs are only legal on the TOPMOST floor (schema validator rule);
+  // refusing here keeps the store from ever emitting an invalid plan.
+  if (st.activeFloorIdx !== st.data.floors.length - 1) {
+    return { ok: false, error: 'roofs may only be set on the topmost floor' };
+  }
+  const room = activeFloor(st).rooms.find((r) => r.id === cmd.roomId);
+  if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
+  if (
+    !Number.isInteger(cmd.segmentIndex) ||
+    cmd.segmentIndex < 0 ||
+    cmd.segmentIndex >= room.polygon.length
+  ) {
+    return { ok: false, error: `segmentIndex ${cmd.segmentIndex} out of range` };
+  }
+  if (!Number.isFinite(cmd.leanDeg) || cmd.leanDeg < 0 || cmd.leanDeg > ROOF_MAX_LEAN_EDITOR_DEG) {
+    return { ok: false, error: `leanDeg must lie in [0, ${ROOF_MAX_LEAN_EDITOR_DEG}]` };
+  }
+  const rows = room.roofs ?? [];
+  const existing = rows.find((row) => row.segmentIndex === cmd.segmentIndex);
+  // A lean of 0 CONTRIBUTES NOTHING (flat parapet) — clearWallLean's
+  // territory; storing a 0 row would be dead data the exporter would
+  // faithfully persist.
+  if (cmd.leanDeg === 0) {
+    if (existing) {
+      room.roofs = rows.filter((row) => row.segmentIndex !== cmd.segmentIndex);
+    }
+    return { ok: true };
+  }
+  if (existing) {
+    existing.leanDeg = cmd.leanDeg;
+  } else {
+    room.roofs = [...rows, { segmentIndex: cmd.segmentIndex, leanDeg: cmd.leanDeg }];
+  }
+  return { ok: true };
+}
+
+function reduceClearWallLean(
+  st: EditorState,
+  cmd: { roomId: string; segmentIndex: number },
+): DispatchResult {
+  const room = activeFloor(st).rooms.find((r) => r.id === cmd.roomId);
+  if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
+  const rows = room.roofs ?? [];
+  if (!rows.some((row) => row.segmentIndex === cmd.segmentIndex)) {
+    return { ok: false, error: `segment ${cmd.segmentIndex} carries no lean` };
+  }
+  room.roofs = rows.filter((row) => row.segmentIndex !== cmd.segmentIndex);
+  return { ok: true };
+}
+
 /* ------------------------------ Store class ------------------------------- */
 
 export class EditorStore {
@@ -707,6 +771,10 @@ export class EditorStore {
         return reduceRenameFloor(this._state, cmd);
       case 'deleteFloor':
         return reduceDeleteFloor(this._state);
+      case 'setWallLean':
+        return reduceSetWallLean(this._state, cmd);
+      case 'clearWallLean':
+        return reduceClearWallLean(this._state, cmd);
     }
   }
 
