@@ -5,6 +5,19 @@
  * pose) and in the rendered pixels. The shadow atlas has autoUpdate
  * OFF (#86), so a correct slider path must re-render the shadows and
  * the sky, not merely move the light object.
+ *
+ * Fix round 1 (tester FAIL): pixels alone cannot pin that refresh. The
+ * overview rig is an idle turntable (orbitMode) — with no canvas input
+ * a capture pair drifts ~1.4-1.9 luma while the azimuth-only mutant
+ * signal is ~1.0 (measured), and the mode-cycle pixel delta is
+ * intensity-dominated (mutant only −4%). Every change path therefore
+ * also asserts __viewerStats.shadowAtlasGenerations — the number of
+ * frames that actually re-baked the atlas. Measured: the deleted
+ * needsUpdate freezes it (+0) on slider, north and rebuild, while
+ * every pristine path advances it (+1), and the light pose still
+ * moves. The walk-half of AC1 additionally pins the visible re-light
+ * in a drift-free seated frame (the walk rig does not idle-spin: its
+ * same-window re-seat control is byte-identical).
  */
 
 import { expect, test, type Page } from '@playwright/test';
@@ -23,6 +36,7 @@ interface SunStats {
   sunElevationDeg: number | null;
   sunIntensity: number | null;
   ambientIntensity: number | null;
+  shadowAtlasGenerations: number | null;
 }
 
 function sunStats(page: Page): Promise<SunStats> {
@@ -30,6 +44,67 @@ function sunStats(page: Page): Promise<SunStats> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (window as any).__viewerStats?.() ?? null;
   });
+}
+
+/**
+ * Frames that actually re-baked the shadow atlas. With autoUpdate OFF
+ * (#86) this only advances when needsUpdate is set, so it is the
+ * zero-slack probe for "the refresh happened" on every change path
+ * (#121 fix round). Fail loud if the seam is missing.
+ */
+async function atlasGenerations(page: Page): Promise<number> {
+  const stats = await sunStats(page);
+  if (typeof stats.shadowAtlasGenerations !== 'number') {
+    throw new Error(
+      '__viewerStats.shadowAtlasGenerations missing (#121 seam)',
+    );
+  }
+  return stats.shadowAtlasGenerations;
+}
+
+/**
+ * Wait until the atlas counter advances past `before` — i.e. a rendered
+ * frame actually re-baked the shadow atlas after a sun change (#121 fix
+ * round). Throws a descriptive error when the refresh never reaches the
+ * screen (the stale-atlas mutant parks the counter indefinitely).
+ */
+async function waitAtlasAdvance(page: Page, before: number): Promise<void> {
+  try {
+    await page.waitForFunction(
+      (prev) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const gen = (window as any).__viewerStats?.()?.shadowAtlasGenerations;
+        return typeof gen === 'number' && gen > prev;
+      },
+      before,
+      { timeout: 2_500 },
+    );
+    return;
+  } catch {
+    // Fall through to a readable failure below.
+  }
+  const now = await atlasGenerations(page).catch(() => -1);
+  if (now > before) return; // raced past the wait window; fine
+  throw new Error(
+    `shadow atlas not re-baked: counter ${before} -> ${now} ` +
+      '(the sun change never reached a rendered frame)',
+  );
+}
+
+/** Wait for a seated walk rig (disc + velocity probes present). */
+async function waitSeatedWalk(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cam = (window as any).__viewerCam?.();
+      return (
+        cam !== null && cam !== undefined && typeof cam.discX === 'number'
+      );
+    },
+    { timeout: 10_000 },
+  );
+  // Seat settle (mirrors the walk-affordances spec's seated wait).
+  await page.waitForTimeout(900);
 }
 
 /** Load the demo apartment through the editor bridge (fresh-page safe). */
@@ -147,6 +222,11 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     );
     expect(stats.sunIntensity).toBeCloseTo(SUN_INTENSITY, 6);
     expect(stats.ambientIntensity).toBeCloseTo(AMBIENT_INTENSITY, 6);
+    // The atlas counter seam is live from boot (#121 fix round). It
+    // counts RENDERED frames that re-baked the atlas, so 0 is legal
+    // here: this boot order seats no rig until a mode cycle, and the
+    // change-path tests (slider/north/walk/rebuild) assert its delta.
+    expect(typeof stats.shadowAtlasGenerations).toBe('number');
     // The HUD ships at the noon preset.
     await expect(page.getByTestId('hud-sun-time')).toHaveValue('12');
     await expect(page.getByTestId('hud-sun-north')).toHaveValue('0');
@@ -162,6 +242,7 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     await bootSun(page);
     await ensureRenderedOverview(page);
     const before = await sunStats(page);
+    const genBefore = await atlasGenerations(page);
     // The lit plan body: the post-cycle overview frames it centre-right.
     const planBefore = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
 
@@ -188,6 +269,13 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     // would stay frozen while the light object moves. (The sky dome is
     // BackSide-culled at the overview camera's height, so the plan is
     // the observable surface here.)
+    //
+    // The pixel probe alone is too blunt to pin that refresh (with
+    // needsUpdate deleted the slider delta only drops ~4% — the
+    // intensity change dominates), so the zero-slack channel is the
+    // atlas counter: the change must reach a rendered frame that
+    // re-bakes the atlas.
+    await waitAtlasAdvance(page, genBefore);
     expect(Math.abs(planAfter - planBefore)).toBeGreaterThan(3);
   });
 
@@ -195,7 +283,11 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     page,
   }) => {
     await bootSun(page);
+    // The counter needs live frames: this boot order seats no rig, so
+    // mirror the user (Walk, then back) to get a rendering overview.
+    await ensureRenderedOverview(page);
     const before = await sunStats(page);
+    const genBefore = await atlasGenerations(page);
 
     // North slider: step 5°, six ArrowRights = +30°.
     await page.getByTestId('hud-sun-north').focus();
@@ -211,6 +303,13 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     // The offset rotates the whole path; the hour is untouched.
     expect(after.sunElevationDeg).toBeCloseTo(before.sunElevationDeg ?? 0, 9);
     expect(after.sunIntensity).toBeCloseTo(before.sunIntensity ?? 0, 9);
+    // This is the constant-intensity azimuth-only move: the pixel route
+    // the tester proposed can't carry it here — the overview turntable
+    // drifts ~1.9 luma per capture pair, more than the ~1.0 luma the
+    // stale-atlas mutant leaves behind — so the counter pins it (the
+    // pivot must reach a rendered frame that re-bakes the atlas even
+    // though nothing else changed).
+    await waitAtlasAdvance(page, genBefore);
     await expect(page.getByTestId('hud-sun-north')).toHaveValue('30');
     await expect(page.getByTestId('hud-compass')).toHaveAttribute(
       'style',
@@ -234,5 +333,102 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     expect(stats.sunIntensity).toBeCloseTo(SUN_INTENSITY, 6);
     await expect(page.getByTestId('hud-sun-time')).toHaveValue('12');
     await expect(page.getByTestId('hud-sun-north')).toHaveValue('0');
+  });
+
+  test('a sun change re-lights seated walk mode (AC1 walk-half)', async ({
+    page,
+  }) => {
+    await bootSun(page);
+    // Walk mode owns the arrow keys (walkMode keydown), so the change
+    // is made from the overview: seat walk for the baseline, cycle out,
+    // change, cycle back. The walk spawn is deterministic (same plan →
+    // same seat), so the two captures differ by the LIGHT, not the
+    // pose — the same-window re-seat control is byte-identical (0.000).
+    await page.keyboard.press('Tab'); // → walk
+    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Overview');
+    await waitSeatedWalk(page);
+    const genBefore = await atlasGenerations(page);
+    const interiorBefore = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+
+    await page.keyboard.press('Tab'); // → overview
+    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Walk');
+    await setTimeByKeyboard(page, 8);
+    // Clear the slider focus: a focused input turns Tab into focus
+    // navigation instead of the mode toggle.
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    });
+    await page.keyboard.press('Tab'); // → walk again
+    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Overview');
+    await waitSeatedWalk(page);
+
+    const interiorAfter = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+    // Calibrated: noon → 08:00 moves the seated interior mean by ~49
+    // luma (162 → 113); the no-change re-seat control reads 0.000, so
+    // 20 is a ~2.5x-margin floor for "light colour visibly tracks".
+    expect(Math.abs(interiorAfter - interiorBefore)).toBeGreaterThan(20);
+    // The walk-visible change must also reach a rendered frame that
+    // re-bakes the atlas (a stale atlas keeps the interior shading
+    // frozen; the mutant parks the counter here).
+    await waitAtlasAdvance(page, genBefore);
+  });
+
+  test('a plan rebuild re-applies the sun and re-bakes the atlas', async ({
+    page,
+  }) => {
+    await bootSun(page);
+    await ensureRenderedOverview(page);
+    await setTimeByKeyboard(page, 8);
+    await flushFrames(page);
+    const before = await sunStats(page);
+    const genBefore = await atlasGenerations(page);
+    expect(before.sunBearingDeg).toBeCloseTo(SUN_AZ_NOON_DEG - 60, 6);
+
+    // A variant plan (one extra valid furniture item) forces a full
+    // scene rebuild through the same path as a real edit. Furniture
+    // ships as ONE merged mesh, so meshCount stays flat — the parity
+    // figure is furnitureVolumeCount (1 volume per item).
+    const volumeBefore = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (window as any).__viewerStats?.().furnitureVolumeCount ?? -1;
+    });
+    const fs = await import('node:fs/promises');
+    const raw = await fs.readFile('demo/demo-apartment.json', 'utf8');
+    await page.evaluate((planJson) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bridge = (window as any).__casaplaza;
+      const plan = JSON.parse(planJson);
+      plan.furniture.push({
+        id: 'fur-rebuild-probe',
+        type: 'table',
+        roomId: 'room-living-room',
+        position: [4.6, 2.4],
+        rotationDeg: 0,
+        footprint: [0.8, 0.8],
+      });
+      bridge.loadPlan(plan);
+    }, raw);
+    await page.waitForFunction(
+      (expected) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const s = (window as any).__viewerStats?.();
+        return (
+          typeof s?.furnitureVolumeCount === 'number' &&
+          s.furnitureVolumeCount === expected
+        );
+      },
+      volumeBefore + 1,
+      { timeout: 15_000 },
+    );
+    await flushFrames(page);
+
+    const after = await sunStats(page);
+    // The rebuild must NOT snap the sun back: the 08:00 pose and
+    // intensity survive the re-apply...
+    expect(after.sunBearingDeg).toBeCloseTo(SUN_AZ_NOON_DEG - 60, 6);
+    expect(after.sunElevationDeg).toBeCloseTo(sunElevationDeg(8), 6);
+    expect(after.sunIntensity).toBeCloseTo(before.sunIntensity ?? 0, 9);
+    // ...and the rebuilt scene's atlas was re-baked for that pose.
+    await waitAtlasAdvance(page, genBefore);
   });
 });

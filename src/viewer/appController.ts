@@ -158,6 +158,16 @@ export class ViewerApp {
   private sunSettings: SunSettings = { ...DEFAULT_SUN_SETTINGS };
 
   /**
+   * Shadow-atlas generation counter (issue #121 fix round): increments
+   * once per rendered frame that regenerates the shadow atlas. The atlas
+   * is static unless needsUpdate asks (autoUpdate is OFF, #86) and the
+   * frame's render() consumes that flag; reading it immediately before
+   * render() therefore counts real regenerations, not intent — a stale
+   * refresh freezes this counter while the light pose still moves.
+   */
+  private shadowAtlasGenerations = 0;
+
+  /**
    * Autofade machinery (issue #86): upward-eye-ray raycaster against
    * roof-slot meshes only, throttled to every Nth tick. Opacity tweens
    * on the roof material; `transparent` is flipped on ONLY while an
@@ -774,6 +784,17 @@ export class ViewerApp {
 
       const camera = this.liveCamera();
       if (this.renderer && this.sceneRoot && camera) {
+        // Atlas-refresh accounting (#121 fix round): mirrors
+        // WebGLShadowMap.render's own gate, evaluated just before the
+        // frame's render() — a set flag here means THIS frame
+        // regenerates the atlas (the flag is consumed by that call).
+        const shadowMap = this.renderer.shadowMap;
+        if (
+          shadowMap.enabled &&
+          (shadowMap.autoUpdate || shadowMap.needsUpdate)
+        ) {
+          this.shadowAtlasGenerations += 1;
+        }
         this.renderer.render(this.sceneRoot.scene, camera);
       }
       this.publishDebugSeams(camera);
@@ -882,6 +903,11 @@ export class ViewerApp {
       // (bearing/elevation derived from position − target) plus the
       // current intensities — the AC1/AC2/AC3 e2e channel.
       ...this.sunProbe(),
+      // Shadow-atlas generations (#121 fix round): without this, a
+      // frozen refresh is only visible as a few-percent pixel delta —
+      // far inside the screenshot noise. A deleted needsUpdate parks
+      // this counter at its boot value across every change path.
+      shadowAtlasGenerations: this.shadowAtlasGenerations,
     });
   }
 
