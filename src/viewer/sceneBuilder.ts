@@ -55,16 +55,27 @@ import {
   SHADOW_NORMAL_BIAS,
   SKY_DOME_RADIUS_M,
   SKY_DOME_SEGMENTS,
+  SKY_DUSK_BOTTOM_HEX,
+  SKY_DUSK_TOP_HEX,
   SKY_GRADIENT_BOTTOM_HEX,
   SKY_GRADIENT_BOTTOM_Z,
   SKY_GRADIENT_TOP_HEX,
   SKY_GRADIENT_TOP_Z,
   SKY_SOLID_HEX,
   SUN_COLOR,
+  SUN_DUSK_COLOR_HEX,
   SUN_INTENSITY,
   type QualityLevel,
 } from './renderConstants';
-import type { AdaptedScene } from './types';
+import { DEFAULT_SUN_SETTINGS, sunState, type SunState } from './sun';
+import type { AdaptedScene, SunSettings } from './types';
+
+/** The light trio every built scene carries (issue #121 controller seam). */
+export interface ViewerLights {
+  sun: DirectionalLight;
+  hemi: HemisphereLight;
+  amb: AmbientLight;
+}
 
 /** One assembled, disposable viewer scene. */
 export interface BuiltScene {
@@ -81,6 +92,11 @@ export interface BuiltScene {
   skyDome: Mesh<SphereGeometry, ShaderMaterial> | null;
   /** Milliseconds spent assembling (rebuild-budget assertion seam). */
   buildMs: number;
+  /**
+   * The live light trio (issue #121): sun-settings changes repaint
+   * these in place via applySunPose — no scene-graph traversal.
+   */
+  lights: ViewerLights;
 }
 
 /** Dispose a geometry/material tree recursively (dispose-chain leaf). */
@@ -125,23 +141,19 @@ function bucketGeometry(
   return geo;
 }
 
-/** Fit an orthographic shadow camera snugly over the plan bounds. */
+/**
+ * Fit an orthographic shadow camera snugly over the plan bounds. The
+ * sun's POSE is not set here (issue #121 split): applySunPose() owns
+ * position/target so frustum fitting stays pose-independent.
+ */
 export function fitShadowFrustum(
   light: DirectionalLight,
   bounds: AdaptedScene['bounds'],
 ): void {
   const cam = light.shadow.camera as OrthographicCamera;
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
   const halfExtent =
     Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) / 2 +
     SHADOW_FRUSTUM_PAD_M;
-
-  // Sun hangs south-east-above, mildly tilted so wall faces catch
-  // shading gradients instead of a flat ambient wash.
-  light.position.set(centerX + 8, centerY - 8, 12);
-  light.target.position.set(centerX, centerY, 0);
-  light.target.updateMatrixWorld();
 
   cam.left = -halfExtent;
   cam.right = halfExtent;
@@ -152,6 +164,62 @@ export function fitShadowFrustum(
   cam.updateProjectionMatrix();
   light.shadow.bias = SHADOW_BIAS;
   light.shadow.normalBias = SHADOW_NORMAL_BIAS;
+}
+
+/* ------------------------------- sun pose (#121) -------------------------- */
+
+/** Dusk targets for the pose lerps (module singletons — lerp only reads). */
+const SUN_DUSK_COLOR = new Color(SUN_DUSK_COLOR_HEX);
+const SKY_DUSK_BOTTOM_COLOR = new Color(SKY_DUSK_BOTTOM_HEX);
+const SKY_DUSK_TOP_COLOR = new Color(SKY_DUSK_TOP_HEX);
+
+/**
+ * Write a sun-settings pose onto the live lights (issue #121): hang the
+ * directional sun around the plan centre, aim it, and scale
+ * intensity/colour from the solar model's coupling curves. Every curve
+ * is identity at the noon preset, so the default build reproduces the
+ * pre-#121 light state exactly. Returns the computed state so callers
+ * can drive the sky blend and shadow refresh from the same evaluation.
+ */
+export function applySunPose(
+  lights: ViewerLights,
+  settings: SunSettings,
+  bounds: AdaptedScene['bounds'],
+): SunState {
+  const state = sunState(settings);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+
+  lights.sun.position.set(
+    centerX + state.offset.x,
+    centerY + state.offset.y,
+    state.offset.z,
+  );
+  lights.sun.target.position.set(centerX, centerY, 0);
+  lights.sun.target.updateMatrixWorld();
+  lights.sun.intensity = SUN_INTENSITY * state.intensityFactor;
+  lights.sun.color.set(SUN_COLOR).lerp(SUN_DUSK_COLOR, state.duskBlend);
+  lights.amb.intensity = AMBIENT_INTENSITY * state.ambientFactor;
+  return state;
+}
+
+/**
+ * Blend the sky-dome gradient toward the dusk stops (issue #121): the
+ * uniforms are re-seated to the day stops before every lerp so the
+ * blend stays absolute, and blend 0 restores the day sky. No-op on a
+ * null dome (LOW quality keeps its solid backdrop — degrade
+ * gracefully, no tier special-casing).
+ */
+export function applySkyDusk(
+  skyDome: BuiltScene['skyDome'],
+  duskBlend: number,
+): void {
+  if (!skyDome) return;
+  const { uniforms } = skyDome.material;
+  const bottom = uniforms.uBottomColor.value as Color;
+  const top = uniforms.uTopColor.value as Color;
+  bottom.set(SKY_GRADIENT_BOTTOM_HEX).lerp(SKY_DUSK_BOTTOM_COLOR, duskBlend);
+  top.set(SKY_GRADIENT_TOP_HEX).lerp(SKY_DUSK_TOP_COLOR, duskBlend);
 }
 
 /**
@@ -283,6 +351,13 @@ export function buildViewerScene(
   const amb = new AmbientLight(AMBIENT_COLOR, AMBIENT_INTENSITY);
   lightGroup.add(amb);
 
+  const lights: ViewerLights = { sun, hemi, amb };
+  // Default sun pose (issue #121): identity at DEFAULT_SUN_SETTINGS —
+  // the noon perch (8, −8, 12) the pre-#121 build hard-coded — so the
+  // default output stays byte-identical. The controller re-applies the
+  // live settings on every rebuild and on every HUD change.
+  applySunPose(lights, DEFAULT_SUN_SETTINGS, adapted.bounds);
+
   const meshes: Mesh[] = [];
 
   // Quality knob (#87): read ONCE per build — every bucket shares the
@@ -325,5 +400,6 @@ export function buildViewerScene(
     meshes,
     skyDome,
     buildMs: performance.now() - tStart,
+    lights,
   };
 }
