@@ -308,8 +308,26 @@ describe('dispose on collapse', () => {
       h.timers.fire();
       h.inset.setOpen(false);
     }
-    expect(h.builds.length).toBe(h.disposes.length);
-    expect(h.builds.length).toBeLessThanOrEqual(10);
+    expect(h.builds.length).toBe(h.disposes.length); // leak invariant
+    // Since the fix-round sig reset, reopen ALWAYS repaints the last-known
+    // plan at boot (stale-sig blank-inset bug) — a cycle may build TWICE
+    // (boot repaint + debounced newer plan), hence 2-per-cycle bound.
+    expect(h.builds.length).toBeLessThanOrEqual(20);
     expect(h.renderer?.disposed).toBe(true);
+  });
+
+  it('collapse→reopen with an IDENTICAL plan still rebuilds (regression: stale lastBuiltSig left a blank inset)', () => {
+    const h = makeInset();
+    h.inset.setOpen(true);
+    const p = plan('A');
+    h.inset.notifyPlanChanged(p);
+    h.timers.fire();
+    expect(h.builds).toHaveLength(1);
+
+    h.inset.setOpen(false); // teardown: scene gone…
+    expect(h.disposes).toHaveLength(1);
+
+    h.inset.setOpen(true); // …boot must rebuild despite unchanged plan
+    expect(h.builds).toHaveLength(2); // ← the fix: sig died with the scene
   });
 });

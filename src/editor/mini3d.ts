@@ -339,6 +339,10 @@ export class Mini3DInset {
       this.deps.disposeBuilt(this.built);
       this.built = null;
     }
+    // The signature dies WITH the scene: keeping it would make a
+    // collapse→reopen with an UNCHANGED plan early-return in fireRebuild
+    // (sig matches) while built === null — a permanently blank inset.
+    this.lastBuiltSig = null;
     this.renderer?.dispose();
     this.renderer = null;
     this.camera = null;
@@ -347,7 +351,8 @@ export class Mini3DInset {
   private readonly onContextLost = (ev: Event): void => {
     ev.preventDefault();
     this.teardown();
-    this.open = true; // stayed expanded — swap canvas for the stub
+    // open is untouched here (only setOpen(false) clears it) — the panel
+    // stays expanded and swaps the canvas for the stub.
     this.showFallback();
   };
 
@@ -455,21 +460,13 @@ export class Mini3DInset {
 export async function loadViewerDeps(): Promise<Mini3DDeps> {
   const [
     { PerspectiveCamera, WebGLRenderer },
-    { parseValidatedPlan: pv, compilePlan: cp },
     { adaptScene, sceneHasNaN },
     { buildViewerScene, disposeObject },
   ] = await Promise.all([
     import("three"),
-    import("../geom"),
     import("../viewer/adapter"),
     import("../viewer/sceneBuilder"),
   ]);
-
-  // Silence lint on the re-aliased twins: geom's barrel is the SOLE
-  // legal import surface (repo convention) but the names clash with the
-  // static top-of-file schema-style imports used for type clarity.
-  void pv;
-  void cp;
 
   const roomsById = (plan: FloorplanData): Map<string, Room> =>
     new Map(flatRooms(plan).map((r) => [r.id, r]));
@@ -480,7 +477,7 @@ export async function loadViewerDeps(): Promise<Mini3DDeps> {
         return new WebGLRenderer({
           canvas,
           antialias: true,
-          powerPreference: "high-performance",
+          powerPreference: "low-power",
         });
       } catch {
         return null;
