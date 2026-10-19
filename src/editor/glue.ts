@@ -83,6 +83,7 @@ import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene, paintSelectedSegmentOverlay } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
+import { angleReadoutLabels } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { encodeShare } from '../shared/shareLink';
@@ -1509,6 +1510,17 @@ export function initEditorInteraction(
     window as unknown as { __editorDimsVisible?: () => boolean }
   ).__editorDimsVisible = () => dimensionsVisible;
 
+  // Issue #100 (Pkg 12.2) read-only seam (same precedent): the live
+  // angle-pill TEXTS for the current gesture — canvas-drawn, so e2e
+  // asserts pill==typed-value consistency through here.
+  (window as unknown as { __editorAnglePills?: () => string[] })
+    .__editorAnglePills = () =>
+    angleReadoutLabels(
+      activeFloorPlan(store.getState()),
+      phase,
+      hoverSeg,
+    ).map((r) => r.text);
+
   // pkg 8.1 (issue #83) read-only seam (same precedent): the v1 wire
   // bridge DROPS the roofs field, so e2e asserts the active floor's
   // leans through here instead.
@@ -1828,7 +1840,7 @@ export function initEditorInteraction(
         cur.cursor = pushed;
         // Issue #100: the NEXT pending segment starts here — reseed the
         // floating fields from the freshly committed geometry.
-        remountDrawDims();
+        remountDrawDims(false);
       }
       repaint();
       return;
@@ -2518,8 +2530,16 @@ export function initEditorInteraction(
    * typed Enter). Fresh mount each time keeps the seeding single-path
    * (no imperative reconcile) and resets focus to the length field —
    * the chain-alive, mouseless rhythm.
+   *
+   * `focusSync`: KEYBOARD-initiated remounts (Enter/Esc inside the
+   * field's own keydown) focus the fresh fields SYNCHRONOUSLY so the
+   * typing chain never breaks. POINTER-initiated remounts pass false:
+   * the click's default action focuses the canvas, and stealing focus
+   * back would break the canvas-focused shortcut flows mid-draw (the
+   * pinned #101 Esc/I discipline) — the widget is one Tab away for
+   * the mixed pointer+keyboard flow.
    */
-  function remountDrawDims(): void {
+  function remountDrawDims(focusSync: boolean): void {
     if (phase.tag !== "drawingPoly") {
       destroyDrawDims();
       return;
@@ -2552,15 +2572,14 @@ export function initEditorInteraction(
         const pt = polarEndpoint(last, dims.lengthM, dims.angleDeg);
         phase.points.push(pt);
         phase.cursor = pt;
-        remountDrawDims();
+        // Keyboard-initiated: focus the fresh fields synchronously so
+        // the very next keystroke is already aimed at them.
+        remountDrawDims(true);
         repaint();
       },
       onInvalid: () => {
         // Reject-with-flash; state untouched (ghost keeps last preview).
-        flashMessage(
-          refs,
-          "Length must be a positive number.",
-        );
+        flashMessage(refs, "Length must be a positive number.");
       },
       onCancel: () => {
         if (phase.tag !== "drawingPoly") return;
@@ -2568,10 +2587,9 @@ export function initEditorInteraction(
         // point (fields reseed, chain INTACT — nothing discarded but
         // the uncommitted preview).
         phase = { ...phase, cursor: last };
-        remountDrawDims();
+        remountDrawDims(true);
         repaint();
       },
-      refocusOnCommit: true,
       testidPrefix: "draw-dims",
       lengthLabel: "Pending length (m)",
       angleLabel: "Pending angle (\u00B0)",
@@ -2588,11 +2606,13 @@ export function initEditorInteraction(
       drawDims.lengthInput.value = "";
       drawDims.angleInput.value = "";
     }
-    drawDims.focus();
+    if (focusSync) {
+      drawDims.focus();
+    }
   }
 
   function mountDrawDims(): void {
-    remountDrawDims();
+    remountDrawDims(false);
   }
 
   function closePolygon(): void {

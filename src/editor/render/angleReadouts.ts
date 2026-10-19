@@ -61,6 +61,19 @@ export function angleReadoutLabels(
   if (phase.tag === 'drawingRect') {
     const row = rowFor(phase.corner1, phase.cursor);
     if (row) rows.push(row);
+  } else if (phase.tag === 'drawingPoly') {
+    // Issue #100 (Pkg 12.2): one pill on the PENDING segment (last
+    // committed point → cursor) — the typed-bearing confirmation for
+    // the floating dim fields. Hidden while the cursor sits exactly
+    // on the last point (degenerate, nothing pending).
+    const last = phase.points[phase.points.length - 1];
+    if (
+      phase.cursor[0] !== last[0] ||
+      phase.cursor[1] !== last[1]
+    ) {
+      const row = rowFor(last, phase.cursor);
+      if (row) rows.push(row);
+    }
   } else if (phase.tag === 'resizing') {
     const room = flatRooms(plan).find((r) => r.id === phase.selectedRoomId);
     if (room) {

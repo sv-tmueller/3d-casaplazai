@@ -58,8 +58,14 @@ export interface DimFieldOptions {
   onInvalid: () => void;
   /** Drop/reset (Esc): clear the pending value, keep context alive. */
   onCancel?: () => void;
-  /** Refocus the LENGTH field after a commit (chain-alive UX). */
-  refocusOnCommit?: boolean;
+  /**
+   * Commit on blur/change (steppers, tabbing away). The INSPECTOR
+   * surface wants this (parity with the existing numberField); the
+   * MID-DRAW surface does NOT (Tab hops length↔angle constantly —
+   * commits happen on Enter only, or a stray blur would push phantom
+   * points mid-chain).
+   */
+  commitOnBlur?: boolean;
   /** testid prefix; fields get `<prefix>-length` / `<prefix>-angle`. */
   testidPrefix: string;
   /** Accessible labels (kept textual for getByRole stability). */
@@ -135,8 +141,13 @@ export function mountDimFields(opts: DimFieldOptions): DimFields {
       return;
     }
     opts.onCommit(dims);
-    if (opts.refocusOnCommit) lengthInput.focus();
-    else if (viaKey) lengthInput.focus();
+    // NO refocus here: on surfaces that REMOUNT on commit (mid-draw),
+    // this input is already detached by the time onCommit returns —
+    // focusing a detached node is a silent no-op that would LOSE the
+    // focus race against the fresh mount's own focus handling.
+    // Surfaces that keep the DOM (inspector) rely on the panel's
+    // focus-preservation across re-renders instead.
+    void viaKey;
   };
 
   for (const input of [lengthInput, angleInput]) {
@@ -169,8 +180,11 @@ export function mountDimFields(opts: DimFieldOptions): DimFields {
         ev.stopPropagation();
       }
     });
-    // Blur-committed steppers behave like Enter (no refocus loop).
+    // Blur-commit is OPT-IN (see DimFieldOptions.commitOnBlur): the
+    // inspector turns it on (numberField parity); mid-draw keeps
+    // Enter as the only commit (Tab hops must never push points).
     input.addEventListener('change', () => {
+      if (!opts.commitOnBlur) return;
       if (Date.now() < suppressChangeUntil) return;
       const dims = current();
       if (dims === null) {

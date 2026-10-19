@@ -60,13 +60,14 @@ describe('mountDimFields (issue #100)', () => {
   let invalids: number;
   let cancels: number;
   let lives: number;
+  let baseOpts: Parameters<typeof mountDimFields>[0];
 
   beforeEach(() => {
     commits = [];
     invalids = 0;
     cancels = 0;
     lives = 0;
-    fields = mountDimFields({
+    baseOpts = {
       lengthM: 4,
       angleDeg: 90,
       onLive: () => {
@@ -83,8 +84,9 @@ describe('mountDimFields (issue #100)', () => {
       },
       testidPrefix: 't',
       lengthLabel: 'Length (m)',
-      angleLabel: 'Angle (°)',
-    });
+      angleLabel: 'Angle (\u00B0)',
+    };
+    fields = mountDimFields(baseOpts);
     document.body.appendChild(fields.root);
   });
 
@@ -132,11 +134,22 @@ describe('mountDimFields (issue #100)', () => {
   });
 
   it('Enter swallows the trailing change event (no double commit)', () => {
+    fields = mountDimFields({
+      ...baseOpts,
+      commitOnBlur: true,
+    });
+    document.body.appendChild(fields.root);
     fields.lengthInput.value = '5';
     fire(fields.lengthInput, 'keydown', 'Enter');
     // Chromium fires `change` on the imminent blur/refocus.
     fire(fields.lengthInput, 'change');
     expect(commits).toHaveLength(1);
+  });
+
+  it('blur-commit is OPT-IN: default (mid-draw) ignores change events', () => {
+    fields.lengthInput.value = '5';
+    fire(fields.lengthInput, 'change');
+    expect(commits).toEqual([]);
   });
 
   it('field keydown stops propagation (canvas handlers never see it)', () => {
