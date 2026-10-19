@@ -32,7 +32,7 @@ import {
   SPRINT_FACTOR,
   VIEWER_PLAYER_RADIUS,
 } from './types';
-import type { AdaptedScene, CameraRig, ViewMode } from './types';
+import type { AdaptedScene, CameraRig, StairWalkSurface, ViewMode } from './types';
 
 /** Mouse sensitivity: radians of yaw/pitch per CSS pixel. */
 const LOOK_SENSITIVITY = 0.0024;
@@ -84,21 +84,109 @@ const AXIS_Z = new Vector3(0, 0, 1);
 const LOCAL_RIGHT = new Vector3(1, 0, 0);
 
 /**
- * Boxes fencing the ACTIVE storey (issue #76). A box qualifies when its
- * z band overlaps the walker's body band [floorZ, floorZ + EYE_HEIGHT]:
- * a ground-storey walker standing beneath an upstairs wall shares no z
- * range with it and walks freely. Boxes lacking z fences are
- * storey-less (legacy data) and always qualify.
+ * Boxes fencing the walker's CURRENT z band (issue #76, made per-frame
+ * by issue #80): a box qualifies when its z band overlaps the walker's
+ * body band [floorZ, floorZ + EYE_HEIGHT]. A ground-storey walker
+ * standing beneath an upstairs wall shares no z range with it and walks
+ * freely; mid-stair the band slides continuously, handing fencing
+ * from the departure storey's boxes to the arrival storey's. Boxes
+ * lacking z fences are storey-less (legacy data) and always qualify.
  */
 export function activeCollisions(
   adapted: Pick<AdaptedScene, 'collisions' | 'activeFloorElevation'>,
+  floorZ: number = adapted.activeFloorElevation,
 ): AdaptedScene['collisions'] {
-  const lo = adapted.activeFloorElevation;
+  const lo = floorZ;
   const hi = lo + EYE_HEIGHT;
   return adapted.collisions.filter((box) => {
     if (box.minZ === undefined || box.maxZ === undefined) return true;
     return box.maxZ > lo && box.minZ < hi;
   });
+}
+
+/* ---------------- stair grounding (issue #80) --------------------------- */
+
+/** Max instantaneous STEP-UP the resolver accepts, meters. */
+const STEP_UP_MAX = 0.35;
+
+/** Fall speed when the ground drops away (walked into a stairwell), m/s. */
+const FALL_SPEED = 5;
+
+/** Inside test for a CCW convex quad (stair rects), boundary-inclusive. */
+function pointInQuad(
+  quad: readonly (readonly [number, number])[],
+  x: number,
+  y: number,
+): boolean {
+  const EPS = 1e-9;
+  for (let i = 0; i < quad.length; i += 1) {
+    const a = quad[i];
+    const b = quad[(i + 1) % quad.length];
+    if (!a || !b) return false;
+    const cross = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+    if (cross < -EPS) return false;
+  }
+  return true;
+}
+
+/**
+ * Per-frame grounding resolver (issue #80): the walking z under a plan
+ * point, given the walker's current z. Candidate surfaces:
+ *   - every storey plane the plan offers (lowest floor + each stair's
+ *     departure/arrival elevations);
+ *   - each stair's RAMP: z = zLower + clamp(progress) · rise while the
+ *     point lies inside the stair's LANDING-HOLE rect (footprint +
+ *     one-tread extension; the ramp spans the extension with progress
+ *     clamped to 1 so cresting onto the arrival plane is seamless).
+ * The ARRIVAL plane is EXCLUDED inside its stair's hole rect (the slab
+ * is literally holed there) — walking into the stairwell from the
+ * upper storey therefore drops onto the treads instead of hovering.
+ * Among candidates with z <= curZ + STEP_UP_MAX (reachable without a
+ * jump), the HIGHEST wins; none ⇒ the lowest floor (void fallback).
+ */
+export function resolveGroundZ(
+  x: number,
+  y: number,
+  curZ: number,
+  baseFloorZ: number,
+  stairs: readonly StairWalkSurface[],
+): number {
+  // Distinct storey planes: lowest floor + every stair endpoint. A
+  // storey without a stair never needs a plane (unreachable by walk).
+  const planes = new Set<number>([baseFloorZ]);
+  for (const s of stairs) {
+    planes.add(s.zLower);
+    planes.add(s.zLower + s.rise);
+  }
+
+  let best: number | null = null;
+  const reachable = (z: number): boolean => z <= curZ + STEP_UP_MAX;
+
+  for (const z of planes) {
+    // Holed arrival planes do not exist over their stairwell.
+    const holed = stairs.some(
+      (s) =>
+        Math.abs(z - (s.zLower + s.rise)) <= 1e-3 &&
+        pointInQuad(s.hole, x, y),
+    );
+    if (holed) continue;
+    if (!reachable(z)) continue;
+    if (best === null || z > best) best = z;
+  }
+
+  for (const s of stairs) {
+    // Ramp candidate: active across the whole hole rect (footprint +
+    // one-tread landing extension), progress clamped to [0, 1] so the
+    // extension sits level with the arrival plane.
+    if (!pointInQuad(s.hole, x, y)) continue;
+    const along = (x - s.ax) * s.ux + (y - s.ay) * s.uy;
+    const progress = Math.max(0, Math.min(1, along / s.run));
+    const z = s.zLower + progress * s.rise;
+    if (!reachable(z)) continue;
+    if (best === null || z > best) best = z;
+  }
+
+  return best ?? baseFloorZ;
 }
 
 /** Aspect ratio of a canvas, safe against zero-sized elements. */
@@ -160,12 +248,22 @@ export class WalkRig implements CameraRig {
   private posY: number;
 
   /**
-   * Walking-surface elevation of the active storey, meters (issue #76).
-   * The camera rides at activeFloorElevation + EYE_HEIGHT; collisions
-   * are pre-filtered to this storey's z band so upstairs walls never
-   * fence a downstairs walker (and vice versa).
+   * Current walking-surface z, meters (issue #80). Formerly the
+   * READ-ONLY activeFloorElevation (issue #76); now seeded at spawn
+   * (lowest floor) and re-resolved EVERY FRAME by resolveGroundZ:
+   * inside a stair's hole rect the walker rides the ramp
+   * zLower + clamp(progress)·rise, otherwise the highest reachable
+   * storey plane. Falls (ground below curZ) integrate downward at
+   * FALL_SPEED until grounded — walking into a stairwell from the
+   * upper storey lands on the treads.
    */
-  private readonly floorZ: number;
+  private curZ: number;
+
+  /** Stair surfaces for the grounding resolver ([] = stair-free plan). */
+  private readonly stairs: readonly StairWalkSurface[];
+
+  /** Lowest floor's elevation (resolver fallback + spawn plane). */
+  private readonly baseFloorZ: number;
 
   /** Smoothed plan-space velocity (m/s). */
   private velX = 0;
@@ -202,8 +300,10 @@ export class WalkRig implements CameraRig {
   ) {
     this.posX = spawnX;
     this.posY = spawnY;
-    this.floorZ = adapted.activeFloorElevation;
-    this.collisions = activeCollisions(adapted);
+    this.baseFloorZ = adapted.activeFloorElevation;
+    this.curZ = this.baseFloorZ;
+    this.stairs = adapted.stairs;
+    this.collisions = adapted.collisions;
 
     this.camera = new PerspectiveCamera(60, aspectOf(canvas), 0.05, 400);
     this.applyDiscToCamera();
@@ -303,18 +403,19 @@ export class WalkRig implements CameraRig {
     seedYaw(this.camera, yawRad);
   }
 
-  /** Seat the world camera from the plan-space disc pose.
-   * WORLD IS Z-UP (floors at z=floorZ, ceilings at floorZ+wallHeight):
-   * the eye rides at activeFloorElevation + EYE_HEIGHT (issue #76 —
-   * formerly hardcoded 0 + EYE_HEIGHT). Position is reset every frame;
-   * the LOOK orientation is owned by the quaternion
+  /**
+   * Seat the world camera from the plan-space disc pose.
+   * WORLD IS Z-UP (floors at z=curZ, ceilings at curZ+wallHeight):
+   * the eye rides at curZ + EYE_HEIGHT (issue #80 — curZ is the
+   * per-frame grounding: storey plane or stair ramp). Position is reset
+   * every frame; the LOOK orientation is owned by the quaternion
    * (applyLook/seedYaw), never clobbered here.
    */
   private applyDiscToCamera(): void {
     this.camera.position.set(
       this.posX,
       this.posY,
-      this.floorZ + EYE_HEIGHT,
+      this.curZ + EYE_HEIGHT,
     );
   }
 
@@ -432,13 +533,21 @@ export class WalkRig implements CameraRig {
     }
 
     if (this.velX !== 0 || this.velY !== 0) {
+      // Fence with the boxes overlapping the walker's CURRENT z band
+      // (issue #80): mid-stair the band slides, handing fencing from
+      // the departure storey's walls to the arrival storey's. Filtering
+      // per frame costs little (≤ few hundred boxes).
+      const fenced = activeCollisions(
+        { collisions: this.collisions, activeFloorElevation: this.baseFloorZ },
+        this.curZ,
+      );
       const out = moveDiscStepped(
         this.posX,
         this.posY,
         this.velX,
         this.velY,
         dt,
-        this.collisions,
+        fenced,
         VIEWER_PLAYER_RADIUS,
       );
       this.posX = out.x;
@@ -447,6 +556,24 @@ export class WalkRig implements CameraRig {
       // not accumulate jitter across frames.
       this.velX = out.vx;
       this.velY = out.vy;
+    }
+
+    // ---- Per-frame grounding (issue #80) ---------------------------
+    // Resolve the surface under the (moved) disc; adopt it when it is
+    // at/above the feet (step-up onto treads/planes), otherwise fall
+    // toward it at FALL_SPEED (stairwell drop from the upper storey).
+    const groundZ = resolveGroundZ(
+      this.posX,
+      this.posY,
+      this.curZ,
+      this.baseFloorZ,
+      this.stairs,
+    );
+    if (groundZ >= this.curZ) {
+      this.curZ = groundZ;
+    } else {
+      const drop = Math.min(this.curZ - groundZ, FALL_SPEED * dt);
+      this.curZ -= drop;
     }
 
     this.applyDiscToCamera();
