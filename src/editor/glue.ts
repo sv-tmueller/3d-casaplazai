@@ -291,11 +291,22 @@ export function initEditorInteraction(
   store.hydrateUnderlays(loadUnderlayMap(underlayStorage));
 
   let underlayTimer: ReturnType<typeof setTimeout> | null = null;
+  let underlayPersistWarned = false;
   function scheduleUnderlayPersist(): void {
     if (underlayTimer !== null) clearTimeout(underlayTimer);
     underlayTimer = setTimeout(() => {
       underlayTimer = null;
-      saveUnderlayMap(underlayStorage, store.getState().underlays);
+      const ok = saveUnderlayMap(underlayStorage, store.getState().underlays);
+      // Reviewer #99 should-fix: a failed persist (quota/privacy) used to
+      // be silent — the user's scan vanished on reload with no clue.
+      // Warn ONCE per session; beforeunload stays silent (no UI timing).
+      if (!ok && !underlayPersistWarned) {
+        underlayPersistWarned = true;
+        flashMessage(
+          refs,
+          'Underlay not saved — storage quota exceeded. It will be lost on reload.',
+        );
+      }
     }, UNDERLAY_DEBOUNCE_MS);
   }
   window.addEventListener('beforeunload', () => {
@@ -770,6 +781,10 @@ export function initEditorInteraction(
     const next = st.activeFloorIdx + delta;
     if (next < 0 || next >= st.data.floors.length) return;
     store.dispatch({ type: 'setActiveFloor', index: next });
+    // Reviewer #99 nit: the underlay selection is floor-independent —
+    // leaving it armed across a switch pointed invisible arrow-nudges
+    // at the NEW floor's underlay. Deselect on every switch.
+    underlaySelected = false;
   }
 
   const setFloorPopoverOpen = (open: boolean): void => {

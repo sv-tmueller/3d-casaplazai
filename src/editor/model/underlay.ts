@@ -180,8 +180,8 @@ export function loadUnderlayMap(
 export function saveUnderlayMap(
   storage: Storage | null,
   map: Record<string, UnderlayState>,
-): void {
-  if (!storage) return;
+): boolean {
+  if (!storage) return false;
   try {
     if (Object.keys(map).length === 0) {
       // Removing (vs storing "{}") keeps the slot absent in the common
@@ -190,8 +190,12 @@ export function saveUnderlayMap(
     } else {
       storage.setItem(UNDERLAY_STORAGE_KEY, JSON.stringify(map));
     }
+    return true;
   } catch {
-    /* quota / privacy mode: keep running on the in-memory copy */
+    // Quota exceeded / privacy mode: keep running on the in-memory copy.
+    // Caller flashes a message (reviewer #99 should-fix) — silent loss
+    // of a large scan on reload was the failure mode this return fixes.
+    return false;
   }
 }
 
