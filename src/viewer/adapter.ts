@@ -405,7 +405,18 @@ export function adaptScene(
     // windows), so the dz list must be built from the same filtered
     // sequence — indexing raw openings here would misalign.
     const doorOpens = openings.filter((o) => o.kind === 'door');
-    const doorSlabs = doorRects(roomsById, openings).flatMap((rect, i) =>
+    // Positional coupling guard (reviewer #76): doorRects may skip an
+    // opening (missing room, bad segmentIndex, zero-length segment) while
+    // doorOpens keeps it — a silent desync would shift every later door's
+    // lift by a storey. Validation makes skips impossible today; this
+    // hard-fails rather than corrupt if that ever changes.
+    const rects = doorRects(roomsById, openings);
+    if (rects.length !== doorOpens.length) {
+      throw new Error(
+        `adapter: doorRects/doorOpens desync (${rects.length} vs ${doorOpens.length}) — lift alignment invalid`,
+      );
+    }
+    const doorSlabs = rects.flatMap((rect, i) =>
       buildFrameSlabs(
         liftRect(rect, plan ? liftOf(doorOpens[i]!) : 0),
         thickness,
