@@ -101,6 +101,7 @@ import {
 } from "./model/measure";
 import { compassAngleBetween, polarEndpoint } from "./model/angles";
 import { mountDimFields, type DimFields } from "./typeInDims";
+import { Mini3DInset } from "./mini3d";
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -634,6 +635,63 @@ export function initEditorInteraction(
     refreshStatus();
     refreshInspector();
     repaint();
+    // Pkg 13.1 (#109): live plan → mini-3D inset. Cheap reference hop;
+    // the inset debounces (150 ms) + skips unchanged signatures + gates
+    // on in-flight draw gestures INTERNALLY (mini3d.ts).
+    mini3d?.notifyPlanChanged(_s.data);
+  });
+
+  /* ---------- Pkg 13.1 (issue #109): mini-3D inset ---------- */
+
+  /*
+   * The inset mounts as a flex SIBLING of the inspector panel inside
+   * inspectorDock (the #101 mount precedent two lines below — the dock
+   * is .editor-main-area, a flex row, so the 2D canvas auto-narrows
+   * with ZERO sizing math). Deps load via DYNAMIC import on FIRST
+   * enable: three.js + the viewer pipeline stay OUT of the editor's
+   * initial chunk (layering law: editor→viewer is the legal direction).
+   */
+  let mini3d: Mini3DInset | null = null;
+  let mini3dLoading = false;
+  let mini3dPendingOpen = false;
+
+  async function ensureMini3d(): Promise<Mini3DInset | null> {
+    if (mini3d !== null) return mini3d;
+    if (mini3dLoading) return null;
+    mini3dLoading = true;
+    try {
+      // Dynamic import on FIRST toggle only: three.js + the viewer
+      // pipeline stay OUT of the editor's initial chunk (SUB_PLAN §3).
+      const { loadViewerDeps } = await import('./mini3d');
+      const deps = await loadViewerDeps();
+      mini3d = new Mini3DInset(refs.inspectorDock, deps, {
+        gestureGate: drawGestureInProgress,
+      });
+      return mini3d;
+    } catch {
+      return null; // chunk load failure behaves like a GL-less stub
+    } finally {
+      mini3dLoading = false;
+    }
+  }
+
+  async function setMini3dOpen(open: boolean): Promise<void> {
+    if (open) {
+      mini3dPendingOpen = true;
+      const inset = await ensureMini3d();
+      if (inset === null || !mini3dPendingOpen) return; // collapsed while loading
+      inset.notifyPlanChanged(store.getState().data, { immediate: true });
+      inset.setOpen(true);
+      refs.btnMini3d.setAttribute('aria-pressed', 'true');
+    } else {
+      mini3dPendingOpen = false;
+      refs.btnMini3d.setAttribute('aria-pressed', 'false');
+      mini3d?.setOpen(false);
+    }
+  }
+
+  refs.btnMini3d.addEventListener("click", () => {
+    void setMini3dOpen(mini3d === null || !mini3d.isOpen());
   });
 
   /**
@@ -2484,6 +2542,23 @@ export function initEditorInteraction(
     ) {
       if (drawGestureInProgress()) return;
       setInspectorOpen(!inspector!.isOpen());
+      ev.preventDefault();
+      return;
+    }
+    // Pkg 13.1 (issue #109): "3" toggles the mini-3D inset (canvas-
+    // focused stroke — the inset owns NO window-level keydown listener,
+    // so the pinned Esc/Enter/I/L canvas discipline is untouched).
+    // Registered in shortcuts.ts (sheet + README sync duty). Mid-gesture
+    // "3" is swallowed (same guard as I): enabling the inset mid-draw
+    // would recompile the 3D scene under a streaming gesture.
+    if (
+      (ev.key === "3") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
+    ) {
+      if (drawGestureInProgress()) return;
+      void setMini3dOpen(mini3d === null || !mini3d.isOpen());
       ev.preventDefault();
       return;
     }
