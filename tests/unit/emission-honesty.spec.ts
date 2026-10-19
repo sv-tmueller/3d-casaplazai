@@ -13,6 +13,10 @@
  *      (was 4 rows). Fix: a room whose interior chord depth at the cut
  *      is below PAIR_TOLERANCE_M cannot host a doorway — the cut walks
  *      through to the real room across.
+ *   3. #112 SLAB IMPOSTOR: the impostor purge must not rely on the
+ *      vertex-AVERAGE centroid proxy — a slab whose centroid falls
+ *      outside the room it physically overlaps (and vice versa) still
+ *      evaded the purge (3 rows). Fix: true interior-overlap predicate.
  *
  * Unregressed guarantees pinned here too: the legitimate 5 mm-offset
  * shared wall still pairs, and the inclusive-at-exactly-10 mm pairing
@@ -98,6 +102,38 @@ describe('#40 closet: sub-tolerance room cannot host (4 -> 2)', () => {
 
   it('derivePairRows (model layer) agrees: 2 rows, no sliver face', () => {
     const rows = derivePairRows(CLOSET, {
+      roomId: 'living',
+      segmentIndex: 1,
+      tCenter: 0.5,
+      width: 0.9,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[1].roomId).toBe('kitchen');
+  });
+});
+
+describe('#112 mutually-exterior-centroid impostor: slab must still be purged', () => {
+  // Slab [5.008,0]-[6.008,9] straddles the shared wall and physically
+  // overlaps kitchen's footprint, but NEITHER room's vertex-average
+  // centroid is inside the other: slab centroid ≈ (5.508, 4.5) sits
+  // north of kitchen's y ≤ 4, kitchen centroid (6.5, 2) sits east of
+  // the slab's x ≤ 6.008. The vertex-average containment probe saw no
+  // overlap -> 3 rows emitted where 2 are honest.
+  const SLAB: FloorplanData = planWith([
+    mkRoom('living', LIVING),
+    mkRoom('kitchen', [[5, 0], [8, 0], [8, 4], [5, 4]]),
+    mkRoom('slab', [[5.008, 0], [6.008, 0], [6.008, 9], [5.008, 9]]),
+  ]);
+
+  it('one commit emits exactly 2 rows: living + kitchen, none for slab', () => {
+    const ops = commitEastDoor(new EditorStore(SLAB));
+    expect(ops).toHaveLength(2);
+    expect(ops.map((o) => o.roomId).sort()).toEqual(['kitchen', 'living']);
+    expect(ops.filter((o) => o.roomId === 'slab')).toHaveLength(0);
+  });
+
+  it('derivePairRows (model layer) agrees with the store emission', () => {
+    const rows = derivePairRows(SLAB, {
       roomId: 'living',
       segmentIndex: 1,
       tCenter: 0.5,
