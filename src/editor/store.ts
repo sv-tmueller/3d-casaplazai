@@ -10,6 +10,7 @@
 import type { FloorplanData, Floor, Opening, Room, Vec2 } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
+import type { UnderlayState } from './model/underlay';
 import {
   mirrorT,
   overlapHosts,
@@ -104,7 +105,16 @@ export type Command =
   /** Set one wall segment's roof lean (degrees, [0,75]); 0 REMOVES the row. */
   | { type: 'setWallLean'; roomId: string; segmentIndex: number; leanDeg: number }
   /** Remove one wall segment's lean row outright. */
-  | { type: 'clearWallLean'; roomId: string; segmentIndex: number };
+  | { type: 'clearWallLean'; roomId: string; segmentIndex: number }
+  /* ---- pkg 12.1 additions (issue #99): blueprint underlay ---- */
+  /**
+   * Replace (or, with null, DELETE) one floor's underlay slot. NON-
+   * undoable by construction: the underlay is EDITOR state living
+   * outside `data` (snap-settings lane, see model/underlay.ts) — undo
+   * must NOT rewind image nudges/drags. Keyed by floor.id so each
+   * storey traces its own blueprint.
+   */
+  | { type: 'setUnderlaySlot'; floorId: string; state: UnderlayState | null };
 
 export type DispatchResult =
   | { ok: true }
@@ -123,6 +133,15 @@ export interface EditorState {
    * Always read through activeFloor()/clampActiveFloorIdx().
    */
   activeFloorIdx: number;
+  /**
+   * pkg 12.1 (issue #99): per-floor blueprint underlays, keyed by
+   * floor.id. Lives OUTSIDE `data` like activeFloorIdx — the underlay
+   * is EDITOR state, never FloorplanData (share links omit it BY
+   * CONSTRUCTION; persistence goes through the separate
+   * casaplaza.underlay.v1 localStorage lane, see model/underlay.ts).
+   * Access through underlayFor()/setUnderlaySlot only.
+   */
+  underlays: Record<string, UnderlayState>;
 }
 
 /**
@@ -645,6 +664,37 @@ function reduceClearWallLean(
   return { ok: true };
 }
 
+/* ---------------- pkg 12.1 underlay slice (issue #99) ------------------- */
+
+/**
+ * Underlay of the ACTIVE floor (null when none). Clamp mirrors
+ * activeFloor()'s defensive posture: an out-of-range index reads as
+ * floor 0 rather than throwing.
+ */
+export function underlayFor(st: EditorState): UnderlayState | null {
+  const idx = Math.min(
+    Math.max(st.activeFloorIdx, 0),
+    st.data.floors.length - 1,
+  );
+  const floor = st.data.floors[idx];
+  return floor ? (st.underlays[floor.id] ?? null) : null;
+}
+
+function reduceSetUnderlaySlot(
+  st: EditorState,
+  cmd: { floorId: string; state: UnderlayState | null },
+): DispatchResult {
+  if (!st.data.floors.some((f) => f.id === cmd.floorId)) {
+    return { ok: false, error: `unknown floor "${cmd.floorId}"` };
+  }
+  if (cmd.state === null) {
+    delete st.underlays[cmd.floorId];
+  } else {
+    st.underlays[cmd.floorId] = cmd.state;
+  }
+  return { ok: true };
+}
+
 /* ------------------------------ Store class ------------------------------- */
 
 export class EditorStore {
@@ -656,7 +706,22 @@ export class EditorStore {
   public dirty = false;
 
   constructor(initial: FloorplanData) {
-    this._state = { data: clone(initial), selectedId: null, activeFloorIdx: 0 };
+    this._state = {
+      data: clone(initial),
+      selectedId: null,
+      activeFloorIdx: 0,
+      underlays: {},
+    };
+  }
+
+  /**
+   * pkg 12.1 (issue #99): hydrate persisted underlays (boot, and after
+   * a plan import wiped the slots). Rows failing parseUnderlayState
+   * were already dropped by the loader; this trusts its caller.
+   */
+  hydrateUnderlays(map: Record<string, UnderlayState>): void {
+    this._state = { ...this._state, underlays: { ...map } };
+    this.notify();
   }
 
   getState(): EditorState {
@@ -690,6 +755,14 @@ export class EditorStore {
       const flRes = reduceSetActiveFloor(this._state, cmd.index);
       if (flRes.ok) this.notify();
       return flRes;
+    }
+    // pkg 12.1 (issue #99): underlay writes bypass history entirely —
+    // the slice lives outside `data`, so undo must never rewind them
+    // (mirrors the activeFloorIdx exclusion).
+    if (cmd.type === 'setUnderlaySlot') {
+      const ulRes = reduceSetUnderlaySlot(this._state, cmd);
+      if (ulRes.ok) this.notify();
+      return ulRes;
     }
     clampActiveFloorIdx(this._state);
 
@@ -740,7 +813,10 @@ export class EditorStore {
   private reduceAtomic(
     cmd: Exclude<
       Command,
-      { type: 'setSelection' } | { type: 'setEntitySelection' } | { type: 'setActiveFloor' }
+      | { type: 'setSelection' }
+      | { type: 'setEntitySelection' }
+      | { type: 'setActiveFloor' }
+      | { type: 'setUnderlaySlot' }
     >,
   ): DispatchResult {
     switch (cmd.type) {
@@ -866,7 +942,15 @@ export class EditorStore {
 
   /** Swap in a wholly different plan (autosave hydration); resets history. */
   replaceAll(plan: FloorplanData): void {
-    this._state = { data: clone(plan), selectedId: null, activeFloorIdx: 0 };
+    // pkg 12.1 (issue #99): the underlay slice is EDITOR state, not
+    // plan data — a wholesale plan swap KEEPS the per-floor images
+    // (matching localStorage, which lives under its own key).
+    this._state = {
+      ...this._state,
+      data: clone(plan),
+      selectedId: null,
+      activeFloorIdx: 0,
+    };
     this._undoStack = [];
     this._redoStack = [];
     this.dirty = false;

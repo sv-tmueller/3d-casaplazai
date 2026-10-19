@@ -49,6 +49,23 @@ import {
 } from './model/openings';
 import { itemCorners } from './model/furniture';
 import type { Pt } from './geom';
+import {
+  loadUnderlayMap,
+  nudgeUnderlay,
+  resizeUnderlayFromCorner,
+  rotateUnderlayBy,
+  saveUnderlayMap,
+  underlayCorners,
+  underlayHandleAt,
+  underlayInteractable,
+  UNDERLAY_DEBOUNCE_MS,
+  UNDERLAY_FIT_M,
+  UNDERLAY_DEFAULT_OPACITY,
+  UNDERLAY_NUDGE_LARGE_M,
+  UNDERLAY_NUDGE_M,
+  UNDERLAY_ROTATE_STEP_DEG,
+  type UnderlayState,
+} from './model/underlay';
 import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
@@ -59,7 +76,7 @@ import { encodeShare } from '../shared/shareLink';
 import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
-import { EditorStore, activeFloorPlan, emptyPlan } from './store';
+import { EditorStore, activeFloorPlan, emptyPlan, underlayFor } from './store';
 import { vecAdd, vecSub } from './geom';
 import {
   labelHitTest,
@@ -114,6 +131,28 @@ export function openingCommitNotice(
   rowsAfter: number,
 ): string | null {
   return rowsAfter - rowsBefore === 1 ? 'Opening pierces only this wall' : null;
+}
+
+/* -------------------- pkg 12.1 helpers (issue #99) ------------------------ */
+
+/** File → data URL (rejects on read failure). */
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('read failed'));
+    fr.onload = () => resolve(String(fr.result));
+    fr.readAsDataURL(file);
+  });
+}
+
+/** Decoded pixel size of a data-URL image (0×0 on decode failure). */
+function imageSize(src: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve({ w: 0, h: 0 });
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = src;
+  });
 }
 
 /**
@@ -238,6 +277,97 @@ export function initEditorInteraction(
   }
   let measureDraft: { a: Pt } | null = null;
 
+  /* ---------- pkg 12.1 (issue #99): blueprint underlay ---------- */
+
+  /**
+   * The underlay is EDITOR state (snap-settings lane — see
+   * model/underlay.ts): a per-floor map persisted under its OWN
+   * versioned key casaplaza.underlay.v1 with debounced writes
+   * (AUTOSAVE_KEY's slot carries raw FloorplanData and must stay
+   * untainted). Loaded on boot; floor SWITCHES need no special code —
+   * repaint derives the active floor's slot through underlayFor().
+   */
+  const underlayStorage = safeLocalStorage();
+  store.hydrateUnderlays(loadUnderlayMap(underlayStorage));
+
+  let underlayTimer: ReturnType<typeof setTimeout> | null = null;
+  let underlayPersistWarned = false;
+  function scheduleUnderlayPersist(): void {
+    if (underlayTimer !== null) clearTimeout(underlayTimer);
+    underlayTimer = setTimeout(() => {
+      underlayTimer = null;
+      const ok = saveUnderlayMap(underlayStorage, store.getState().underlays);
+      // Reviewer #99 should-fix: a failed persist (quota/privacy) used to
+      // be silent — the user's scan vanished on reload with no clue.
+      // Warn ONCE per session; beforeunload stays silent (no UI timing).
+      if (!ok && !underlayPersistWarned) {
+        underlayPersistWarned = true;
+        flashMessage(
+          refs,
+          'Underlay not saved — storage quota exceeded. It will be lost on reload.',
+        );
+      }
+    }, UNDERLAY_DEBOUNCE_MS);
+  }
+  window.addEventListener('beforeunload', () => {
+    if (underlayTimer !== null) {
+      clearTimeout(underlayTimer);
+      underlayTimer = null;
+    }
+    saveUnderlayMap(underlayStorage, store.getState().underlays);
+  });
+
+  /** Decode cache: dataUrl → HTMLImageElement (recreated on swap). */
+  let underlayImg: HTMLImageElement | null = null;
+  function loadImage(dataUrl: string): HTMLImageElement {
+    const img = new Image();
+    img.src = dataUrl;
+    img.onload = () => repaint();
+    return img;
+  }
+
+  let underlaySelected = false;
+  /**
+   * In-flight corner resize. The BASE rect is captured at pointerdown:
+   * every streamed frame recomputes from the ORIGINAL rect (computing
+   * from the evolving state would let a momentary axis-cross collapse
+   * the image to the minimum and then REGROW from the corrupted basis
+   * on the next frame).
+   */
+  let resizingUnderlay: { corner: number; base: UnderlayState } | null = null;
+
+  function activeFloorId(): string {
+    const st = store.getState();
+    const fl = st.data.floors[
+      Math.min(Math.max(st.activeFloorIdx, 0), st.data.floors.length - 1)
+    ];
+    return fl?.id ?? '';
+  }
+
+  /** Active floor's underlay, or null (clamped access). */
+  function activeUnderlay(): UnderlayState | null {
+    return underlayFor(store.getState());
+  }
+
+  /** Mutate the ACTIVE floor's slot (or delete with null), then persist. */
+  function setUnderlay(next: UnderlayState | null): void {
+    const res = store.dispatch({
+      type: 'setUnderlaySlot',
+      floorId: activeFloorId(),
+      state: next,
+    });
+    if (res.ok) {
+      if (next === null) underlaySelected = false;
+      scheduleUnderlayPersist();
+    }
+  }
+
+  /** Screen-space corners of the active underlay ([] when none). */
+  function underlayScreenCorners(): Pt[] {
+    const u = activeUnderlay();
+    return u ? underlayCorners(u).map((p) => worldToScreen(cam, p)) : [];
+  }
+
   /* ---------- sizing (devicePixelRatio aware) ---------- */
   function resizeCanvas(): void {
     const wrap = canvas.parentElement!;
@@ -253,6 +383,13 @@ export function initEditorInteraction(
 
   function repaint(): void {
     if (!ctx) return; // stub environment: DOM/state still fully functional
+    // pkg 12.1 (issue #99): keep the decode cache pointed at the ACTIVE
+    // floor's image — covers boot hydration, floor switches, and
+    // imports with one seam (dispatch notifies → repaint → prime).
+    const au = activeUnderlay();
+    if (au !== null && underlayImg?.src !== au.dataUrl) {
+      underlayImg = loadImage(au.dataUrl);
+    }
     const rect = canvas.getBoundingClientRect();
     // pkg 7.2 (issue #75): the canvas shows the ACTIVE floor only —
     // paintScene receives the single-floor view, never the whole plan.
@@ -260,6 +397,11 @@ export function initEditorInteraction(
     paintScene(
       ctx, rect.width, rect.height, cam, view, phase, hoverRoomId,
       ghost, hoverSeg, hoverHandle, store.getState().selectedId, snapSettings.pitch,
+      // pkg 12.1 (issue #99): active floor's underlay paints beneath the
+      // grid (trace-over guarantee); handles only while selected.
+      activeUnderlay(),
+      underlayImg,
+      underlaySelected && underlayInteractable(activeUnderlay()),
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
@@ -481,6 +623,150 @@ export function initEditorInteraction(
   }, true);
   refs.btnRect.addEventListener('click', () => setActiveTool('rectangle'));
 
+  /* ---------- pkg 12.1 (issue #99): underlay UI ---------- */
+
+  /** Seed popover controls from the ACTIVE floor's underlay. */
+  function syncUnderlayControls(): void {
+    const u = activeUnderlay();
+    refs.underlayOpacity.value = String(u?.opacity ?? UNDERLAY_DEFAULT_OPACITY);
+    refs.underlayOpacityValue.textContent = `${refs.underlayOpacity.value}%`;
+    refs.underlayLock.checked = u?.locked ?? false;
+    refs.underlayHide.checked = u?.hidden ?? false;
+  }
+
+  const setUnderlayPopoverOpen = (open: boolean): void => {
+    refs.underlayPopover.hidden = !open;
+    refs.btnUnderlay.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      syncUnderlayControls();
+      refs.underlayOpacity.focus();
+    }
+  };
+
+  refs.btnUnderlay.addEventListener('click', () => {
+    const u = activeUnderlay();
+    if (u === null) {
+      // No image yet: the button IS the import affordance (picker
+      // opens; choosing a file places + selects the underlay).
+      refs.underlayFileInput.value = '';
+      refs.underlayFileInput.click();
+      return;
+    }
+    setUnderlayPopoverOpen(refs.underlayPopover.hidden === true);
+  });
+
+  refs.underlayFileInput.addEventListener('change', () => {
+    const file = refs.underlayFileInput.files?.[0];
+    if (!file) return;
+    void (async () => {
+      let dataUrl: string;
+      try {
+        dataUrl = await readFileAsDataUrl(file);
+      } catch {
+        flashMessage(refs, 'Could not read the selected image.');
+        return;
+      }
+      // Reject non-images defensively (the accept filter is advisory).
+      if (!/^data:image\/(?:png|jpeg|webp);base64,/.test(dataUrl)) {
+        flashMessage(refs, 'Unsupported image type — use PNG, JPG, or WebP.');
+        return;
+      }
+      const aspect = await imageSize(dataUrl);
+      // Fit the larger side to UNDERLAY_FIT_M preserving aspect ratio;
+      // degenerate (zero-dimension) decodes are refused.
+      if (aspect.w === 0 || aspect.h === 0) {
+        flashMessage(refs, 'That image could not be decoded.');
+        return;
+      }
+      const k = UNDERLAY_FIT_M / Math.max(aspect.w, aspect.h);
+      // Land mid-viewport, not at world (0,0) — the neutral camera puts
+      // the origin at the canvas' top-left corner, so a (0,0)-centered
+      // image would arrive half off-screen.
+      const rect = canvas.getBoundingClientRect();
+      const center = screenToWorld(cam, [rect.width / 2, rect.height / 2]);
+      setUnderlay({
+        dataUrl,
+        cx: center[0],
+        cy: center[1],
+        w: aspect.w * k,
+        h: aspect.h * k,
+        rotDeg: 0,
+        opacity: UNDERLAY_DEFAULT_OPACITY,
+        locked: false,
+        hidden: false,
+      });
+      underlaySelected = true;
+      flashMessage(refs, `Underlay imported — arrow keys nudge, corners resize.`);
+      repaint();
+    })();
+  });
+
+  // Opacity slider: live readout, committed on change (pointer release).
+  refs.underlayOpacity.addEventListener('input', () => {
+    refs.underlayOpacityValue.textContent = `${refs.underlayOpacity.value}%`;
+  });
+  refs.underlayOpacity.addEventListener('change', () => {
+    const u = activeUnderlay();
+    if (!u) return;
+    setUnderlay({ ...u, opacity: Number(refs.underlayOpacity.value) });
+  });
+
+  refs.btnUnderlayRotateCCW.addEventListener('click', () => {
+    const u = activeUnderlay();
+    if (!u) return;
+    setUnderlay(rotateUnderlayBy(u, -UNDERLAY_ROTATE_STEP_DEG));
+  });
+  refs.btnUnderlayRotateCW.addEventListener('click', () => {
+    const u = activeUnderlay();
+    if (!u) return;
+    setUnderlay(rotateUnderlayBy(u, UNDERLAY_ROTATE_STEP_DEG));
+  });
+
+  refs.underlayLock.addEventListener('change', () => {
+    const u = activeUnderlay();
+    if (!u) return;
+    // Locking deselects: locked ⇒ no handles, no nudge (pass-through
+    // is then trivially guaranteed — nothing intercepts).
+    if (refs.underlayLock.checked) underlaySelected = false;
+    setUnderlay({ ...u, locked: refs.underlayLock.checked });
+    repaint();
+  });
+
+  refs.underlayHide.addEventListener('change', () => {
+    const u = activeUnderlay();
+    if (!u) return;
+    if (refs.underlayHide.checked) underlaySelected = false;
+    setUnderlay({ ...u, hidden: refs.underlayHide.checked });
+    repaint();
+  });
+
+  refs.btnUnderlayRemove.addEventListener('click', () => {
+    if (activeUnderlay() === null) return;
+    setUnderlay(null);
+    setUnderlayPopoverOpen(false);
+    flashMessage(refs, 'Underlay removed.');
+  });
+
+  // Outside click closes the popover (first-popover discipline).
+  document.addEventListener('pointerdown', (ev) => {
+    if (refs.underlayPopover.hidden) return;
+    if (refs.underlayPopover.contains(ev.target as Node)) return;
+    if (refs.btnUnderlay.contains(ev.target as Node)) return;
+    setUnderlayPopoverOpen(false);
+  });
+  // Escape closes it too (capture phase), except mid-gesture (#94).
+  document.addEventListener('keydown', (ev) => {
+    if (
+      !refs.underlayPopover.hidden &&
+      ev.key === 'Escape' &&
+      !drawGestureInProgress()
+    ) {
+      ev.stopPropagation();
+      setUnderlayPopoverOpen(false);
+    }
+  }, true);
+
+
   /* ---------- pkg 7.2 (issue #75): floor selector ---------- */
 
   /**
@@ -495,6 +781,10 @@ export function initEditorInteraction(
     const next = st.activeFloorIdx + delta;
     if (next < 0 || next >= st.data.floors.length) return;
     store.dispatch({ type: 'setActiveFloor', index: next });
+    // Reviewer #99 nit: the underlay selection is floor-independent —
+    // leaving it armed across a switch pointed invisible arrow-nudges
+    // at the NEW floor's underlay. Deselect on every switch.
+    underlaySelected = false;
   }
 
   const setFloorPopoverOpen = (open: boolean): void => {
@@ -1000,6 +1290,26 @@ export function initEditorInteraction(
       })),
     );
 
+  // pkg 12.1 (issue #99) read-only seams (same __editorHandles
+  // precedent): e2e aims corner grabs through the screen-space handle
+  // centers and asserts the active floor's underlay state.
+  (window as unknown as { __editorUnderlayHandles?: () => Pt[] })
+    .__editorUnderlayHandles = () =>
+      // Gated exactly like the paint condition (selected + interactable)
+      // so e2e only aims at handles that are really on screen.
+      underlaySelected && underlayInteractable(activeUnderlay())
+        ? underlayScreenCorners()
+        : [];
+  (window as unknown as { __editorUnderlay?: () => UnderlayState | null })
+    .__editorUnderlay = () => {
+      const u = activeUnderlay();
+      // Strip the bulky dataUrl from the observable view (assertions
+      // target transform/flags; presence travels via dataUrl !== '').
+      return u === null
+        ? null
+        : { ...u, dataUrl: u.dataUrl.startsWith('data:') ? 'data:' : '' };
+    };
+
 
 
   /* ---------- pkg 3 helpers (issue #4) ---------- */
@@ -1252,6 +1562,23 @@ export function initEditorInteraction(
     // pkg 7.2: hit-testing sees the ACTIVE floor only.
     const view = activeFloorPlan(st);
 
+    // pkg 12.1 (issue #99): underlay corner handles hit-test FIRST, in
+    // SCREEN coordinates (handles are screen-sized squares regardless
+    // of zoom — same reasoning as the room-resize handles). Intercepts
+    // ONLY at the four corners: everything else passes through to
+    // normal wall/opening selection (locked/hidden ⇒ no handles here,
+    // so the underlay can never swallow a click — trivially true).
+    if (tool === 'select' && underlayInteractable(activeUnderlay())) {
+      const handleIdx = underlayHandleAt(evPos(ev), underlayScreenCorners());
+      if (handleIdx !== null) {
+        underlaySelected = true;
+        const base = activeUnderlay();
+        if (base) resizingUnderlay = { corner: handleIdx, base };
+        canvas.setPointerCapture(ev.pointerId);
+        return;
+      }
+    }
+
     // Furniture takes grab priority over rooms (smaller primitive).
     const grabbed = furnitureItemAt(worldPt, view);
     if (grabbed) {
@@ -1389,6 +1716,17 @@ export function initEditorInteraction(
 
   canvas.addEventListener('pointermove', (ev) => {
     const worldPt = evWorld(ev);
+
+    // pkg 12.1 (issue #99): an in-flight underlay corner resize owns
+    // the pointer (plain capture, no store gesture — the underlay is
+    // non-undoable editor state). Frames stream from the CAPTURED base
+    // rect, not the evolving state.
+    if (resizingUnderlay !== null) {
+      setUnderlay(
+        resizeUnderlayFromCorner(resizingUnderlay.base, resizingUnderlay.corner, worldPt),
+      );
+      return;
+    }
 
     // Issue #61: an in-flight opening drag owns the pointer.
     if (dragOpening) {
@@ -1539,12 +1877,19 @@ export function initEditorInteraction(
 
   function endDrag(): void {
     dragOpening = null;
+    resizingUnderlay = null; // pkg 12.1: pointercancel safety net
     store.endGesture();
     phase = { tag: 'idle' };
     repaint();
   }
 
   canvas.addEventListener('pointerup', (ev) => {
+    // pkg 12.1 (issue #99): release an in-flight underlay corner
+    // resize (capture released implicitly with the pointer).
+    if (resizingUnderlay !== null) {
+      resizingUnderlay = null;
+      return;
+    }
     // Issue #61: release an in-flight opening drag. Never streamed an
     // invalid frame, so state already sits at lastValidT; flash the
     // banner when the release frame was invalid.
@@ -1617,6 +1962,14 @@ export function initEditorInteraction(
       return;
     }
     if (ev.key === 'Escape') {
+      // pkg 12.1 (issue #99): abort an in-flight underlay resize (no
+      // gesture to close — non-undoable editor state; the resize
+      // simply freezes at the last streamed frame).
+      if (resizingUnderlay !== null) {
+        resizingUnderlay = null;
+        repaint();
+        return;
+      }
       // Abandoning an in-flight furniture drag MUST close the gesture,
       // else the leaked _gestureBase makes later atomic commands throw
       // ("non-streamable command inside gesture").
@@ -1641,6 +1994,25 @@ export function initEditorInteraction(
       phase = { tag: 'idle' };
       repaint();
       return;
+    }
+    // pkg 12.1 (issue #99): arrow keys nudge the SELECTED underlay
+    // (mouseless-first: positioning never needs a pointer). Shift
+    // widens the step for coarse alignment. Unselected ⇒ keys fall
+    // through untouched.
+    if (
+      (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' ||
+        ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
+      !ev.ctrlKey && !ev.metaKey && !ev.altKey
+    ) {
+      const u = activeUnderlay();
+      if (underlaySelected && underlayInteractable(u)) {
+        ev.preventDefault();
+        const step = ev.shiftKey ? UNDERLAY_NUDGE_LARGE_M : UNDERLAY_NUDGE_M;
+        const dx = ev.key === 'ArrowLeft' ? -step : ev.key === 'ArrowRight' ? step : 0;
+        const dy = ev.key === 'ArrowUp' ? step : ev.key === 'ArrowDown' ? -step : 0;
+        setUnderlay(nudgeUnderlay(u, dx, dy));
+        return;
+      }
     }
     if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'z' || ev.key === 'Z')) {
       ev.preventDefault();

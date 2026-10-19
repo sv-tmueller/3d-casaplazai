@@ -550,6 +550,21 @@ body {
   width: 100%;
 }
 
+/* pkg 12.1 (issue #99): underlay popover — rotate buttons sit side by
+ * side; Remove stretches full width like the floor-delete button. */
+.underlay-rotate-row {
+  display: flex;
+  gap: 6px;
+}
+
+.underlay-rotate-row .editor-btn {
+  flex: 1;
+}
+
+.editor-underlay-remove {
+  width: 100%;
+}
+
 /* Loading splash (index.html static markup; removed by editor mount). */
 .loading-splash {
   position: fixed;
