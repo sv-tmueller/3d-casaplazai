@@ -23,7 +23,8 @@ export type IconKey =
   | 'center'
   | 'zoom-in'
   | 'zoom-out'
-  | 'dimensions';
+  | 'dimensions'
+  | 'measure';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
 
@@ -59,6 +60,8 @@ export const ICONS: Record<IconKey, string> = {
   'zoom-out': `<circle ${S} cx="11" cy="11" r="6"/><path ${S} d="M15.5 15.5L20 20"/><path ${S} d="M8.5 11h5"/>`,
   // Dimensions: ruler with tick marks (issue #60).
   dimensions: `<rect ${S} x="3" y="8" width="18" height="8" rx="1"/><path ${S} d="M7 8v3M11 8v4M15 8v3M19 8v4"/>`,
+  // Measure: diagonal dimension with endpoint dots + tick marks (#66).
+  measure: `<path ${S} d="M5 19L19 5"/><circle cx="5" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="5" r="1.5" fill="currentColor" stroke="none"/><path ${S} d="M9.5 12l2.5 2.5M12.5 9l2.5 2.5"/>`,
 };
 
 /** Full `<svg>` markup for an icon; `aria-hidden` keeps names text-only. */

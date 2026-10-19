@@ -14,6 +14,11 @@ import {
   segmentNormal,
   type SegmentInfo,
 } from '../model/openings';
+import {
+  measureLabelScreenPos,
+  measurementLabelText,
+  type Measurement,
+} from '../model/measure';
 
 const BADGE_FONT = '600 11px sans-serif';
 const BADGE_TEXT_COLOR = '#1e3a5f';
@@ -254,6 +259,55 @@ export function paintMeasurementBadges(
     const c = polygonCentroid(room.polygon);
     const s = worldToScreen(cam, c);
     drawPill(ctx, s[0], s[1], label);
+  }
+  ctx.restore();
+}
+
+/* ========== issue #66 (Pkg 1): measure-tool annotations ========== */
+
+/** Half-length of the dimension end ticks, in screen px. */
+const DIM_TICK_PX = 5;
+
+/**
+ * Issue #66: two-point dimension annotations — main line, end ticks,
+ * and an offset label pill "4.24 m · 53.1°". Gated by the SAME
+ * Dimensions toggle as the wall/room badges (hide criterion).
+ */
+export function paintMeasureAnnotations(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  measurements: Measurement[],
+  visible = true,
+): void {
+  if (!visible || measurements.length === 0) return;
+  ctx.save();
+  ctx.font = BADGE_FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.strokeStyle = '#0284c7';
+  ctx.lineWidth = 1.5;
+  for (const m of measurements) {
+    const sa = worldToScreen(cam, m.a);
+    const sb = worldToScreen(cam, m.b);
+    ctx.beginPath();
+    ctx.moveTo(sa[0], sa[1]);
+    ctx.lineTo(sb[0], sb[1]);
+    ctx.stroke();
+    const dx = sb[0] - sa[0];
+    const dy = sb[1] - sa[1];
+    const len = Math.hypot(dx, dy);
+    if (len > 0) {
+      const nx = -dy / len;
+      const ny = dx / len;
+      for (const s of [sa, sb]) {
+        ctx.beginPath();
+        ctx.moveTo(s[0] - nx * DIM_TICK_PX, s[1] - ny * DIM_TICK_PX);
+        ctx.lineTo(s[0] + nx * DIM_TICK_PX, s[1] + ny * DIM_TICK_PX);
+        ctx.stroke();
+      }
+    }
+    const lp = measureLabelScreenPos(m, cam);
+    drawPill(ctx, lp[0], lp[1], measurementLabelText(m));
   }
   ctx.restore();
 }

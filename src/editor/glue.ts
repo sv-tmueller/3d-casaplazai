@@ -44,7 +44,7 @@ import { itemCorners } from './model/furniture';
 import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene } from './render';
-import { paintMeasurementBadges } from './render/measurementBadges';
+import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { openExportDialog } from './exportDialog';
@@ -52,6 +52,13 @@ import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
 import { EditorStore, emptyPlan } from './store';
 import { snapVec, vecAdd, vecSub } from './geom';
+import {
+  labelHitTest,
+  loadMeasurements,
+  makeMeasureId,
+  saveMeasurements,
+  type Measurement,
+} from './model/measure';
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -199,6 +206,17 @@ export function initEditorInteraction(
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
+  // Issue #66 (Pkg 1): measure-tool annotations. Editor-local state kept
+  // OUT of the phase machine (Pkg 2 churns phase wiring) and OUT of
+  // FloorplanData/autosave — persisted under a separate localStorage key
+  // (see model/measure.ts header for the rationale).
+  let measurements: Measurement[] = [];
+  try {
+    measurements = loadMeasurements(window.localStorage);
+  } catch {
+    measurements = []; // no-storage stub environments
+  }
+  let measureDraft: { a: Pt } | null = null;
 
   /* ---------- sizing (devicePixelRatio aware) ---------- */
   function resizeCanvas(): void {
@@ -223,6 +241,8 @@ export function initEditorInteraction(
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
     paintMeasurementBadges(ctx, cam, store.getState().data, dimensionsVisible);
+    // Issue #66: measure annotations ride the same Dimensions toggle.
+    paintMeasureAnnotations(ctx, cam, measurements, dimensionsVisible);
   }
 
   function snapToleranceWorld(): number {
@@ -298,6 +318,7 @@ export function initEditorInteraction(
   function setActiveTool(next: AnyToolMode): void {
     tool = next;
     dragOpening = null; // #61: switching tools abandons any opening candidate
+    measureDraft = null; // #66: switching tools abandons a pending anchor
     if (next === 'select') {
       phase = { tag: 'idle' };
     } else {
@@ -315,6 +336,7 @@ export function initEditorInteraction(
       [refs.btnDoor, 'door'],
       [refs.btnWindow, 'window'],
       [refs.btnStamp, 'stamp'],
+      [refs.btnAddMeasure, 'measure'],
     ] as Array<[HTMLButtonElement, AnyToolMode]>) {
       btn.classList.toggle('active', val === tool);
       btn.setAttribute('aria-pressed', String(val === tool));
@@ -336,6 +358,13 @@ export function initEditorInteraction(
   refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
   refs.btnWindow.addEventListener('click', () => setActiveTool('window'));
   refs.btnStamp.addEventListener('click', () => setActiveTool('stamp'));
+  refs.btnAddMeasure.addEventListener('click', () => setActiveTool('measure'));
+  // Issue #66: wipe all annotations (persists immediately).
+  refs.btnClearMeasure.addEventListener('click', () => {
+    measurements = [];
+    saveMeasurements(window.localStorage, measurements);
+    repaint();
+  });
 
   for (const chip of Array.from(refs.palette.querySelectorAll<HTMLButtonElement>('.palette-chip'))) {
     chip.addEventListener('click', () => {
@@ -368,6 +397,7 @@ export function initEditorInteraction(
       const scaledCam: Camera = { ...cam, scale: cam.scale * scale };
       paintScene(ctx, w, h, scaledCam, store.getState().data, { tag: 'idle' }, null);
       paintMeasurementBadges(ctx, scaledCam, store.getState().data, dimensionsVisible);
+      paintMeasureAnnotations(ctx, scaledCam, measurements, dimensionsVisible);
     };
   }
 
@@ -458,6 +488,14 @@ export function initEditorInteraction(
     if (!room) return [];
     return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
   };
+
+  // Issue #66 read-only seams (same precedent as __editorHandles): the
+  // annotation list and the Dimensions flag are canvas-drawn, so e2e
+  // observes them through here.
+  (window as unknown as { __editorMeasurements?: () => Measurement[] }).__editorMeasurements =
+    () => measurements.slice();
+  (window as unknown as { __editorDimsVisible?: () => boolean }).__editorDimsVisible =
+    () => dimensionsVisible;
 
 
 
@@ -580,6 +618,33 @@ export function initEditorInteraction(
     if (ev.button !== 0) return;
 
     const worldPt = evWorld(ev);
+
+    // Issue #66 (Pkg 1): the measure tool runs OUTSIDE the phase
+    // machine — first click anchors, second click commits, and a click
+    // on an existing label REMOVES that annotation. Both points snap via
+    // the shared snapPoint() policy.
+    if (tool === 'measure') {
+      const hit = labelHitTest(evPos(ev), measurements, cam);
+      if (hit) {
+        measurements = measurements.filter((m) => m.id !== hit.id);
+        saveMeasurements(window.localStorage, measurements);
+        repaint();
+        return;
+      }
+      const snapped = snapPoint(worldPt);
+      if (measureDraft === null) {
+        measureDraft = { a: snapped };
+      } else {
+        measurements = [
+          ...measurements,
+          { id: makeMeasureId(), a: measureDraft.a, b: snapped },
+        ];
+        measureDraft = null;
+        saveMeasurements(window.localStorage, measurements);
+      }
+      repaint();
+      return;
+    }
 
     if (tool === 'rectangle') {
       // Snap the anchor corner to grid/foreign geometry like any other gesture.
@@ -1049,6 +1114,12 @@ export function initEditorInteraction(
       if (dragOpening) {
         ghost = null;
         endDrag();
+        return;
+      }
+      // Issue #66: abandon a pending measure anchor (no gesture to close).
+      if (measureDraft) {
+        measureDraft = null;
+        repaint();
         return;
       }
       phase = { tag: 'idle' };
