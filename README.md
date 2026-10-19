@@ -93,6 +93,8 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | Ctrl+Y           | Redo                                                 |
 | R                | Rotate selected furniture 90°                        |
 | S                | Toggle the Snapping settings popover                 |
+| PageUp / [       | Switch to the floor below                            |
+| PageDown / ]     | Switch to the floor above                           |
 | Del / Backspace  | Delete selected room, opening, or furniture          |
 | Alt+Drag / Middle-Drag | Pan the canvas                                 |
 | Wheel            | Zoom at cursor                                       |

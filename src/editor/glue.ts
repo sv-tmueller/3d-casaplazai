@@ -58,8 +58,7 @@ import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
-import { EditorStore, emptyPlan } from './store';
-import { toLegacyWire } from './wire';
+import { EditorStore, activeFloorPlan, emptyPlan } from './store';
 import { vecAdd, vecSub } from './geom';
 import {
   labelHitTest,
@@ -254,20 +253,23 @@ export function initEditorInteraction(
   function repaint(): void {
     if (!ctx) return; // stub environment: DOM/state still fully functional
     const rect = canvas.getBoundingClientRect();
+    // pkg 7.2 (issue #75): the canvas shows the ACTIVE floor only —
+    // paintScene receives the single-floor view, never the whole plan.
+    const view = activeFloorPlan(store.getState());
     paintScene(
-      ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId,
+      ctx, rect.width, rect.height, cam, view, phase, hoverRoomId,
       ghost, hoverSeg, hoverHandle, store.getState().selectedId, snapSettings.pitch,
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
-    paintMeasurementBadges(ctx, cam, store.getState().data, dimensionsVisible);
+    paintMeasurementBadges(ctx, cam, view, dimensionsVisible);
     // Issue #66: measure annotations ride the same Dimensions toggle.
     paintMeasureAnnotations(ctx, cam, measurements, dimensionsVisible);
     // pkg 2 (issue #67): live angle readouts during gestures.
     // Deliberately ABSENT from the export path below — these are
     // gesture-live affordances, not plan content.
     paintAngleReadouts(
-      ctx, cam, store.getState().data, phase, hoverSeg, dimensionsVisible,
+      ctx, cam, view, phase, hoverSeg, dimensionsVisible,
     );
   }
 
@@ -290,8 +292,9 @@ export function initEditorInteraction(
    * attracts within tolerance. Master OFF disables both.
    */
   function snapPoint(worldPt: Pt, excludeIds: string[] = []): Pt {
+    // pkg 7.2: snapping sees the ACTIVE floor's geometry only.
     const geo = evaluateSnapCandidates(
-      store.getState().data,
+      activeFloorPlan(store.getState()),
       worldPt,
       snapToleranceWorld(),
       excludeIds,
@@ -315,21 +318,26 @@ export function initEditorInteraction(
 
   function refreshStatus(): void {
     const st = store.getState();
-    const parts: string[] = [`rooms: ${flatRooms(st.data).length}`, `tool: ${tool}`];
-    if (flatOpenings(st.data).length > 0) parts.push(`openings: ${flatOpenings(st.data).length}`);
-    if (flatFurniture(st.data).length > 0) parts.push(`furniture: ${flatFurniture(st.data).length}`);
+    // pkg 7.2: counts + total describe the ACTIVE floor (the storey
+    // being edited); the floor indicator badge carries the floor name.
+    const view = activeFloorPlan(st);
+    const parts: string[] = [`rooms: ${flatRooms(view).length}`, `tool: ${tool}`];
+    if (flatOpenings(view).length > 0) parts.push(`openings: ${flatOpenings(view).length}`);
+    if (flatFurniture(view).length > 0) parts.push(`furniture: ${flatFurniture(view).length}`);
     if (st.selectedId) parts.push('selected: 1');
     if (store.canUndo()) parts.push('undo ↺');
     if (store.canRedo()) parts.push('redo ↻');
     refs.status.textContent = parts.join(' · ');
     // pkg 6 (issue #7): livable-area total + contextual tool hint.
-    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(st.data));
+    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(view));
     const hint = toolHint(tool) || GLOBAL_TOOL_HINT;
     refs.status.title = hint;
   }
 
   function refreshBadgeAndButtons(): void {
-    const overlaps = computeOverlaps(store.getState().data);
+    // pkg 7.2: overlap warnings are per-storey — rooms on different
+    // floors legitimately stack atop each other in plan coordinates.
+    const overlaps = computeOverlaps(activeFloorPlan(store.getState()));
     refs.badge.hidden = overlaps.length === 0;
     const st = store.getState();
     refs.btnDelete.disabled = st.selectedId === null;
@@ -337,12 +345,26 @@ export function initEditorInteraction(
     refs.btnRedo.disabled = !store.canRedo();
   }
 
+  /** pkg 7.2 (issue #75): sync the floor-indicator badge + nav buttons. */
+  function refreshFloorIndicator(): void {
+    const st = store.getState();
+    const floor = st.data.floors[Math.min(st.activeFloorIdx, st.data.floors.length - 1)];
+    refs.floorBadge.textContent = `${floor.name} · Level ${st.activeFloorIdx + 1}`;
+    refs.btnPrevFloor.disabled = st.activeFloorIdx <= 0;
+    refs.btnNextFloor.disabled = st.activeFloorIdx >= st.data.floors.length - 1;
+    // Deleting the sole floor is refused by the reducer; reflect that.
+    refs.btnDeleteFloor.disabled = st.data.floors.length <= 1;
+  }
+
   store.subscribe((_s) => {
     if (_s === undefined) return;
-    // Slot speaks the frozen v1 wire (wire.ts contract): flatten through
-    // toLegacyWire so every writer agrees on the format (reviewer #74).
-    if (store.dirty) autosave.scheduleSave(toLegacyWire(_s.data));
+    // Ratified decision (a) on issue #75: the autosave slot carries RAW
+    // v2 data (hydration migrates-at-the-door, so both shapes load).
+    // Renaming the KEY would orphan every existing save — key stays.
+    // toLegacyWire remains ONLY for the __casaplaza bridge (wire.ts).
+    if (store.dirty) autosave.scheduleSave(_s.data);
     refreshBadgeAndButtons();
+    refreshFloorIndicator();
     refreshStatus();
     repaint();
   });
@@ -440,6 +462,79 @@ export function initEditorInteraction(
     }
   }, true);
   refs.btnRect.addEventListener('click', () => setActiveTool('rectangle'));
+
+  /* ---------- pkg 7.2 (issue #75): floor selector ---------- */
+
+  /**
+   * Mouseless floor navigation (trackpad-only constraint): Prev/Next
+   * buttons + a name/level indicator badge in the toolbar; rename and
+   * delete live in a popover (role=dialog) reachable from the badge —
+   * same first-popover discipline as the #68 snap popover. Every
+   * control is a real button/input: the whole flow is Tab-reachable.
+   */
+  function switchFloor(delta: number): void {
+    const st = store.getState();
+    const next = st.activeFloorIdx + delta;
+    if (next < 0 || next >= st.data.floors.length) return;
+    store.dispatch({ type: 'setActiveFloor', index: next });
+  }
+
+  const setFloorPopoverOpen = (open: boolean): void => {
+    refs.floorPopover.hidden = !open;
+    refs.floorBadge.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      // Seed the rename field with the active floor's current name.
+      const name = store.getState().data.floors[store.getState().activeFloorIdx]?.name ?? '';
+      refs.floorRenameInput.value = name;
+      refs.floorRenameInput.focus();
+      refs.floorRenameInput.select();
+    }
+  };
+
+  refs.btnPrevFloor.addEventListener('click', () => switchFloor(-1));
+  refs.btnNextFloor.addEventListener('click', () => switchFloor(1));
+  refs.btnAddFloor.addEventListener('click', () => {
+    const res = store.dispatch({ type: 'addFloor' });
+    if (!res.ok) flashMessage(refs, res.error);
+  });
+
+  // The badge doubles as the popover toggle (aria-expanded + popup).
+  refs.floorBadge.addEventListener('click', () => {
+    setFloorPopoverOpen(refs.floorPopover.hidden === true);
+  });
+
+  refs.floorRenameForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const res = store.dispatch({ type: 'renameFloor', name: refs.floorRenameInput.value });
+    if (!res.ok) {
+      flashMessage(refs, res.error);
+      return;
+    }
+    setFloorPopoverOpen(false);
+  });
+
+  refs.btnDeleteFloor.addEventListener('click', () => {
+    const res = store.dispatch({ type: 'deleteFloor' });
+    if (!res.ok) flashMessage(refs, res.error);
+    else setFloorPopoverOpen(false);
+  });
+
+  // Outside click closes the popover (dumb listeners, no focus trap).
+  document.addEventListener('pointerdown', (ev) => {
+    if (refs.floorPopover.hidden) return;
+    if (refs.floorPopover.contains(ev.target as Node)) return;
+    if (refs.floorBadge.contains(ev.target as Node)) return;
+    setFloorPopoverOpen(false);
+  });
+  // Escape closes it too (capture phase so canvas key handling is moot).
+  document.addEventListener('keydown', (ev) => {
+    if (!refs.floorPopover.hidden && ev.key === 'Escape') {
+      ev.stopPropagation();
+      setFloorPopoverOpen(false);
+    }
+  }, true);
+
+
   refs.btnPoly.addEventListener('click', () => setActiveTool('polygon'));
   refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
   refs.btnWindow.addEventListener('click', () => setActiveTool('window'));
@@ -481,6 +576,8 @@ export function initEditorInteraction(
   function exportPainterFactory(scale: ExportScale) {
     return (ctx: CanvasRenderingContext2D, w: number, h: number): void => {
       const scaledCam: Camera = { ...cam, scale: cam.scale * scale };
+      // pkg 7.2 scope ruling (SUB_PLAN): image export is a WHOLE-PLAN
+      // writer — unlike the live canvas, it keeps full-plan scope.
       paintScene(ctx, w, h, scaledCam, store.getState().data, { tag: 'idle' }, null);
       paintMeasurementBadges(ctx, scaledCam, store.getState().data, dimensionsVisible);
       paintMeasureAnnotations(ctx, scaledCam, measurements, dimensionsVisible);
@@ -519,12 +616,14 @@ export function initEditorInteraction(
   function routeDelete(): void {
     const sel = store.getState().selectedId;
     if (sel === null) return;
-    const st = store.getState();
-    if (flatFurniture(st.data).some((f) => f.id === sel)) {
+    // pkg 7.2: selection is plan-wide (ids are plan-unique), but only
+    // the ACTIVE floor is clickable — route against its view.
+    const view = activeFloorPlan(store.getState());
+    if (flatFurniture(view).some((f) => f.id === sel)) {
       store.dispatch({ type: 'deleteFurniture', furnitureId: sel });
       return;
     }
-    if (flatOpenings(st.data).some((o) => o.id === sel)) {
+    if (flatOpenings(view).some((o) => o.id === sel)) {
       store.dispatch({ type: 'deleteOpening', openingId: sel, syncPair: true });
       return;
     }
@@ -549,7 +648,9 @@ export function initEditorInteraction(
 
   refs.btnCenter.addEventListener('click', () => {
     const { w, h } = viewportSize();
-    applyCamera(computeFitCamera(store.getState().data, w, h));
+    // pkg 7.2: fit-camera frames the ACTIVE floor (whole-plan writers
+    // like export keep full scope).
+    applyCamera(computeFitCamera(activeFloorPlan(store.getState()), w, h));
   });
   refs.btnZoomIn.addEventListener('click', () => {
     const { w, h } = viewportSize();
@@ -570,7 +671,7 @@ export function initEditorInteraction(
   (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles = () => {
     const st = store.getState();
     if (st.selectedId === null) return [];
-    const room = flatRooms(st.data).find((r) => r.id === st.selectedId);
+    const room = flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId);
     if (!room) return [];
     return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
   };
@@ -620,7 +721,8 @@ export function initEditorInteraction(
     hoverSeg = null;
     if (tool !== 'door' && tool !== 'window') return;
     const kind = tool;
-    const plan = store.getState().data;
+    // pkg 7.2: ghosts pair against the ACTIVE floor's walls only.
+    const plan = activeFloorPlan(store.getState());
     let bestRoomId: string | null = null;
     let bestSeg: ReturnType<typeof nearestSegment> = null;
     let bestDist = Infinity;
@@ -664,14 +766,15 @@ export function initEditorInteraction(
     }
     const defs = OPENING_DEFAULTS[kind];
     const err = validateOpeningDraft(
-      store.getState().data, hoverSeg.roomId, hoverSeg.segIndex, kind,
+      activeFloorPlan(store.getState()), hoverSeg.roomId, hoverSeg.segIndex, kind,
       ghost.t, defs.width, defs.sillHeight, defs.headHeight,
     );
     if (err !== null) {
       flashMessage(refs, openingErrorMessage(err, kind));
       return;
     }
-    const rowsBefore = flatOpenings(store.getState().data).length;
+    // pkg 7.2: the notice diffs the ACTIVE floor's opening rows.
+    const rowsBefore = flatOpenings(activeFloorPlan(store.getState())).length;
     const res = store.dispatch({
       type: 'addOpening',
       roomId: hoverSeg.roomId,
@@ -688,7 +791,7 @@ export function initEditorInteraction(
     }
     const notice = openingCommitNotice(
       rowsBefore,
-      flatOpenings(store.getState().data).length,
+      flatOpenings(activeFloorPlan(store.getState())).length,
     );
     if (notice !== null) flashMessage(refs, notice);
   }
@@ -753,7 +856,7 @@ export function initEditorInteraction(
       }
       if (ghost && !ghost.valid) {
         const code = validateOpeningDraft(
-          store.getState().data,
+          activeFloorPlan(store.getState()),
           hoverSeg!.roomId,
           hoverSeg!.segIndex,
           tool,
@@ -773,7 +876,9 @@ export function initEditorInteraction(
     if (tool === 'stamp') {
       const def = FURNITURE_DEFAULTS[stampType];
       if (!def) return;
-      const outcome = attemptDrop(store.getState().data, def.footprint, worldPt);
+      // pkg 7.2: stamps land on the ACTIVE floor.
+      const view = activeFloorPlan(store.getState());
+      const outcome = attemptDrop(view, def.footprint, worldPt);
       if (outcome.verdict === 'rejected') {
         flashMessage(
           refs,
@@ -784,7 +889,7 @@ export function initEditorInteraction(
         repaint();
         return;
       }
-      const host = roomAt(worldPt, store.getState().data)!;
+      const host = roomAt(worldPt, view)!;
       const pos = outcome.verdict === 'warn' ? outcome.snappedTo : worldPt;
       const res = store.dispatch({
         type: 'addFurniture',
@@ -826,9 +931,11 @@ export function initEditorInteraction(
 
     // --- select tool ---
     const st = store.getState();
+    // pkg 7.2: hit-testing sees the ACTIVE floor only.
+    const view = activeFloorPlan(st);
 
     // Furniture takes grab priority over rooms (smaller primitive).
-    const grabbed = furnitureItemAt(worldPt, st.data);
+    const grabbed = furnitureItemAt(worldPt, view);
     if (grabbed) {
       store.dispatch({ type: 'setEntitySelection', entityId: grabbed.id });
       draggingFurnitureId = grabbed.id;
@@ -842,9 +949,9 @@ export function initEditorInteraction(
     // wall it is cut into. pkg 3 (issue #61): select immediately, then
     // stash a drag candidate — the gesture only begins once the pointer
     // clears the click threshold, so a plain click stays a click.
-    const openingHit = openingAt(worldPt, st.data);
+    const openingHit = openingAt(worldPt, view);
     if (openingHit) {
-      const hitRoom = flatRooms(st.data).find((r) => r.id === openingHit.roomId);
+      const hitRoom = flatRooms(view).find((r) => r.id === openingHit.roomId);
       const hitSeg = hitRoom ? roomSegments(hitRoom)[openingHit.segmentIndex] : undefined;
       store.dispatch({ type: 'setEntitySelection', entityId: openingHit.id });
       dragOpening = hitSeg
@@ -867,7 +974,7 @@ export function initEditorInteraction(
       return;
     }
 
-    const clicked = roomAt(worldPt, st.data);
+    const clicked = roomAt(worldPt, view);
     if (clicked) {
       // Priority: resize handle on ALREADY-selected room > begin drag > plain select.
       if (st.selectedId === clicked.id) {
@@ -924,7 +1031,8 @@ export function initEditorInteraction(
       canvas.setPointerCapture(ev.pointerId);
       d.engaged = true;
     }
-    const plan = store.getState().data;
+    // pkg 7.2: the dragged opening lives on the ACTIVE floor.
+    const plan = activeFloorPlan(store.getState());
     const room = flatRooms(plan).find((r) => r.id === d.roomId);
     const seg = room ? roomSegments(room)[d.segIndex] : undefined;
     if (!seg || seg.length === 0) return;
@@ -981,7 +1089,8 @@ export function initEditorInteraction(
       // Live ghost rect under the cursor for the armed stamp type.
       const def = FURNITURE_DEFAULTS[stampType];
       if (def) {
-        const outcome = attemptDrop(store.getState().data, def.footprint, worldPt);
+        // pkg 7.2: the ghost judges placement against the ACTIVE floor.
+        const outcome = attemptDrop(activeFloorPlan(store.getState()), def.footprint, worldPt);
         ghost = {
           kind: 'stamp',
           pos: outcome.verdict === 'warn' ? outcome.snappedTo : worldPt,
@@ -997,10 +1106,10 @@ export function initEditorInteraction(
     if (phase.tag === 'draggingFurniture') {
       const fid = draggingFurnitureId;
       if (fid) {
-        const verdict = judgeMoveTarget(store.getState().data, fid, worldPt);
+        const verdict = judgeMoveTarget(activeFloorPlan(store.getState()), fid, worldPt);
         if (verdict.verdict === 'rejected') {
           // Snap-back: revert to the item's last committed position.
-          const item = flatFurniture(store.getState().data).find((f) => f.id === fid);
+          const item = flatFurniture(activeFloorPlan(store.getState())).find((f) => f.id === fid);
           if (item) {
             store.dispatch({ type: 'moveFurniture', furnitureId: fid, position: item.position });
             flashMessage(refs, 'Piece pulled outside the room — snapped back to its last valid spot.');
@@ -1044,13 +1153,13 @@ export function initEditorInteraction(
 
     if (phase.tag === 'dragging') {
       const rid = phase.selectedRoomId;
-      const room = flatRooms(store.getState().data).find((r) => r.id === rid);
+      const room = flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === rid);
       if (!room) return;
       // Cursor's target for the anchor vertex = worldPt + grabOffset
       // (grabOffset = anchor - grabPoint at pickup).
       const desiredAnchor = vecAdd(worldPt, phase.grabOffset);
       const sn = evaluateSnapCandidates(
-        store.getState().data,
+        activeFloorPlan(store.getState()),
         desiredAnchor,
         snapToleranceWorld(),
         [room.id],
@@ -1064,7 +1173,7 @@ export function initEditorInteraction(
     if (phase.tag === 'resizing') {
       const vid = phase.vertexIndex;
       const rid = phase.selectedRoomId;
-      const room = flatRooms(store.getState().data).find((r) => r.id === rid);
+      const room = flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === rid);
       if (!room) return;
       // Issue #53: route the dragged vertex through the SAME snap policy
       // as draw-time (snapPoint = foreign geometry, else 0.5 m grid), so
@@ -1082,14 +1191,16 @@ export function initEditorInteraction(
     // idle: hover highlight + cursor affordance (issue #53).
     const prevHandle = hoverHandle;
     const st = store.getState();
+    // pkg 7.2: hover affordances read the ACTIVE floor.
+    const view = activeFloorPlan(st);
     const selId = st.selectedId;
-    const selRoom = selId !== null ? flatRooms(st.data).find((r) => r.id === selId) : undefined;
+    const selRoom = selId !== null ? flatRooms(view).find((r) => r.id === selId) : undefined;
     if (tool === 'select' && selRoom) {
       const handleIdx = resizeHandleAt(worldPt, selRoom, handleToleranceWorld());
       if (handleIdx !== null) {
         hoverHandle = handleIdx;
         canvas.style.cursor = classifyCorner(selRoom.polygon[handleIdx], selRoom) ?? 'default';
-      } else if (roomAt(worldPt, st.data)?.id === selId) {
+      } else if (roomAt(worldPt, view)?.id === selId) {
         hoverHandle = null;
         canvas.style.cursor = 'move';
       } else {
@@ -1100,7 +1211,7 @@ export function initEditorInteraction(
       hoverHandle = null;
       canvas.style.cursor = '';
     }
-    const hit = roomAt(worldPt, st.data);
+    const hit = roomAt(worldPt, view);
     const hid = hit?.id ?? null;
     if (hid !== hoverRoomId || prevHandle !== hoverHandle) {
       hoverRoomId = hid;
@@ -1227,7 +1338,7 @@ export function initEditorInteraction(
     if ((ev.key === 'r' || ev.key === 'R') && !ev.ctrlKey && !ev.metaKey) {
       const sel = store.getState().selectedId;
       if (sel === null) return;
-      const item = flatFurniture(store.getState().data).find((f) => f.id === sel);
+      const item = flatFurniture(activeFloorPlan(store.getState())).find((f) => f.id === sel);
       if (item) {
         ev.preventDefault();
         store.dispatch({
@@ -1244,6 +1355,18 @@ export function initEditorInteraction(
       const opening = refs.snapPopover.hidden === true;
       if (opening) syncSnapControls();
       setSnapPopoverOpen(opening);
+      ev.preventDefault();
+      return;
+    }
+    // pkg 7.2 (issue #75): floor switching. PageUp/PageDown with [ / ]
+    // aliases (brackets need no Fn key — friendlier on laptops).
+    // Registered in shortcuts.ts (shortcut-sheet duty).
+    if (
+      (ev.key === 'PageUp' || ev.key === 'PageDown' || ev.key === '[' || ev.key === ']') &&
+      !ev.ctrlKey && !ev.metaKey && !ev.altKey
+    ) {
+      const down = ev.key === 'PageDown' || ev.key === ']';
+      switchFloor(down ? 1 : -1);
       ev.preventDefault();
       return;
     }
@@ -1282,6 +1405,7 @@ export function initEditorInteraction(
   ro.observe(canvas.parentElement!);
   resizeCanvas();
   refreshBadgeAndButtons();
+  refreshFloorIndicator();
   refreshStatus();
 }
 

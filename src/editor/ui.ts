@@ -33,6 +33,15 @@ export interface EditorDomRefs {
   snapPopover: HTMLDivElement;
   btnAddMeasure: HTMLButtonElement;
   btnClearMeasure: HTMLButtonElement;
+  /* pkg 7.2 (issue #75): floor selector group. */
+  btnPrevFloor: HTMLButtonElement;
+  btnNextFloor: HTMLButtonElement;
+  btnAddFloor: HTMLButtonElement;
+  floorBadge: HTMLButtonElement;
+  floorPopover: HTMLDivElement;
+  floorRenameForm: HTMLFormElement;
+  floorRenameInput: HTMLInputElement;
+  btnDeleteFloor: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -154,12 +163,34 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnClearMeasure = mkBtn('Clear measurements', 'editor-clear-measure');
   btnClearMeasure.title = 'Remove every dimension annotation.';
   btnClearMeasure.setAttribute('data-testid', 'btn-clear-measurements');
+
+  // pkg 7.2 (issue #75): floor selector group — Prev / indicator+menu /
+  // Next / Add. Fully mouseless: plain buttons, Tab-reachable, with
+  // PageUp/PageDown + [ / ] keyboard aliases (glue.ts).
+  const sep7 = document.createElement('span');
+  sep7.className = 'toolbar-sep';
+  const btnPrevFloor = mkBtn('Previous floor', 'editor-prev-floor');
+  btnPrevFloor.title = 'Switch to the floor below (PageUp).';
+  btnPrevFloor.setAttribute('data-testid', 'btn-prev-floor');
+  const floorBadge = mkBtn('Ground · Level 1', 'editor-floor-badge');
+  floorBadge.title = 'Active floor. Click to rename or delete it.';
+  floorBadge.setAttribute('aria-expanded', 'false');
+  floorBadge.setAttribute('aria-haspopup', 'dialog');
+  floorBadge.setAttribute('data-testid', 'floor-badge');
+  const btnNextFloor = mkBtn('Next floor', 'editor-next-floor');
+  btnNextFloor.title = 'Switch to the floor above (PageDown).';
+  btnNextFloor.setAttribute('data-testid', 'btn-next-floor');
+  const btnAddFloor = mkBtn('Add floor', 'editor-add-floor');
+  btnAddFloor.title = 'Append a new floor above the current one.';
+  btnAddFloor.setAttribute('data-testid', 'btn-add-floor');
+
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
     btnMeasure, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
     btnClearMeasure, sep6, btnSnap,
+    sep7, btnPrevFloor, floorBadge, btnNextFloor, btnAddFloor,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -208,6 +239,46 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   snapPopover.appendChild(masterLabel);
 
   toolbar.appendChild(snapPopover);
+
+  // pkg 7.2 (issue #75): floor rename/delete popover — #68 snapPopover
+  // precedent (visibility-toggled div, role=dialog, Escape/outside
+  // close wired in glue.ts). Holds the rename form + delete button.
+  const floorPopover = document.createElement('div');
+  floorPopover.className = 'snap-popover floor-popover';
+  floorPopover.setAttribute('role', 'dialog');
+  floorPopover.setAttribute('aria-label', 'Floor settings');
+  floorPopover.setAttribute('data-testid', 'floor-popover');
+  floorPopover.hidden = true;
+
+  const floorTitle = document.createElement('div');
+  floorTitle.className = 'snap-popover-title';
+  floorTitle.textContent = 'Floor';
+  floorPopover.appendChild(floorTitle);
+
+  const floorRenameForm = document.createElement('form');
+  floorRenameForm.className = 'floor-rename-form';
+  const floorRenameInput = document.createElement('input');
+  floorRenameInput.type = 'text';
+  floorRenameInput.name = 'floor-name';
+  floorRenameInput.dataset.testid = 'floor-rename-input';
+  floorRenameInput.setAttribute('aria-label', 'Floor name');
+  const renameSubmit = document.createElement('button');
+  renameSubmit.type = 'submit';
+  renameSubmit.className = 'editor-btn';
+  renameSubmit.textContent = 'Rename';
+  renameSubmit.setAttribute('data-testid', 'btn-rename-floor');
+  floorRenameForm.append(floorRenameInput, renameSubmit);
+  floorPopover.appendChild(floorRenameForm);
+
+  const btnDeleteFloor = document.createElement('button');
+  btnDeleteFloor.type = 'button';
+  btnDeleteFloor.className = 'editor-btn editor-delete-floor';
+  btnDeleteFloor.textContent = 'Delete floor';
+  btnDeleteFloor.title = 'Delete the active floor and its contents.';
+  btnDeleteFloor.setAttribute('data-testid', 'btn-delete-floor');
+  floorPopover.appendChild(btnDeleteFloor);
+
+  toolbar.appendChild(floorPopover);
 
   // Furniture palette (visible only while the Furnish tool is armed).
   const palette = document.createElement('div');
@@ -258,6 +329,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnAddMeasure: btnMeasure, btnClearMeasure,
     btnUndo, btnRedo, btnDelete,
     btnCenter, btnZoomIn, btnZoomOut,
+    btnPrevFloor, btnNextFloor, btnAddFloor, floorBadge,
+    floorPopover, floorRenameForm, floorRenameInput, btnDeleteFloor,
   };
 }
 

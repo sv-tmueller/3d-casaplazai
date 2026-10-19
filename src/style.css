@@ -482,6 +482,28 @@ body {
   font-size: 13px;
 }
 
+/* pkg 7.2 (issue #75): floor popover extras — rename form row +
+ * delete button stretch full width inside the #68 popover skeleton. */
+.floor-rename-form {
+  display: flex;
+  gap: 6px;
+}
+
+.floor-rename-form input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.editor-delete-floor {
+  width: 100%;
+}
+
 .snap-fieldset {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
