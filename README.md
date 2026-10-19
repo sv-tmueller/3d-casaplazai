@@ -95,6 +95,7 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | S                | Toggle the Snapping settings popover                 |
 | L                | Set the selected room’s wall lean (roof)             |
 | I                | Toggle the selection inspector panel                  |
+| 3                | Toggle the 3D inset preview                           |
 | PageUp / [       | Switch to the floor below                            |
 | PageDown / ]     | Switch to the floor above                           |
 | Del / Backspace  | Delete selected room, opening, or furniture          |
