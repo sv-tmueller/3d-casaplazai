@@ -76,6 +76,31 @@ const MAX_FRAME_DT = 0.1;
 /** One unlocked-pointer episode reported to the controller. */
 export type UnlockListener = () => void;
 
+/**
+ * Indoor predicate (issue #86, kept PURE for unit tests): the walker
+ * counts as under cover iff the upward eye ray met a roof plane at a
+ * STRICTLY POSITIVE distance (null = the ray escaped to the sky).
+ */
+export function isIndoorFromRay(distanceToRoof: number | null): boolean {
+  return distanceToRoof !== null && distanceToRoof > 0;
+}
+
+/**
+ * One exponential-tween step of the roof autofade opacity (issue #86,
+ * PURE for unit tests): decays toward the fade floor while indoors and
+ * rises back toward 1 outdoors. LOW quality never calls this — it
+ * snaps straight to the target instead.
+ */
+export function fadeStepOpacity(
+  current: number,
+  indoor: boolean,
+  params: { minOpacity: number; ratePerSecond: number; dt: number },
+): number {
+  const target = indoor ? params.minOpacity : 1;
+  const blend = 1 - Math.exp(-params.ratePerSecond * params.dt);
+  return current + (target - current) * blend;
+}
+
 /** Scratch vectors/quaternions reused per frame (allocation discipline). */
 const FWD_SCRATCH = new Vector3();
 const Q_YAW_SCRATCH = new Quaternion();
@@ -378,6 +403,15 @@ export class WalkRig implements CameraRig {
   /** Current plan-space disc position (diagnostic/e2e seam). */
   public get discPosition(): { x: number; y: number } {
     return { x: this.posX, y: this.posY };
+  }
+
+  /**
+   * Current world-space EYE position (issue #86 autofade seam): disc
+   * x/y lifted to the per-frame grounding z + EYE_HEIGHT. Fresh copy —
+   * callers may mutate without corrupting rig state.
+   */
+  public get eyePosition(): { x: number; y: number; z: number } {
+    return { x: this.posX, y: this.posY, z: this.curZ + EYE_HEIGHT };
   }
 
   /** Current smoothed plan-space velocity (diagnostic/e2e seam). */

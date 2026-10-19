@@ -6,7 +6,13 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { buildHud, setWalkAffordances, type HudHandles } from '../../src/viewer/hud';
+import {
+  buildHud,
+  onBindRoofToggle,
+  reflectRoofVisibility,
+  setWalkAffordances,
+  type HudHandles,
+} from '../../src/viewer/hud';
 
 describe('walk-mode entry affordances (issue #30)', () => {
   let handles: HudHandles;
@@ -53,5 +59,61 @@ describe('walk-mode entry affordances (issue #30)', () => {
     expect(handles.toggleBtn.dataset.testid).toBe('hud-mode-toggle');
     expect(handles.fade.dataset.testid).toBe('hud-fade');
     expect(handles.toasts.dataset.testid).toBe('hud-toasts');
+  });
+});
+
+describe('roof visibility toggle (issue #86)', () => {
+  let handles: HudHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+  });
+
+  it('renders a labelled, keyboard-focusable button announcing the live state', () => {
+    const btn = document.querySelector<HTMLButtonElement>(
+      '[data-testid="hud-roof-toggle"]',
+    );
+    expect(btn).toBe(handles.roofBtn);
+    expect(btn!.getAttribute('aria-label')).toBe('Toggle roof visibility');
+    expect(btn!.getAttribute('aria-pressed')).toBe('false');
+    // Plain unfocused <button> tabs naturally — the mouseless mandate.
+    expect(btn!.tabIndex).toBe(0);
+  });
+
+  it('announces the SHOW action while roofs are visible', () => {
+    reflectRoofVisibility(handles, true);
+    expect(handles.roofBtn.textContent).toBe('Hide roofs');
+    expect(handles.roofBtn.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('announces the HIDE action while roofs are masked', () => {
+    reflectRoofVisibility(handles, false);
+    expect(handles.roofBtn.textContent).toBe('Show roofs');
+    expect(handles.roofBtn.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('fires the listener with the flipped state on each click', () => {
+    const seen: boolean[] = [];
+    let visible = true;
+    onBindRoofToggle(handles, () => visible, (next) => {
+      visible = next;
+      seen.push(next);
+    });
+    handles.roofBtn.click();
+    handles.roofBtn.click();
+    expect(seen).toEqual([false, true]);
+  });
+
+  it('unbinds cleanly (post-teardown clicks are inert)', () => {
+    const unbind = onBindRoofToggle(
+      handles,
+      () => true,
+      () => {
+        throw new Error('listener fired after unbind');
+      },
+    );
+    unbind();
+    handles.roofBtn.click(); // must not throw
   });
 });
