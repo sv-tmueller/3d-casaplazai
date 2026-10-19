@@ -1,6 +1,7 @@
 /**
- * Shared recording 2D-context stub for render specs (factored out of
- * render.dedupe.spec so grid-pitch assertions can reuse the pattern).
+ * Recording 2D-context stub for render specs (copied from the pattern in
+ * render.dedupe.spec, which retains its own local stub; kept separate to
+ * avoid touching that spec's assertions — see review of #68).
  */
 export class RecordingCtx {
   strokeStyle = '';
