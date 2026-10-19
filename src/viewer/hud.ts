@@ -8,7 +8,7 @@
  * dependencies, so the whole thing unit-tests under happy-dom.
  */
 
-import type { FrameStats, ViewMode } from './types';
+import type { FrameStats, SunSettings, ViewMode } from './types';
 
 /** Toast lifetime before dismissal, ms. */
 export const TOAST_TTL_MS = 4200;
@@ -42,6 +42,12 @@ export interface HudHandles {
   walkOverlay: HTMLDivElement;
   /** Subtle center reticle shown while pointer-locked in walk mode. */
   walkReticle: HTMLDivElement;
+  /** Time-of-day slider (issue #121): hours 0…24, keyboard-native. */
+  sunTimeInput: HTMLInputElement;
+  /** North-offset slider (issue #121): whole-path rotation, ±180°. */
+  sunNorthInput: HTMLInputElement;
+  /** Compass rose (issue #121): the static div rotated by −offset. */
+  compass: HTMLDivElement;
 }
 
 /** Callback invoked when the user toggles Walk/Overview. */
@@ -52,6 +58,12 @@ export type RoofToggleListener = (visible: boolean) => void;
 
 /** Callback invoked with the NORMALIZED (0..1) wallsAlpha (#120). */
 export type WallsAlphaListener = (alpha: number) => void;
+
+/** Callback invoked when the user slides the time of day (hours 0…24). */
+export type SunTimeListener = (timeHours: number) => void;
+
+/** Callback invoked when the user rotates the sun path (degrees ±180). */
+export type SunNorthListener = (northOffsetDeg: number) => void;
 
 /** Construct the HUD overlay inside the given viewer pane. */
 export function buildHud(hostPane: HTMLElement): HudHandles {
@@ -105,6 +117,45 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
 
   bar.append(toggleBtn, roofBtn, wallsAlpha, wallsAlphaLabel, hint);
 
+  // Sun/time-of-day controls (issue #121), appended AFTER the existing
+  // bar children (append-only discipline — sibling #120's walls-alpha
+  // slider slots ahead of this cluster per the ratified DOM order).
+  // Range inputs are keyboard-native (arrow keys) per the mouseless
+  // mandate; the compass rose is the 2D read of the north offset.
+  const sunCluster = document.createElement('div');
+  sunCluster.className = 'hud-sun-cluster';
+  sunCluster.dataset.testid = 'hud-sun-cluster';
+
+  const sunTimeInput = document.createElement('input');
+  sunTimeInput.type = 'range';
+  sunTimeInput.className = 'hud-sun-time';
+  sunTimeInput.dataset.testid = 'hud-sun-time';
+  sunTimeInput.min = '0';
+  sunTimeInput.max = '24';
+  sunTimeInput.step = '0.5';
+  sunTimeInput.value = '12';
+  sunTimeInput.setAttribute('aria-label', 'Time of day (hours)');
+
+  const sunNorthInput = document.createElement('input');
+  sunNorthInput.type = 'range';
+  sunNorthInput.className = 'hud-sun-north';
+  sunNorthInput.dataset.testid = 'hud-sun-north';
+  sunNorthInput.min = '-180';
+  sunNorthInput.max = '180';
+  sunNorthInput.step = '5';
+  sunNorthInput.value = '0';
+  sunNorthInput.setAttribute('aria-label', 'North offset (degrees)');
+
+  // Decorative: the offset value reaches screen readers through the
+  // slider above; the rose just rotates to match.
+  const compass = document.createElement('div');
+  compass.className = 'hud-compass';
+  compass.dataset.testid = 'hud-compass';
+  compass.setAttribute('aria-hidden', 'true');
+
+  sunCluster.append(sunTimeInput, sunNorthInput, compass);
+  bar.append(sunCluster);
+
   const fade = document.createElement('div');
   fade.className = 'hud-fade';
   fade.dataset.testid = 'hud-fade';
@@ -142,6 +193,9 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
     perfPanel: null,
     walkOverlay,
     walkReticle,
+    sunTimeInput,
+    sunNorthInput,
+    compass,
   };
 }
 
@@ -254,6 +308,47 @@ export function reflectWallsAlpha(handles: HudHandles, alpha: number): void {
   const percent = Math.round(a * 100);
   handles.wallsAlpha.value = String(percent);
   handles.wallsAlphaLabel.textContent = `${percent}%`;
+}
+
+/**
+ * Attach the time-of-day slider handler (issue #121). Each `input`
+ * event carries the hour value; the controller owns normalisation.
+ */
+export function onBindSunTime(
+  handles: HudHandles,
+  listener: SunTimeListener,
+): () => void {
+  const onInput = (): void => {
+    listener(Number(handles.sunTimeInput.value));
+  };
+  handles.sunTimeInput.addEventListener('input', onInput);
+  return () => handles.sunTimeInput.removeEventListener('input', onInput);
+}
+
+/** Attach the north-offset slider handler (issue #121). */
+export function onBindSunNorth(
+  handles: HudHandles,
+  listener: SunNorthListener,
+): () => void {
+  const onInput = (): void => {
+    listener(Number(handles.sunNorthInput.value));
+  };
+  handles.sunNorthInput.addEventListener('input', onInput);
+  return () => handles.sunNorthInput.removeEventListener('input', onInput);
+}
+
+/**
+ * Reflect a set of sun settings on the HUD (issue #121): slider values,
+ * and the compass rose rotated by −northOffsetDeg (a CSS transform on
+ * the static div — the only moving part).
+ */
+export function reflectSunSettings(
+  handles: HudHandles,
+  settings: SunSettings,
+): void {
+  handles.sunTimeInput.value = String(settings.timeHours);
+  handles.sunNorthInput.value = String(settings.northOffsetDeg);
+  handles.compass.style.transform = `rotate(${-settings.northOffsetDeg}deg)`;
 }
 
 /**

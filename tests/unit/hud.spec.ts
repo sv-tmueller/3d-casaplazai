@@ -9,13 +9,17 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildHud,
   onBindRoofToggle,
+  onBindSunNorth,
+  onBindSunTime,
   onBindWallsAlpha,
   reflectRoofVisibility,
+  reflectSunSettings,
   reflectWallsAlpha,
   setWalkAffordances,
   wallsAlphaFromSlider,
   type HudHandles,
 } from '../../src/viewer/hud';
+import { DEFAULT_SUN_SETTINGS } from '../../src/viewer/sun';
 
 describe('walk-mode entry affordances (issue #30)', () => {
   let handles: HudHandles;
@@ -181,5 +185,88 @@ describe('walls-transparency slider (issue #120)', () => {
     });
     unbind();
     handles.wallsAlpha.dispatchEvent(new Event('input')); // must not throw
+  });
+});
+
+describe('sun controls (issue #121)', () => {
+  let handles: HudHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+  });
+
+  it('renders keyboard-native range sliders with the sanctioned testids', () => {
+    const time = document.querySelector<HTMLInputElement>(
+      '[data-testid="hud-sun-time"]',
+    );
+    const north = document.querySelector<HTMLInputElement>(
+      '[data-testid="hud-sun-north"]',
+    );
+    expect(time).toBe(handles.sunTimeInput);
+    expect(north).toBe(handles.sunNorthInput);
+    expect(time!.type).toBe('range');
+    expect(north!.type).toBe('range');
+    // Range inputs are arrow-key operable — the mouseless mandate.
+    expect(time!.tabIndex).toBe(0);
+    expect(time!.min).toBe('0');
+    expect(time!.max).toBe('24');
+    expect(time!.value).toBe('12'); // noon preset
+    expect(north!.min).toBe('-180');
+    expect(north!.max).toBe('180');
+    expect(north!.value).toBe('0');
+    expect(time!.getAttribute('aria-label')).toBe('Time of day (hours)');
+    expect(north!.getAttribute('aria-label')).toBe('North offset (degrees)');
+  });
+
+  it('appends the sun cluster after the walls slider and hint (append-only)', () => {
+    const bar = handles.root.querySelector('.hud-bar');
+    expect(bar).not.toBeNull();
+    const hint = bar!.querySelector('[data-testid="hud-hint"]');
+    const walls = bar!.querySelector('[data-testid="hud-walls-alpha"]');
+    const cluster = bar!.querySelector('[data-testid="hud-sun-cluster"]');
+    expect(hint).not.toBeNull();
+    expect(walls).not.toBeNull();
+    expect(cluster).not.toBeNull();
+    const children = Array.from(bar!.children);
+    // Ratified DOM order (batch #116): the walls-alpha slider (#120)
+    // sits AHEAD of the sun cluster (#121).
+    expect(children.indexOf(cluster!)).toBeGreaterThan(children.indexOf(walls!));
+    expect(children.indexOf(cluster!)).toBeGreaterThan(children.indexOf(hint!));
+    // The pre-existing children keep their positions at the head.
+    expect(children[0]?.getAttribute('data-testid')).toBe('hud-mode-toggle');
+    expect(children[1]?.getAttribute('data-testid')).toBe('hud-roof-toggle');
+  });
+
+  it('plumbs time-of-day input events to the listener', () => {
+    const seen: number[] = [];
+    const unbind = onBindSunTime(handles, (hours) => seen.push(hours));
+    handles.sunTimeInput.value = '7.5';
+    handles.sunTimeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(seen).toEqual([7.5]);
+    unbind();
+    handles.sunTimeInput.value = '9';
+    handles.sunTimeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(seen).toEqual([7.5]); // inert after unbind
+  });
+
+  it('plumbs north-offset input events to the listener', () => {
+    const seen: number[] = [];
+    onBindSunNorth(handles, (deg) => seen.push(deg));
+    handles.sunNorthInput.value = '-45';
+    handles.sunNorthInput.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(seen).toEqual([-45]);
+  });
+
+  it('reflects settings onto the sliders and the compass rotation', () => {
+    expect(handles.compass.dataset.testid).toBe('hud-compass');
+    reflectSunSettings(handles, { timeHours: 8, northOffsetDeg: 30 });
+    expect(handles.sunTimeInput.value).toBe('8');
+    expect(handles.sunNorthInput.value).toBe('30');
+    expect(handles.compass.style.transform).toBe('rotate(-30deg)');
+    reflectSunSettings(handles, DEFAULT_SUN_SETTINGS);
+    expect(handles.sunTimeInput.value).toBe('12');
+    expect(handles.sunNorthInput.value).toBe('0');
+    expect(handles.compass.style.transform).toBe('rotate(0deg)');
   });
 });

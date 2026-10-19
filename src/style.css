@@ -337,6 +337,62 @@ body {
   white-space: pre;
 }
 
+/* --------------------- sun controls (issue #121) -------------------------- */
+
+.hud-sun-cluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.hud-sun-time {
+  width: 96px;
+}
+
+.hud-sun-north {
+  width: 72px;
+}
+
+/* Compass rose: the static div rotates by −northOffsetDeg via a JS-set
+   inline transform; the N marker rides the rim. */
+.hud-compass {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #94a3b8;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #ffffff 0%, #e2e8f0 100%);
+  transition: transform 0.15s ease;
+}
+
+.hud-compass::before {
+  content: 'N';
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: #b91c1c;
+}
+
+.hud-compass::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 2px;
+  height: 8px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #b91c1c;
+}
+
 
 /* --------------------- pkg 6 (issue #7) additions ------------------------ */
 
