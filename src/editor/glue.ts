@@ -2480,6 +2480,20 @@ export function initEditorInteraction(
       !ev.ctrlKey &&
       !ev.metaKey
     ) {
+      // Issue #100 (Pkg 12.2): typing dims into a field must never
+      // DELETE the selection — Backspace is an EDIT key whenever
+      // focus sits in an input/textarea/select (the floating draw
+      // widget, the inspector, the popovers). Guard before routing.
+      const t = ev.target as HTMLElement | null;
+      if (
+        t !== null &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
       const sel = store.getState().selectedId;
       if (sel !== null) {
         ev.preventDefault();

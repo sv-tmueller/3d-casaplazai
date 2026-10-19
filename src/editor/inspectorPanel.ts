@@ -204,6 +204,11 @@ export function mountInspectorPanel(
   root.appendChild(body);
 
   let open = false;
+  // Issue #100 (Pkg 12.2): autofocus the wall dim pair when the wall
+  // case ACTIVATES (descriptor transition into it). Steady-state
+  // re-renders (store notifies while typing) must NOT steal focus —
+  // hence the key comparison, not a blanket focus() in renderWall.
+  let lastDescKey: string | null = null;
 
   const api: InspectorPanel = {
     root,
@@ -238,6 +243,20 @@ export function mountInspectorPanel(
         renderRoom(body, desc.room);
       } else {
         renderFurniture(body, desc.item, dispatch, flash);
+      }
+
+      // Issue #100: on TRANSITION into the wall case, autofocus the
+      // length field (mouseless activation; Tab then hops to angle).
+      const descKey =
+        desc.kind === 'wall'
+          ? `wall:${desc.room.id}:${desc.segIndex}`
+          : desc.kind;
+      const wallActivated = descKey.startsWith('wall:') && descKey !== lastDescKey;
+      lastDescKey = descKey;
+      if (wallActivated) {
+        body
+          .querySelector<HTMLInputElement>("[data-testid='insp-wall-length']")
+          ?.focus();
       }
 
       if (focusedTestid !== null) {
