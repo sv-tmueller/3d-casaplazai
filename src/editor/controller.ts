@@ -5,7 +5,7 @@
  * gestures into store Commands. Deliberately split so the gesture math
  * and FSM transitions stay unit-testable without a real canvas.
  */
-import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
+import type { FloorplanData, Floor, FurnitureItem, Room, Staircase } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import {
   convexHull,
@@ -18,6 +18,7 @@ import {
 } from './geom';
 import type { Pt } from './geom';
 import { OPENING_DEFAULTS, ROTATION_STEP_DEG } from './model/constants';
+import { stairWorldRect } from '../geom';
 import {
   clampPoseIntoRoom,
   itemCorners,
@@ -52,6 +53,10 @@ export type InteractionPhase =
   | { tag: 'idle' }
   | { tag: 'drawingRect'; corner1: Pt; cursor: Pt }
   | { tag: 'drawingPoly'; points: Pt[]; cursor: Pt }
+  /* pkg 13.4 (issue #118): staircase drag. `anchor` is the bottom step's
+   * downhill edge centre (fixed at pointerdown), `cursor` the uphill
+   * end; `roomId` is the host room captured at pointerdown. */
+  | { tag: 'drawingStair'; anchor: Pt; cursor: Pt; roomId: string }
   | { tag: 'dragging'; grabOffset: Pt; selectedRoomId: string }
   | { tag: 'resizing'; vertexIndex: number; selectedRoomId: string }
   | { tag: 'draggingFurniture'; furnitureId: string }
@@ -302,6 +307,28 @@ export function roomInBand(room: Room, rect: BandRect): boolean {
     intervalsOverlap(minY, maxY, rect.minY, rect.maxY);
 }
 
+/**
+ * Marquee membership for a stair (issue #118): AABB of the rotated
+ * footprint (stairWorldRect) ∩ band AABB — deliberately LOOSE, the same
+ * posture as furnitureInBand. "Rect-simple" by ruling: the exact-SAT
+ * marquee upgrade (#117) can absorb stairs after; no SAT here. Pure —
+ * unit spec'd.
+ */
+export function stairInBand(stair: Staircase, rect: BandRect): boolean {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const c of stairWorldRect(stair)) {
+    if (c[0] < minX) minX = c[0];
+    if (c[0] > maxX) maxX = c[0];
+    if (c[1] < minY) minY = c[1];
+    if (c[1] > maxY) maxY = c[1];
+  }
+  return intervalsOverlap(minX, maxX, rect.minX, rect.maxX) &&
+    intervalsOverlap(minY, maxY, rect.minY, rect.maxY);
+}
+
 /* --------------------------- Resize-handle picking ------------------------ */
 
 export function resizeHandleAt(
@@ -370,16 +397,24 @@ export type Pkg3ToolMode = 'door' | 'window' | 'stamp';
  * can keep churning the phase wiring undisturbed.
  */
 export type MeasureToolMode = 'measure';
-export type AnyToolMode = ToolMode | Pkg3ToolMode | MeasureToolMode;
+/**
+ * Issue #118 (Pkg 13.4): staircase tool — drag inside a room to draw a
+ * straight flight climbing onto the next storey. Added ADDITIVELY (the
+ * #66 MeasureToolMode precedent) so earlier tool wiring stays untouched.
+ */
+export type StairsToolMode = 'stairs';
+export type AnyToolMode = ToolMode | Pkg3ToolMode | MeasureToolMode | StairsToolMode;
 
 export interface GhostPreview {
-  kind: 'door' | 'window' | 'stamp';
+  kind: 'door' | 'window' | 'stamp' | 'stairs';
   seg?: SegmentInfo;
   t?: number;
   width?: number;
   footprint?: Pt;
   rotationDeg?: number;
   pos?: Pt;
+  /** Issue #118: the full candidate flight (render derives its rect). */
+  stair?: Staircase;
   valid: boolean;
 }
 
@@ -579,4 +614,82 @@ export function doorSwingGeometry(
     radiusPxPerMeterRadius: width,
     normal: segmentNormal(seg),
   };
+}
+
+/* ================== pkg 13.4 stairs tool math (issue #118) ================ */
+
+/** Default flight width for a fresh drag, meters. */
+export const STAIR_DEFAULT_WIDTH_M = 1.0;
+
+/** Preferred tread depth (run per step), meters — drives deriveStepCount. */
+export const STAIR_TREAD_TARGET_M = 0.28;
+
+/** Minimum step count (schema floor; the schema itself demands >= this). */
+export const STAIR_MIN_STEPS = 3;
+
+/**
+ * Drag → flight pose. The ANCHOR is the bottom step's downhill edge
+ * centre; the drag vector is the uphill axis, so `run` is the drag
+ * length and the footprint centre sits halfway along it (position =
+ * anchor + drag/2). rotationDeg is the CCW angle of that axis from +x —
+ * the exact convention stairFootprint() consumes. Returns null for a
+ * degenerate (zero-length) drag. Pure — unit spec'd.
+ */
+export function stairFromDrag(
+  anchor: Pt,
+  cursor: Pt,
+): { position: Pt; rotationDeg: number; run: number } | null {
+  const dx = cursor[0] - anchor[0];
+  const dy = cursor[1] - anchor[1];
+  const run = Math.hypot(dx, dy);
+  if (!(run > 1e-9)) return null;
+  return {
+    position: [anchor[0] + dx / 2, anchor[1] + dy / 2],
+    rotationDeg: (Math.atan2(dy, dx) * 180) / Math.PI,
+    run,
+  };
+}
+
+/**
+ * Step count for a given run: tread ≈ STAIR_TREAD_TARGET_M, rounded to
+ * an integer, clamped up to the schema floor (>= STAIR_MIN_STEPS).
+ * Deterministic so fixtures/e2e can derive exact step counts. Pure.
+ */
+export function deriveStepCount(run: number): number {
+  if (!Number.isFinite(run) || run <= 0) return STAIR_MIN_STEPS;
+  return Math.max(STAIR_MIN_STEPS, Math.round(run / STAIR_TREAD_TARGET_M));
+}
+
+/**
+ * Nearest storey STRICTLY above the departure elevation, or null when
+ * the plan has none (the tool then offers the existing addFloor flow).
+ * The stair's rise is ALWAYS this Δ — rise is derived, never a freehand
+ * number, because validateStairs' gap match (1 mm) demands the flight
+ * land exactly on this storey's elevation. Pure — unit spec'd.
+ */
+export function nearestArrivalFloor(
+  plan: FloorplanData,
+  departureElevation: number,
+): Floor | null {
+  let best: Floor | null = null;
+  for (const floor of plan.floors) {
+    if (floor.elevation <= departureElevation) continue;
+    if (best === null || floor.elevation < best.elevation) best = floor;
+  }
+  return best;
+}
+
+/**
+ * Elevation of the storey hosting a room (a stair's DEPARTURE level), or
+ * null when the room is unknown. Mirrors validateStairs' own lookup so
+ * the tool and the compiler always agree on "departure". Pure.
+ */
+export function stairDepartureElevation(
+  plan: FloorplanData,
+  roomId: string,
+): number | null {
+  for (const floor of plan.floors) {
+    if (floor.rooms.some((r) => r.id === roomId)) return floor.elevation;
+  }
+  return null;
 }

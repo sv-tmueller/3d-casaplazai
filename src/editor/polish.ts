@@ -16,6 +16,7 @@ export const TOOL_HINTS: Record<string, string> = {
   window: 'Hover a wall, then click to place a window.',
   stamp: 'Pick a piece below, then click inside a room to place it.',
   measure: 'Click two points to add a dimension; click a label to remove it.',
+  stairs: 'Drag inside a room to draw a staircase up to the floor above.',
 };
 
 /** Hint for bindings not tied to a tool. */

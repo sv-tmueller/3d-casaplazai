@@ -26,6 +26,8 @@ export interface EditorDomRefs {
   btnDoor: HTMLButtonElement;
   btnWindow: HTMLButtonElement;
   btnStamp: HTMLButtonElement;
+  /* pkg 13.4 (issue #118): staircase tool button. */
+  btnStairs: HTMLButtonElement;
   palette: HTMLDivElement;
   btnUndo: HTMLButtonElement;
   btnRedo: HTMLButtonElement;
@@ -131,6 +133,12 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnDoor = mkHintedBtn("Door", "door", "editor-door", "door");
   const btnWindow = mkHintedBtn("Window", "window", "editor-window", "window");
   const btnStamp = mkHintedBtn("Furnish", "stamp", "editor-stamp", "furnish");
+
+  // pkg 13.4 (issue #118): staircase tool — a structural sibling of the
+  // door/window/furnish trio. Label span is mandatory (e2e getByRole
+  // names depend on it); hint lives in `title` only.
+  const btnStairs = mkHintedBtn("Stairs", "stairs", "editor-stairs", "stairs");
+  btnStairs.setAttribute("data-testid", "btn-stairs");
 
   // Issue #66 (Pkg 1): two-point measure tool.
   const btnMeasure = mkHintedBtn(
@@ -288,7 +296,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
 
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
-    btnMeasure, sep,
+    btnStairs, btnMeasure, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnShare, btnImport,
     btnExportJson, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
@@ -587,6 +595,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     toolbar, canvas, badge, msg, status, statusTotal,
     btnExport, btnShare, btnImport, btnExportJson, importFileInput, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
+    btnStairs,
     btnDimensions, btnSnap, snapPopover,
     btnUnderlay, underlayFileInput, underlayPopover, underlayOpacity,
     underlayOpacityValue, btnUnderlayRotateCCW, btnUnderlayRotateCW,

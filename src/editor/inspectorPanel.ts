@@ -22,7 +22,9 @@ import type {
   FurnitureItem,
   Opening,
   Room,
+  Staircase,
 } from '../shared/schema';
+import { validateGeometry } from '../geom';
 import { roomAreaM2 } from './measures';
 import { compassAngleBetween, polarEndpoint } from './model/angles';
 import { mountDimFields } from './typeInDims';
@@ -45,6 +47,9 @@ export type SelectionDescriptor =
   | { kind: 'opening'; opening: Opening; room: Room }
   | { kind: 'room'; room: Room }
   | { kind: 'furniture'; item: FurnitureItem }
+  /* pkg 13.4 (issue #118): a plan-level staircase; glue resolves it only
+   * while its host (departure) room sits on the active floor. */
+  | { kind: 'stair'; stair: Staircase }
   /* pkg 13.2 (issue #110): marquee multi-select aggregate. Counts are
    * per-kind totals of the glue-local member set (pure renderer — the
    * panel never inspects glue state; glue builds the descriptor). */
@@ -251,6 +256,8 @@ export function mountInspectorPanel(
         renderOpening(body, desc.opening, desc.room, dispatch, flash);
       } else if (desc.kind === 'room') {
         renderRoom(body, desc.room);
+      } else if (desc.kind === 'stair') {
+        renderStair(body, desc.stair, plan, dispatch, flash);
       } else if (desc.kind === 'multi') {
         // pkg 13.2 (issue #110): aggregate counts for the marquee set.
         renderMulti(body, desc.counts);
@@ -318,6 +325,9 @@ function renderNone(body: HTMLElement, plan: FloorplanData): void {
   kvRow(dl, 'Rooms', String(rooms));
   kvRow(dl, 'Openings', String(openings));
   kvRow(dl, 'Furniture', String(furniture));
+  // pkg 13.4 (issue #118): plan-level stairs (additive row; stairs are
+  // not floor-local, so no per-floor reduce).
+  if (plan.stairs.length > 0) kvRow(dl, 'Stairs', String(plan.stairs.length));
   const total = plan.floors.reduce(
     (sum, f) => sum + f.rooms.reduce((s, r) => s + roomAreaM2(r), 0),
     0,
@@ -336,6 +346,8 @@ function renderMulti(body: HTMLElement, counts: Record<string, number>): void {
     ['rooms', 'Rooms'],
     ['openings', 'Openings'],
     ['furniture', 'Furniture'],
+    // pkg 13.4 (issue #118): stairs join the marquee set (rect-simple).
+    ['stairs', 'Stairs'],
   ];
   let total = 0;
   for (const [key, label] of kinds) {
@@ -570,6 +582,144 @@ function renderRoom(body: HTMLElement, room: Room): void {
   hint.className = 'inspector-hint';
   hint.textContent = 'Click near a wall to inspect that wall segment.';
   body.appendChild(hint);
+}
+
+/* -------------------------------- stair ---------------------------------- */
+
+/**
+ * pkg 13.4 (issue #118): guarded stair commit — mutate a plan COPY,
+ * validate it with the shared validateGeometry() (rise/run edits can
+ * break gap-match or containment; rotation/flip can move the landing
+ * hole onto a sibling's), and only then dispatch. Rejections flash the
+ * validator's own message and leave the store untouched: the panel never
+ * writes invalid state.
+ */
+function stairGuardedCommit(
+  plan: FloorplanData,
+  stair: Staircase,
+  fields: Partial<Pick<Staircase, 'rotationDeg' | 'width' | 'run' | 'rise' | 'stepCount'>>,
+  cmd: unknown,
+  dispatch: PanelDispatch,
+  flash: (msg: string) => void,
+): boolean {
+  const candidate: FloorplanData = {
+    ...plan,
+    stairs: plan.stairs.map((s) => (s.id === stair.id ? { ...s, ...fields } : s)),
+  };
+  try {
+    validateGeometry(candidate);
+  } catch (err) {
+    flash((err as Error).message);
+    return false;
+  }
+  const res = dispatch(cmd);
+  if (!res.ok) {
+    flash(res.error);
+    return false;
+  }
+  return true;
+}
+
+function renderStair(
+  body: HTMLElement,
+  stair: Staircase,
+  plan: FloorplanData,
+  dispatch: PanelDispatch,
+  flash: (msg: string) => void,
+): void {
+  sectionTitle(body, 'Staircase');
+  const dl = document.createElement('dl');
+  dl.className = 'inspector-summary';
+  kvRow(dl, 'Rise (climb)', `${stair.rise.toFixed(2)} m`);
+  kvRow(dl, 'Tread', `${(stair.run / stair.stepCount).toFixed(2)} m`);
+  body.appendChild(dl);
+
+  const update = (
+    fields: Partial<Pick<Staircase, 'rotationDeg' | 'width' | 'run' | 'rise' | 'stepCount'>>,
+  ): boolean =>
+    stairGuardedCommit(
+      plan,
+      stair,
+      fields,
+      { type: 'updateStair', stairId: stair.id, fields },
+      dispatch,
+      flash,
+    );
+
+  numberField(
+    body,
+    'Rotation (°)',
+    'insp-stair-rotation',
+    Math.round(stair.rotationDeg),
+    (deg) => update({ rotationDeg: deg }),
+    flash,
+    'Rotation must be a number.',
+    '1',
+  );
+  numberField(
+    body,
+    'Width (m)',
+    'insp-stair-width',
+    stair.width,
+    (w) => update({ width: w }),
+    flash,
+    'Width must be a number.',
+    '0.05',
+  );
+  numberField(
+    body,
+    'Run (m)',
+    'insp-stair-run',
+    stair.run,
+    (r) => update({ run: r }),
+    flash,
+    'Run must be a number.',
+    '0.05',
+  );
+  // Rise is derived at draw time; editing it here is possible but must
+  // still land exactly on an arrival floor's gap — the guarded commit
+  // bounces everything else with the validator's own message.
+  numberField(
+    body,
+    'Rise (m)',
+    'insp-stair-rise',
+    stair.rise,
+    (r) => update({ rise: r }),
+    flash,
+    'Rise must be a number.',
+    '0.05',
+  );
+  numberField(
+    body,
+    'Steps',
+    'insp-stair-steps',
+    stair.stepCount,
+    (n) => update({ stepCount: Math.round(n) }),
+    flash,
+    'Steps must be a number.',
+    '1',
+  );
+
+  // Flip: the store's pure 180° op, still guarded (the landing hole
+  // relocates to the other side of the flight).
+  const flip = document.createElement('button');
+  flip.type = 'button';
+  flip.className = 'editor-btn inspector-flip-stair';
+  flip.textContent = 'Flip';
+  flip.title = 'Reverse the flight direction (180°).';
+  flip.dataset.testid = 'btn-flip-stair';
+  flip.addEventListener('click', () => {
+    const next = (((stair.rotationDeg + 180) % 360) + 360) % 360;
+    stairGuardedCommit(
+      plan,
+      stair,
+      { rotationDeg: next },
+      { type: 'flipStair', stairId: stair.id },
+      dispatch,
+      flash,
+    );
+  });
+  body.appendChild(flip);
 }
 
 /* ------------------------------- furniture ------------------------------- */

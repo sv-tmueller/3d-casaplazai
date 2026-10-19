@@ -3,7 +3,7 @@
  * every state change. Lives here (not in controller.ts) so the gesture
  * math stays unit-testable without a real canvas/browser.
  */
-import type { FloorplanData, FurnitureItem, Room } from "../shared/schema";
+import type { FloorplanData, FurnitureItem, Room, Staircase } from "../shared/schema";
 import {
   flatFurniture,
   flatOpenings,
@@ -17,12 +17,14 @@ import {
   bandRect,
   classifyCorner,
   computeOverlaps,
+  deriveStepCount,
   evaluateSnapCandidates,
   finalizeRectangle,
   furnitureInBand,
   HANDLE_HIT_PX,
   judgeBulkFollow,
   judgeMoveTarget,
+  nearestArrivalFloor,
   nextRotation,
   openingErrorMessage,
   resizeHandleAt,
@@ -31,6 +33,10 @@ import {
   roomInBand,
   screenToWorld,
   SNAP_TOL_PX,
+  STAIR_DEFAULT_WIDTH_M,
+  stairDepartureElevation,
+  stairFromDrag,
+  stairInBand,
   validateOpeningDraft,
   worldToScreen,
   type AnyToolMode,
@@ -84,7 +90,7 @@ import {
   type SegmentAddress,
 } from './inspectorPanel';
 import { flashMessage, type EditorDomRefs } from './ui';
-import { paintScene, paintSelectedSegmentOverlay } from './render';
+import { paintScene, paintSelectedSegmentOverlay, stairsOfActiveFloor as activeFloorStairs } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
 import { angleReadoutLabels } from './render/angleReadouts';
@@ -94,7 +100,8 @@ import { encodeShare } from '../shared/shareLink';
 import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
-import { EditorStore, activeFloorPlan, emptyPlan, underlayFor } from './store';
+import { EditorStore, activeFloorPlan, emptyPlan, nextFloorElevation, underlayFor } from './store';
+import { stairProgress, validateGeometry } from '../geom';
 import { vecAdd, vecSub } from './geom';
 import {
   labelHitTest,
@@ -112,6 +119,8 @@ const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
 const INITIAL_SCALE = 80; // px per meter
 /** Issue #61: pointer travel (screen px) before a click becomes a drag. */
 const OPENING_DRAG_THRESHOLD_PX = 3;
+/** Issue #118: pointer travel (screen px) before a stair drag commits. */
+const STAIR_MIN_DRAG_PX = 12;
 
 /**
  * Glue-local drag candidate for an opening (issue #61). Mirrors the
@@ -298,6 +307,13 @@ export function initEditorInteraction(
   let bulkDragIds: string[] | null = null;
   /** Issue #110: pointer travel (screen px) before a marquee band engages. */
   const MARQUEE_ENGAGE_PX = 3;
+
+  // pkg 13.4 (issue #118): staircase draft + the "no floor above" offer.
+  // The draft rides the phase machine (drawingStair); the offer element +
+  // its FROZEN draft live here (the drawDims precedent — a canvas-overlay
+  // widget whose lifetime is the interaction).
+  let stairOffer: HTMLElement | null = null;
+  let stairOfferDraft: { anchor: Pt; cursor: Pt; roomId: string } | null = null;
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
@@ -611,7 +627,9 @@ export function initEditorInteraction(
             ? 'openings'
             : flatFurniture(view).some((f) => f.id === id)
               ? 'furniture'
-              : null;
+              : activeFloorStairs(view).some((s) => s.id === id)
+                ? 'stairs'
+                : null;
         if (kind === null) continue; // raced a delete; purge reaps it
         counts[kind] = (counts[kind] ?? 0) + 1;
         total += 1;
@@ -644,6 +662,10 @@ export function initEditorInteraction(
     }
     const item = flatFurniture(view).find((f) => f.id === sel);
     if (item) return { kind: "furniture", item };
+    // pkg 13.4 (issue #118): plan-level stairs — resolved only while the
+    // flight departs the ACTIVE floor (its host room is visible here).
+    const stair = activeFloorStairs(view).find((s) => s.id === sel);
+    if (stair) return { kind: "stair", stair };
     return { kind: "none" };
   }
 
@@ -682,6 +704,12 @@ export function initEditorInteraction(
     for (const r of flatRooms(view)) {
       if (roomInBand(r, rect)) ids.add(r.id);
     }
+    // pkg 13.4 (issue #118): stairs join the sweep — rect-simple
+    // membership (stairInBand), restricted to flights departing the
+    // ACTIVE floor (the ones on screen).
+    for (const s of activeFloorStairs(view)) {
+      if (stairInBand(s, rect)) ids.add(s.id);
+    }
     return ids;
   }
 
@@ -696,7 +724,8 @@ export function initEditorInteraction(
     const alive = (id: string): boolean =>
       flatRooms(view).some((r) => r.id === id) ||
       flatOpenings(view).some((o) => o.id === id) ||
-      flatFurniture(view).some((f) => f.id === id);
+      flatFurniture(view).some((f) => f.id === id) ||
+      activeFloorStairs(view).some((s) => s.id === id);
     let changed = false;
     for (const id of [...multiSelected]) {
       if (!alive(id)) {
@@ -875,6 +904,9 @@ export function initEditorInteraction(
     // Issue #100: tool switch also abandons a live poly draw (and its
     // floating dim fields) — same lifetime rule as Esc.
     destroyDrawDims();
+    // pkg 13.4 (issue #118): a tool switch also abandons a staircase draft
+    // and closes any open "add floor" offer (same lifetime rule).
+    abandonStairDraft();
     if (next === "select") {
       phase = { tag: "idle" };
     } else {
@@ -892,6 +924,7 @@ export function initEditorInteraction(
       [refs.btnDoor, "door"],
       [refs.btnWindow, "window"],
       [refs.btnStamp, "stamp"],
+      [refs.btnStairs, "stairs"],
       [refs.btnAddMeasure, "measure"],
     ] as Array<[HTMLButtonElement, AnyToolMode]>) {
       btn.classList.toggle("active", val === tool);
@@ -1387,6 +1420,7 @@ export function initEditorInteraction(
   refs.btnDoor.addEventListener("click", () => setActiveTool("door"));
   refs.btnWindow.addEventListener("click", () => setActiveTool("window"));
   refs.btnStamp.addEventListener("click", () => setActiveTool("stamp"));
+  refs.btnStairs.addEventListener("click", () => setActiveTool("stairs"));
   refs.btnAddMeasure.addEventListener("click", () => setActiveTool("measure"));
   // Issue #66: wipe all annotations (persists immediately).
   refs.btnClearMeasure.addEventListener("click", () => {
@@ -1649,6 +1683,13 @@ export function initEditorInteraction(
       store.dispatch({ type: "deleteOpening", openingId: sel, syncPair: true });
       return;
     }
+    // pkg 13.4 (issue #118): stairs are plan-level — route BEFORE the
+    // room fallback (a stair id never matches a room, but the explicit
+    // branch keeps the routing honest).
+    if (store.getState().data.stairs.some((s) => s.id === sel)) {
+      store.dispatch({ type: "deleteStair", stairId: sel });
+      return;
+    }
     store.dispatch({ type: "deleteRoom", roomId: sel });
   }
   refs.btnDelete.addEventListener("click", () => routeDelete());
@@ -1902,6 +1943,214 @@ export function initEditorInteraction(
     if (notice !== null) flashMessage(refs, notice);
   }
 
+  /* ---------- pkg 13.4 (issue #118): staircase tool ---------- */
+
+  // The active-floor stair filter lives in render.ts (single source: the
+  // painter and every glue membership site must agree on what "visible
+  // stairs" means) — imported above as activeFloorStairs.
+
+  /**
+   * Candidate flight for a draft drag. RISE IS DERIVED, NEVER DEFAULTED:
+   * the nearest storey above the departure, or — when the plan has none —
+   * the elevation the addFloor offer would mint (nextFloorElevation), so
+   * the ghost reads green exactly when accepting that offer validates.
+   */
+  function stairDraftCandidate(draft: {
+    anchor: Pt;
+    cursor: Pt;
+    roomId: string;
+  }): Staircase | null {
+    const drag = stairFromDrag(draft.anchor, draft.cursor);
+    if (drag === null) return null;
+    const data = store.getState().data;
+    const departure = stairDepartureElevation(data, draft.roomId);
+    if (departure === null) return null;
+    const arrival = nearestArrivalFloor(data, departure);
+    const rise =
+      (arrival !== null ? arrival.elevation : nextFloorElevation(data)) -
+      departure;
+    return {
+      id: '__draft-stair',
+      roomId: draft.roomId,
+      position: drag.position,
+      rotationDeg: drag.rotationDeg,
+      width: STAIR_DEFAULT_WIDTH_M,
+      run: drag.run,
+      rise,
+      stepCount: deriveStepCount(drag.run),
+    };
+  }
+
+  /**
+   * Placement legality (issue #118): build a candidate plan copy and run
+   * the EXISTING validateGeometry() — never a forked rule set. When no
+   * storey sits above the departure, a synthetic floor at
+   * nextFloorElevation joins the copy so the verdict predicts the
+   * accept-offer outcome. Failures carry the validator's own message
+   * (StairOutOfBounds / OverlappingStairHoles / … — already actionable)
+   * for the inline banner.
+   */
+  function stairCandidateVerdict(
+    stair: Staircase,
+  ): { ok: true; noArrival: boolean } | { ok: false; message: string; noArrival: boolean } {
+    const data = store.getState().data;
+    const departure = stairDepartureElevation(data, stair.roomId);
+    const noArrival =
+      departure === null || nearestArrivalFloor(data, departure) === null;
+    const candidate: FloorplanData = {
+      ...data,
+      floors: noArrival
+        ? [
+            ...data.floors,
+            {
+              id: '__stair-draft-floor',
+              name: 'Draft floor',
+              elevation: nextFloorElevation(data),
+              rooms: [],
+              openings: [],
+              furniture: [],
+            },
+          ]
+        : data.floors,
+      stairs: [...data.stairs, stair],
+    };
+    try {
+      validateGeometry(candidate);
+      return { ok: true, noArrival };
+    } catch (err) {
+      return { ok: false, message: (err as Error).message, noArrival };
+    }
+  }
+
+  /** Live ghost for the in-flight stair drag: green/red via the verdict. */
+  function updateStairGhost(draft: { anchor: Pt; cursor: Pt; roomId: string }): void {
+    const stair = stairDraftCandidate(draft);
+    ghost = stair === null ? null : { kind: 'stairs', stair, valid: stairCandidateVerdict(stair).ok };
+  }
+
+  function destroyStairOffer(): void {
+    stairOffer?.remove();
+    stairOffer = null;
+    stairOfferDraft = null;
+  }
+
+  /** Tear down every stair-tool affordance (Esc / tool switch / commit). */
+  function abandonStairDraft(): void {
+    destroyStairOffer();
+    ghost = null;
+    phase = { tag: 'idle' };
+    repaint();
+  }
+
+  /** Dispatch the drafted flight; teardown regardless of outcome. */
+  function commitStairDraft(stair: Staircase, notice?: string): void {
+    const res = store.dispatch({
+      type: 'addStair',
+      roomId: stair.roomId,
+      position: stair.position,
+      rotationDeg: stair.rotationDeg,
+      width: stair.width,
+      run: stair.run,
+      rise: stair.rise,
+      stepCount: stair.stepCount,
+    });
+    if (!res.ok) {
+      flashMessage(refs, res.error);
+    } else {
+      flashMessage(
+        refs,
+        notice ??
+          `Staircase added — ${stair.stepCount} steps climbing ${stair.rise.toFixed(2)} m.`,
+      );
+    }
+    abandonStairDraft();
+  }
+
+  /**
+   * "No floor above" inline offer (issue #118): the tool never mints
+   * storeys silently — it offers the EXISTING addFloor flow as an inline,
+   * Tab-reachable button (mouseless chain: the button autofocuses, Enter
+   * accepts, Esc abandons).
+   */
+  function showStairOffer(draft: { anchor: Pt; cursor: Pt; roomId: string }): void {
+    destroyStairOffer();
+    stairOfferDraft = draft;
+    const el = document.createElement('div');
+    el.className = 'stair-offer';
+    el.dataset.testid = 'stair-addfloor-offer';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Add a floor for the staircase');
+
+    const text = document.createElement('span');
+    text.textContent =
+      'No floor above yet — add one and the staircase will climb to it.';
+    const accept = document.createElement('button');
+    accept.type = 'button';
+    accept.className = 'editor-btn';
+    accept.dataset.testid = 'btn-stair-addfloor';
+    accept.textContent = 'Add floor';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'editor-btn';
+    cancel.dataset.testid = 'btn-stair-cancel';
+    cancel.textContent = 'Cancel';
+    el.append(text, accept, cancel);
+    (canvas.parentElement as HTMLElement).appendChild(el);
+    stairOffer = el;
+
+    accept.addEventListener('click', () => acceptStairOffer());
+    cancel.addEventListener('click', () => {
+      abandonStairDraft();
+      flashMessage(refs, 'Staircase cancelled — no floor above to climb to.');
+    });
+    // Mouseless chain: the offer lands focused, Enter accepts.
+    accept.focus();
+    repaint();
+  }
+
+  /**
+   * Accept: run the EXISTING addFloor flow, re-derive the flight against
+   * the post-add plan (rise = the minted Δ exactly — a hand-defaulted
+   * 2.7 m would fail the 1 mm gap match against the 3.0 m storey pitch),
+   * commit, then return to the departure floor so the fresh flight is
+   * visible AND selected where the user drew it.
+   */
+  function acceptStairOffer(): void {
+    const draft = stairOfferDraft;
+    if (draft === null) return;
+    if (stairDepartureElevation(store.getState().data, draft.roomId) === null) {
+      abandonStairDraft();
+      return;
+    }
+    const added = store.dispatch({ type: 'addFloor' });
+    if (!added.ok) {
+      flashMessage(refs, added.error);
+      abandonStairDraft();
+      return;
+    }
+    const stair = stairDraftCandidate(draft);
+    if (stair === null) {
+      abandonStairDraft();
+      return;
+    }
+    const verdict = stairCandidateVerdict(stair);
+    if (!verdict.ok) {
+      flashMessage(refs, verdict.message);
+      abandonStairDraft();
+      return;
+    }
+    const hostIdx = store
+      .getState()
+      .data.floors.findIndex((f) => f.rooms.some((r) => r.id === draft.roomId));
+    commitStairDraft(
+      stair,
+      `Floor added and staircase committed (${stair.stepCount} steps).`,
+    );
+    if (hostIdx !== -1) {
+      store.dispatch({ type: 'setActiveFloor', index: hostIdx });
+    }
+  }
+
   /* ---------- pointer interactions ---------- */
   canvas.addEventListener("pointerdown", (ev) => {
     if (ev.button === 1 || ev.altKey) {
@@ -2029,6 +2278,22 @@ export function initEditorInteraction(
       return;
     }
 
+    if (tool === "stairs") {
+      // pkg 13.4 (issue #118): drag a flight. The anchor (downhill edge
+      // centre) must start inside a room — its host for the whole draft.
+      destroyStairOffer();
+      const anchor = snapPoint(worldPt);
+      const host = roomAt(anchor, activeFloorPlan(store.getState()));
+      if (!host) {
+        flashMessage(refs, "Start the staircase inside a room.");
+        return;
+      }
+      phase = { tag: "drawingStair", anchor, cursor: anchor, roomId: host.id };
+      canvas.setPointerCapture(ev.pointerId);
+      repaint();
+      return;
+    }
+
     if (tool === "polygon") {
       const cur = phase.tag === "drawingPoly" ? phase : null;
       if (cur === null) {
@@ -2134,6 +2399,23 @@ export function initEditorInteraction(
             lastErr: null,
           }
         : null;
+      phase = { tag: "idle" };
+      return;
+    }
+
+    // pkg 13.4 (issue #118): a staircase under the cursor (inside the
+    // footprint, stairProgress semantics) selects like other entities;
+    // the smaller primitives above win when they overlap.
+    const stairHit = activeFloorStairs(view).find(
+      (s) => stairProgress(s, worldPt[0], worldPt[1]) !== null,
+    );
+    if (stairHit) {
+      if (ev.shiftKey) {
+        toggleMultiMember(stairHit.id);
+        phase = { tag: "idle" };
+        return;
+      }
+      store.dispatch({ type: "setEntitySelection", entityId: stairHit.id });
       phase = { tag: "idle" };
       return;
     }
@@ -2323,6 +2605,16 @@ export function initEditorInteraction(
           valid: outcome.verdict !== "rejected",
         };
       }
+      repaint();
+      return;
+    }
+
+    if (phase.tag === "drawingStair") {
+      // pkg 13.4 (issue #118): track the uphill end; the ghost re-derives
+      // pose + rise + step count and re-runs the legality verdict.
+      const cursor = snapPoint(worldPt);
+      phase = { ...phase, cursor };
+      updateStairGhost(phase);
       repaint();
       return;
     }
@@ -2562,6 +2854,36 @@ export function initEditorInteraction(
       phase = { tag: "idle" };
       return;
     }
+    if (phase.tag === "drawingStair" && ev.button === 0) {
+      // pkg 13.4 (issue #118): release commits the draft. A click-sized
+      // travel abandons quietly; invalid geometry flashes the validator's
+      // own message; a valid flight with no storey above raises the
+      // addFloor offer instead of minting one silently.
+      const draft = phase;
+      if (dist(draft.cursor, draft.anchor) * cam.scale < STAIR_MIN_DRAG_PX) {
+        abandonStairDraft();
+        return;
+      }
+      const stair = stairDraftCandidate(draft);
+      if (stair === null) {
+        abandonStairDraft();
+        return;
+      }
+      const verdict = stairCandidateVerdict(stair);
+      if (!verdict.ok) {
+        flashMessage(refs, verdict.message);
+        abandonStairDraft();
+        return;
+      }
+      if (verdict.noArrival) {
+        phase = { tag: "idle" };
+        ghost = null;
+        showStairOffer(draft);
+        return;
+      }
+      commitStairDraft(stair);
+      return;
+    }
     if (phase.tag === "drawingRect" && ev.button === 0) {
       const worldPt = snapPoint(evWorld(ev));
       const minSide = Math.abs(worldPt[0] - phase.corner1[0]) * cam.scale;
@@ -2694,6 +3016,12 @@ export function initEditorInteraction(
       if (measureDraft) {
         measureDraft = null;
         repaint();
+        return;
+      }
+      // pkg 13.4 (issue #118): Esc abandons a staircase draft — or closes
+      // an open "add floor" offer (the offer can outlive the drag).
+      if (stairOffer !== null || phase.tag === "drawingStair") {
+        abandonStairDraft();
         return;
       }
       // Issue #100: dropping a drawingPoly gesture kills the floating
