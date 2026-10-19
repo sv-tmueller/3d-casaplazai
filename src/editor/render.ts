@@ -15,6 +15,7 @@ import {
 import type { Pt } from './geom';
 import { itemCorners } from './model/furniture';
 import { DEFAULT_SNAP_PITCH_M } from './model/settings';
+import { underlayCorners, type UnderlayState } from './model/underlay';
 import { groupedPairs, pointAtT, roomSegments, segmentNormal } from './model/openings';
 
 export interface SegHighlight {
@@ -51,10 +52,18 @@ export function paintScene(
   hoverHandle: number | null = null,
   selectedId: string | null = null,
   gridPitch: number = DEFAULT_SNAP_PITCH_M,
+  underlay: UnderlayState | null = null,
+  underlayImg: HTMLImageElement | null = null,
+  underlaySelected = false,
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
   ctx.fillRect(0, 0, cssW, cssH);
+
+  // pkg 12.1 (issue #99): the blueprint image paints FIRST — below the
+  // grid and every wall — enforcing the trace-over guarantee. Skipping
+  // entirely when hidden keeps the canvas bit-identical to pre-#99.
+  if (underlay && !underlay.hidden) drawUnderlay(ctx, cam, underlay, underlayImg, underlaySelected);
 
   drawGrid(ctx, cssW, cssH, cam, gridPitch);
 
@@ -154,6 +163,62 @@ function drawGrid(
 
 function modCss(v: number, step: number): number {
   return ((v % step) + step) % step;
+}
+
+/* ==================== pkg 12.1 painters (issue #99) ===================== */
+
+const UNDERLAY_SELECTED_STROKE = '#d97706';
+
+/**
+ * Blueprint underlay: ONE ctx.drawImage carrying translate/rotate/
+ * globalAlpha (data URL decodes straight into drawImage — no object
+ * URL to manage, no CSP concern). Called FIRST from paintScene, below
+ * drawGrid, so grid + walls + rooms always paint over the image
+ * (trace-over guarantee). Handles draw afterwards when selected.
+ */
+function drawUnderlay(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  u: UnderlayState,
+  img: HTMLImageElement | null,
+  selected: boolean,
+): void {
+  const c = worldToScreen(cam, [u.cx, u.cy]);
+  const wPx = u.w * cam.scale;
+  const hPx = u.h * cam.scale;
+  ctx.save();
+  ctx.translate(c[0], c[1]);
+  // Screen y grows downward, so CCW-in-world equals CW-on-screen.
+  ctx.rotate((u.rotDeg * Math.PI) / 180);
+  ctx.globalAlpha = u.opacity / 100;
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, -wPx / 2, -hPx / 2, wPx, hPx);
+  } else {
+    // Placeholder outline while decoding (or when the image failed to
+    // load): the transform stays visible/graspable either way.
+    ctx.strokeStyle = UNDERLAY_SELECTED_STROKE;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(-wPx / 2, -hPx / 2, wPx, hPx);
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+
+  // Corner handles ride ON TOP of everything (paintScene draws the
+  // underlay first) so they stay graspable over dense imagery. Handle
+  // HIT-TESTING is screen-space in glue.ts; this is paint-only.
+  if (selected) {
+    for (const p of underlayCorners(u)) {
+      const s = worldToScreen(cam, p);
+      ctx.fillStyle = HANDLE_FILL;
+      ctx.strokeStyle = UNDERLAY_SELECTED_STROKE;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.rect(s[0] - HANDLE_SIZE_PX / 2, s[1] - HANDLE_SIZE_PX / 2, HANDLE_SIZE_PX, HANDLE_SIZE_PX);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
 }
 
 function nearMultiple(offset: number, _major: number, minor: number): boolean {
