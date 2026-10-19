@@ -5,6 +5,23 @@ Frozen interchange contract between the 2D editor and the 3D viewer
 (types), `validate.ts` (rules), `migrate.ts` (evolution). Everything
 imports via the barrel `src/shared/schema/index.ts`.
 
+## Out-of-schema editor state (deliberate)
+
+Some editor-side state is intentionally NOT part of `FloorplanData`
+and never crosses the editor→viewer contract:
+
+- **Snap settings** (grid pitch + master switch) — editor preference,
+  persisted under `casaplaza.snap.settings.v1`.
+- **Measurement annotations** — persisted under their own key.
+- **Blueprint underlay** (issue #99, pkg 12.1) — a per-floor traced
+  image (`{ [floorId]: UnderlayState }`, see
+  `src/editor/model/underlay.ts`) persisted under
+  `casaplaza.underlay.v1`. Because it is absent from `FloorplanData`,
+  share links omit it BY CONSTRUCTION (the issue ratifies this as
+  "graceful omission acceptable") and the 3D viewer never sees it.
+  Evolving the underlay shape means evolving that editor-local key,
+  NOT the schema.
+
 ## Top level
 
 | Field | Type | Rules |
