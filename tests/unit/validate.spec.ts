@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData } from '../../src/shared/schema';
-import { migrate, signedArea, validateFloorplan } from '../../src/shared/schema';
+import { FLOOR_TEXTURES, migrate, signedArea, validateFloorplan } from '../../src/shared/schema';
 
 // Demo stays v1 on disk; migrate first (mirrors the loaders).
 function loadDemo(): FloorplanData {
@@ -75,5 +75,21 @@ describe('validator primitives', () => {
     const ccw = [[0, 0], [1, 0], [1, 1], [0, 1]];
     expect(signedArea(ccw as [number, number][])).toBeCloseTo(1);
     expect(signedArea([...ccw].reverse() as [number, number][])).toBeCloseTo(-1);
+  });
+});
+
+describe('floor textures (pkg 14.4, issue #119)', () => {
+  it('exposes the canonical four through the barrel', () => {
+    expect(FLOOR_TEXTURES).toEqual(['wood', 'tile', 'carpet', 'concrete']);
+  });
+
+  it('accepts every variant — and null — on any room', () => {
+    // The four kinds are the picker's whole vocabulary; null is "no
+    // material". All five must sail through the validator untouched.
+    for (const texture of [...FLOOR_TEXTURES, null]) {
+      const plan = loadDemo();
+      plan.floors[0].rooms[0]!.floorTexture = texture;
+      expect(validateFloorplan(plan)).toMatchObject({ ok: true });
+    }
   });
 });
