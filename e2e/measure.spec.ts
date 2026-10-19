@@ -66,6 +66,16 @@ async function dimsVisible(page: Page): Promise<boolean> {
   );
 }
 
+async function draft(page: Page): Promise<{ a: [number, number] } | null> {
+  return page.evaluate(() =>
+    (
+      window as unknown as {
+        __editorMeasureDraft: () => { a: [number, number] } | null;
+      }
+    ).__editorMeasureDraft(),
+  );
+}
+
 async function draw(page: Page): Promise<void> {
   const a = await aim(page, 0, -5);
   await page.mouse.click(a.x, a.y);
@@ -101,6 +111,29 @@ test('Escape cancels a pending anchor', async ({ page }) => {
   // The draft was cleared: the surviving annotation is B→C, not A→C.
   expect(ms[0].a).toEqual([1, -5]);
   expect(ms[0].b).toEqual([1, -2]);
+});
+
+test('pending anchor dies BEFORE the inspector panel closes (issue #117)', async ({
+  page,
+}) => {
+  // Arm an anchor, then open the panel with "I": the I path is not
+  // draw-gesture-guarded, so the anchor stays pending under an open,
+  // focused panel — the exact swallow scenario #117 fixes.
+  const a = await aim(page, 0, -5);
+  await page.mouse.click(a.x, a.y);
+  expect(await draft(page)).toEqual({ a: [0, -5] });
+  await page.keyboard.press('i');
+  const panel = page.getByTestId('inspector-panel');
+  await expect(panel).toBeVisible();
+
+  // First Escape kills the anchor only; the panel stays open.
+  await page.keyboard.press('Escape');
+  expect(await draft(page)).toBeNull();
+  await expect(panel).toBeVisible();
+
+  // Second Escape closes the panel: the original precedence restored.
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
 });
 
 test('"Clear measurements" wipes every annotation', async ({ page }) => {
