@@ -28,6 +28,8 @@ import {
   type HudHandles,
 } from './hud';
 import { OrbitRig } from './orbitMode';
+import { setMaxAnisotropy } from './materials';
+import { isHighQuality } from './quality';
 import { solveSpawn, SpawnFailureError } from './spawn';
 import {
   buildViewerScene,
@@ -105,6 +107,8 @@ export class ViewerApp {
   private hud!: HudHandles;
   private perf: PerfOverlay;
   private unbindToggle: (() => void) | null = null;
+  /** Quality tier resolved at boot (#87) — surfaces in __viewerStats. */
+  private readonly hiQuality: boolean;
 
   private phase: Phase = 'overview';
   private rig: CameraRig | null = null;
@@ -121,6 +125,12 @@ export class ViewerApp {
   private rafCancel: (() => void) | null = null;
   private disposed = false;
   private lastFrameTime = -1;
+  /**
+   * Rolling RAW frame-time samples (#87), most recent last, capped at
+   * 60 — feeds the medianFrameMs stats probe. Raw (uncapped) values:
+   * the 0.1 s simulation-clamp must not hide real render cost.
+   */
+  private readonly frameTimes: number[] = [];
   private readonly disposers: Array<() => void> = [];
 
   public constructor(opts: ControllerOpts) {
@@ -130,11 +140,21 @@ export class ViewerApp {
     this.scheduleTick = opts.scheduleTick ?? defaultSchedule;
     this.setTimeoutFn = opts.setTimeoutFn ?? window.setTimeout.bind(window);
     this.perf = new PerfOverlay(isPerfEnabled());
+    // Resolve the quality tier ONCE at construction (#87) — the URL
+    // param is boot-time state; sceneBuilder independently re-reads it
+    // per build, but the STATS probe reports this boot-time value.
+    this.hiQuality = isHighQuality();
   }
 
   /** Boot: renderer, HUD, initial adaptation, RAF loop, poll timer. */
   public start(): void {
     this.renderer = makeRenderer(this.canvas);
+    // Wire the renderer's real anisotropy ceiling into the texture
+    // cache (#87). Conservative baked-in 4 until this point; harmless
+    // no-op when the environment lacks a GL context.
+    if (this.renderer) {
+      setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
+    }
 
     this.hud = buildHud(this.pane);
     this.perf.mount(this.hud);
@@ -462,6 +482,10 @@ export class ViewerApp {
       if (this.lastFrameTime < 0) this.lastFrameTime = now;
       const dtMs = now - this.lastFrameTime;
       this.lastFrameTime = now;
+      // Frame-cost sample (#87): AFTER the timestamp bookkeeping, BEFORE
+      // the sim clamp — the probe measures render cadence, not physics.
+      this.frameTimes.push(dtMs);
+      if (this.frameTimes.length > 60) this.frameTimes.shift();
       const dt = Math.min(Math.max(dtMs, 0) / 1000, 0.1);
 
       this.rig?.update(dt);
@@ -548,6 +572,21 @@ export class ViewerApp {
       // Roof planes (pkg 8.1): triangles in the dedicated 'roof' slot —
       // the e2e parity figure for shed/gable presence (0 when absent).
       roofTriangleCount: this.countSlotTriangles('roof'),
+      // Quality tier (#87): 'high' unless ?quality=low opted out.
+      qualityLevel: this.hiQuality ? 'high' : 'low',
+      // Populated slots carrying a procedural MAP (#87): the high-tier
+      // texture probe — 0 on the low path (nothing uploads).
+      texturedSlotCount: this.countMappedSlots(),
+      // Median of the rolling frame-time window over the last 60
+      // rendered frames (#87): robust-ish central tendency for the
+      // low<high cost probe (median shrugs off GC spikes and
+      // compositor hiccups).
+      medianFrameMs: this.medianFrameMs(),
+      // Slot roughness probes (#87): glass must read GLOSSIER than
+      // matte walls on BOTH tiers (e2e visual-gloss proxy — reading
+      // live materials beats re-deriving constants in the spec).
+      glassRoughness: this.firstSlotRoughness('glass'),
+      wallRoughness: this.firstSlotRoughness('wall'),
     });
   }
 
@@ -612,6 +651,59 @@ export class ViewerApp {
       if ((obj as { isMesh?: boolean }).isMesh === true) n++;
     });
     return n;
+  }
+
+  /**
+   * Populated slots whose material carries a procedural map (#87): the
+   * high-tier texture probe. 0 on the low path — buildMaterial(true)
+   * is the only place maps attach.
+   */
+  private countMappedSlots(): number {
+    if (!this.sceneRoot) return 0;
+    let n = 0;
+    this.sceneRoot.scene.traverse((obj) => {
+      const mesh = obj as {
+        isMesh?: boolean;
+        material?: { map?: unknown } | { map?: unknown }[];
+      };
+      if (mesh.isMesh !== true) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      if (mats.some((m) => m && m.map)) n += 1;
+    });
+    return n;
+  }
+
+  /** Median of the rolling frame-time window (-1 before frames exist). */
+  private medianFrameMs(): number {
+    if (this.frameTimes.length === 0) return -1;
+    const sorted = [...this.frameTimes].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 === 1
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  /** Roughness of the first mesh in a slot (-1 when the slot is absent). */
+  private firstSlotRoughness(slot: string): number {
+    if (!this.sceneRoot) return -1;
+    let rough = -1;
+    this.sceneRoot.scene.traverse((obj) => {
+      const mesh = obj as {
+        isMesh?: boolean;
+        userData?: { slot?: string };
+        material?: { roughness?: number };
+      };
+      if (
+        rough < 0 &&
+        mesh.isMesh === true &&
+        mesh.userData?.slot === slot &&
+        mesh.material &&
+        typeof mesh.material.roughness === 'number'
+      ) {
+        rough = mesh.material.roughness;
+      }
+    });
+    return rough;
   }
 
   private liveCamera(): Camera | null {
