@@ -14,6 +14,11 @@ export interface EditorDomRefs {
   status: HTMLSpanElement;
   statusTotal: HTMLSpanElement;
   btnExport: HTMLButtonElement;
+  /* pkg 10.1 (issue #91): share/import/export-JSON trio beside Export. */
+  btnShare: HTMLButtonElement;
+  btnImport: HTMLButtonElement;
+  btnExportJson: HTMLButtonElement;
+  importFileInput: HTMLInputElement;
   btnHelp: HTMLButtonElement;
   btnSelect: HTMLButtonElement;
   btnRect: HTMLButtonElement;
@@ -123,6 +128,32 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     'Export — Download the plan as a PNG or JPEG image.',
   );
   btnExport.setAttribute('data-testid', 'btn-export');
+
+  // pkg 10.1 (issue #91): share-link + JSON transfer trio. Plain
+  // buttons beside Export — the mkBtn precedent keeps the accessible
+  // name purely textual (Tab-reachable, getByRole-friendly; hints in
+  // `title` only, never aria-label).
+  const btnShare = mkBtn('Share', 'editor-share');
+  btnShare.title = 'Copy a shareable link to this plan (works offline).';
+  btnShare.setAttribute('data-testid', 'btn-share');
+  const btnImport = mkBtn('Import', 'editor-import');
+  btnImport.title = 'Load a plan from an exported JSON file.';
+  btnImport.setAttribute('data-testid', 'btn-import');
+  const btnExportJson = mkBtn('Save JSON', 'editor-export-json');
+  btnExportJson.title = 'Download the plan as a JSON file.';
+  btnExportJson.setAttribute('data-testid', 'btn-export-json');
+
+  // Hidden file input backing Import: clicking the button forwards to
+  // it (mouseless flows activate the same button via Enter/Space, so
+  // the picker opens identically for keyboard users).
+  const importFileInput = document.createElement('input');
+  importFileInput.type = 'file';
+  importFileInput.accept = 'application/json,.json';
+  importFileInput.dataset.testid = 'import-file-input';
+  importFileInput.setAttribute('aria-hidden', 'true');
+  importFileInput.tabIndex = -1;
+  importFileInput.hidden = true;
+
   const btnHelp = mkBtn('? Help', 'editor-help', 'help');
   btnHelp.title = 'Keyboard shortcuts';
   btnHelp.setAttribute('aria-label', 'Keyboard shortcuts');
@@ -194,7 +225,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
     btnMeasure, sep,
-    btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
+    btnUndo, btnRedo, btnDelete, sep3, btnExport, btnShare, btnImport,
+    btnExportJson, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
     btnClearMeasure, sep6, btnSnap,
     sep7, btnPrevFloor, floorBadge, btnNextFloor, btnAddFloor,
@@ -387,12 +419,14 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   statusBar.append(status, statusTotal);
 
   canvasWrap.append(canvas, badge, msg);
-  pane.append(toolbar, palette, canvasWrap, statusBar);
+  // The hidden import input must live IN the document for .click() to
+  // summon the file picker; `hidden` keeps it out of layout + a11y tree.
+  pane.append(toolbar, palette, canvasWrap, statusBar, importFileInput);
   parent.appendChild(pane);
 
   return {
     toolbar, canvas, badge, msg, status, statusTotal,
-    btnExport, btnHelp,
+    btnExport, btnShare, btnImport, btnExportJson, importFileInput, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
     btnDimensions, btnSnap, snapPopover,
     btnAddMeasure: btnMeasure, btnClearMeasure,
