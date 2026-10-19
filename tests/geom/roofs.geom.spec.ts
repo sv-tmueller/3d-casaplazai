@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { compilePlan } from '../src/geom';
-import type { FloorplanData } from '../src/shared/schema';
+import { compilePlan } from '../../src/geom';
+import type { FloorplanData } from '../../src/shared/schema';
 
 const base = {
   schemaVersion: 2,
