@@ -43,6 +43,8 @@ import {
   stairHoleRect,
   stairWorldRect,
 } from './stairs';
+import { buildRoomRoofs, hasAnyRoof } from './roofs';
+import type { RoofSolid } from './types';
 
 /** Rotate a vector by deg degrees CCW. */
 function rot(deg: number, x: number, y: number): [number, number] {
@@ -65,6 +67,10 @@ export function countTriangles(scene: CompiledScene): number {
   for (const s of scene.stairs ?? []) {
     n += s.mesh.indices.length / 3;
   }
+  // Roof planes (pkg 8.1) likewise: lean-free plans contribute nothing.
+  for (const r of scene.roofs ?? []) {
+    n += r.mesh.indices.length / 3;
+  }
   return n;
 }
 
@@ -78,6 +84,9 @@ export function countVertices(scene: CompiledScene): number {
   }
   for (const s of scene.stairs ?? []) {
     n += s.mesh.positions.length / 3;
+  }
+  for (const r of scene.roofs ?? []) {
+    n += r.mesh.positions.length / 3;
   }
   return n;
 }
@@ -385,6 +394,30 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
     }
   }
 
+  // ---- Roof solids (pkg 8.1, issue #83) -------------------------------
+  // STRICTLY GUARDED by hasAnyRoof (mirrors the stairs length>0 guard
+  // at the top of this function): lean-free plans (the apartment demo
+  // and every pre-8.1 fixture) compile BYTE-IDENTICALLY to the
+  // pre-roof pipeline — the apartment goldens police this.
+  // Roofs attach to the TOP floor's rooms only (validator-enforced);
+  // buildRoomRoofs receives the floor's elevation so every emitted z
+  // is already world z.
+  const roofSolids: RoofSolid[] = [];
+  if (hasAnyRoof(plan)) {
+    const topFloor = plan.floors[plan.floors.length - 1]!;
+    for (const room of topFloor.rooms) {
+      const buffers = buildRoomRoofs(room, plan.wallHeight, topFloor.elevation);
+      if (buffers.length > 0) {
+        roofSolids.push({
+          roomId: room.id,
+          // Local mergeBuffers (below): same rebasing merge the stair
+          // step boxes use.
+          mesh: mergeBuffers(buffers),
+        });
+      }
+    }
+  }
+
   return {
     rooms,
     // Walls first (unchanged contract), then furniture boxes (issue #18).
@@ -401,6 +434,7 @@ export function compilePlan(plan: FloorplanData): CompiledScene {
       })),
     ),
     stairs: stairSolids,
+    roofs: roofSolids,
   };
 }
 

@@ -186,15 +186,22 @@ function checkRoomRoofs(
     );
   }
 
-  /** Effective plate height of segment si (wallsOverride "min wins" is policed by the caller). */
+  /**
+   * Effective plate height of segment si. Min-wins across duplicate
+   * wallsOverride rows (per #69): the LOWER plate governs, so a rogue
+   * taller duplicate can never mask one that dips into walkable space.
+   */
   const plateOf = (si: number): number => {
     const ov = Array.isArray(room.wallsOverride)
       ? (room.wallsOverride as Array<Record<string, unknown>>)
       : [];
+    let plate: number | undefined;
     for (const w of ov) {
-      if (w?.segmentIndex === si && isNum(w.height)) return w.height;
+      if (w?.segmentIndex === si && isNum(w.height)) {
+        plate = plate === undefined ? w.height : Math.min(plate, w.height);
+      }
     }
-    return wallHeight;
+    return plate ?? wallHeight;
   };
 
   const nSeg = poly.length;
@@ -288,10 +295,17 @@ function checkRoomRoofs(
     );
     return;
   }
-  // Tangential coincidence: the pair's start points must align along the
-  // ridge axis (a staggered pair would twist the ridge).
+  // Tangential coincidence: the pair's spans must align along the ridge
+  // axis (a staggered pair would twist the ridge). NOTE the crossed
+  // pairing: an opposing segment traverses the ridge axis in the
+  // OPPOSITE direction, so A's START shares the ridge station with B's
+  // END (and vice versa) — pairing start↔start would reject every
+  // legitimate rectangle gable.
   const alongRidge = (p: Vec2): number => segA.ux * p[0] + segA.uy * p[1];
-  if (Math.abs(alongRidge(segA.start) - alongRidge(segB.start)) > ROOF_PAIR_TOL_M) {
+  if (
+    Math.abs(alongRidge(segA.start) - alongRidge(segB.end)) > ROOF_PAIR_TOL_M ||
+    Math.abs(alongRidge(segA.end) - alongRidge(segB.start)) > ROOF_PAIR_TOL_M
+  ) {
     c.add(
       `${rp}.roofs`,
       'roof-invalid-gable',

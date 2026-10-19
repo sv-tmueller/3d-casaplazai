@@ -32,3 +32,32 @@ export function packRingFan(
   }
   return { positions, indices: new Uint32Array(flat) };
 }
+
+/**
+ * Concatenate mesh buffers into one, rebasing indices (pkg 8.1, issue
+ * #83 — roof planes are emitted as small per-face buffers and merged
+ * per room, mirroring the stair step-box merge in compile.ts).
+ */
+export function mergeMeshBuffers(buffers: MeshBuffer[]): MeshBuffer {
+  let posTotal = 0;
+  let idxTotal = 0;
+  for (const b of buffers) {
+    posTotal += b.positions.length;
+    idxTotal += b.indices.length;
+  }
+  const positions = new Float32Array(posTotal);
+  const indices = new Uint32Array(idxTotal);
+  let posCur = 0;
+  let idxCur = 0;
+  let vertBase = 0;
+  for (const b of buffers) {
+    positions.set(b.positions, posCur);
+    for (let i = 0; i < b.indices.length; i += 1) {
+      indices[idxCur + i] = b.indices[i]! + vertBase;
+    }
+    posCur += b.positions.length;
+    idxCur += b.indices.length;
+    vertBase += b.positions.length / 3;
+  }
+  return { positions, indices };
+}
