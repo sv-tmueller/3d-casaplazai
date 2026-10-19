@@ -55,6 +55,12 @@ export function paintScene(
   underlay: UnderlayState | null = null,
   underlayImg: HTMLImageElement | null = null,
   underlaySelected = false,
+  // pkg 13.2 (issue #110): marquee band (screen px, already engaged) +
+  // multi-select member ids (highlight stroke). Optional trailing pair
+  // on the ghost/underlaySelected precedent — callers predating #110
+  // paint unchanged.
+  marquee: { start: Pt; cur: Pt } | null = null,
+  multiSelectedIds: string[] = [],
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
@@ -76,6 +82,11 @@ export function paintScene(
       hoverRoomId === room.id,
       hoverHandle,
     );
+    // pkg 13.2 (issue #110): multi-select members wear a violet stroke
+    // (distinct from the amber single-selection affordance).
+    if (multiSelectedIds.includes(room.id)) {
+      strokeRoomOutline(ctx, cam, room, MULTI_MEMBER_STROKE);
+    }
   }
 
   // pkg 3 (issue #4): openings belong to rooms; draw AFTER room strokes so
@@ -99,6 +110,10 @@ export function paintScene(
 
   for (const f of flatFurniture(plan)) {
     drawStamp(ctx, cam, f, phase.tag === 'idle' && false);
+    // pkg 13.2 (issue #110): multi-select member highlight.
+    if (multiSelectedIds.includes(f.id)) {
+      strokeFootprintOutline(ctx, cam, f, MULTI_MEMBER_STROKE);
+    }
   }
 
   if (segHighlight) drawSegHighlight(ctx, cam, plan, segHighlight);
@@ -107,6 +122,75 @@ export function paintScene(
   drawLeanBadges(ctx, cam, plan);
   if (ghost) drawGhost(ctx, cam, ghost);
   drawInProgress(ctx, cam, phase);
+  // pkg 13.2 (issue #110): the marquee band paints LAST — the dashed
+  // guide must read over every shape it sweeps.
+  if (marquee) drawMarqueeBand(ctx, marquee.start, marquee.cur);
+}
+
+/** Issue #110: multi-select member outline color (vs amber selection). */
+const MULTI_MEMBER_STROKE = '#7c3aed';
+
+/** Stroke a room polygon outline in the given color (screen space). */
+function strokeRoomOutline(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  room: Room,
+  color: string,
+): void {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  room.polygon.forEach((p, i) => {
+    const s = worldToScreen(cam, p);
+    if (i === 0) ctx.moveTo(s[0], s[1]);
+    else ctx.lineTo(s[0], s[1]);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Stroke a furniture stamp's rotated footprint outline (screen space). */
+function strokeFootprintOutline(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  f: FurnitureItem,
+  color: string,
+): void {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  itemCorners(f).forEach((p, i) => {
+    const s = worldToScreen(cam, p);
+    if (i === 0) ctx.moveTo(s[0], s[1]);
+    else ctx.lineTo(s[0], s[1]);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * pkg 13.2 (issue #110): dashed marquee band, screen px (both corner
+ * orders normalized). Painted last so it reads over swept shapes.
+ */
+function drawMarqueeBand(
+  ctx: CanvasRenderingContext2D,
+  start: Pt,
+  cur: Pt,
+): void {
+  const x = Math.min(start[0], cur[0]);
+  const y = Math.min(start[1], cur[1]);
+  const w = Math.abs(cur[0] - start[0]);
+  const h = Math.abs(cur[1] - start[1]);
+  ctx.save();
+  ctx.strokeStyle = MULTI_MEMBER_STROKE;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
 }
 
 function isSelected(phase: InteractionPhase, room: Room): boolean {

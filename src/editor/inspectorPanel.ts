@@ -44,7 +44,11 @@ export type SelectionDescriptor =
   | { kind: 'wall'; room: Room; segIndex: number }
   | { kind: 'opening'; opening: Opening; room: Room }
   | { kind: 'room'; room: Room }
-  | { kind: 'furniture'; item: FurnitureItem };
+  | { kind: 'furniture'; item: FurnitureItem }
+  /* pkg 13.2 (issue #110): marquee multi-select aggregate. Counts are
+   * per-kind totals of the glue-local member set (pure renderer — the
+   * panel never inspects glue state; glue builds the descriptor). */
+  | { kind: 'multi'; counts: Record<string, number> };
 
 /** Result of a dispatched command (subset of DispatchResult). */
 export type PanelDispatch = (
@@ -247,6 +251,9 @@ export function mountInspectorPanel(
         renderOpening(body, desc.opening, desc.room, dispatch, flash);
       } else if (desc.kind === 'room') {
         renderRoom(body, desc.room);
+      } else if (desc.kind === 'multi') {
+        // pkg 13.2 (issue #110): aggregate counts for the marquee set.
+        renderMulti(body, desc.counts);
       } else {
         renderFurniture(body, desc.item, dispatch, flash);
       }
@@ -316,6 +323,27 @@ function renderNone(body: HTMLElement, plan: FloorplanData): void {
     0,
   );
   kvRow(dl, 'Livable area', `${total.toFixed(1)} m\u00B2`);
+  body.appendChild(dl);
+}
+
+/* --------------- pkg 13.2 (issue #110): multi-select aggregate -------------- */
+
+function renderMulti(body: HTMLElement, counts: Record<string, number>): void {
+  sectionTitle(body, 'Multiple selected');
+  const dl = document.createElement('dl');
+  dl.className = 'inspector-summary';
+  const kinds: Array<[string, string]> = [
+    ['rooms', 'Rooms'],
+    ['openings', 'Openings'],
+    ['furniture', 'Furniture'],
+  ];
+  let total = 0;
+  for (const [key, label] of kinds) {
+    const n = counts[key] ?? 0;
+    kvRow(dl, label, String(n));
+    total += n;
+  }
+  kvRow(dl, 'Total', String(total));
   body.appendChild(dl);
 }
 
