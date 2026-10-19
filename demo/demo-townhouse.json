@@ -166,7 +166,11 @@
             [5.2, 3.8],
             [0.0, 3.8]
           ],
-          "floorTexture": "carpet"
+          "floorTexture": "carpet",
+          "roofs": [
+            { "segmentIndex": 0, "leanDeg": 30 },
+            { "segmentIndex": 2, "leanDeg": 30 }
+          ]
         },
         {
           "id": "room-office",
