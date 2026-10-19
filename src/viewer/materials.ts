@@ -1,24 +1,36 @@
 /**
  * Materials (issue #6): procedural canvas texture factory keyed by the
- * schema's floorTexture enum + wall/ceiling paints. Five generator
+ * schema's floorTexture enum + wall/ceiling paints. Six generator
  * kinds total, each drawn ONCE per session into a cached 512² canvas —
  * RepeatWrapping tiles it physically (UV repeat = meters / TILE_METERS),
  * SRGBColorSpace, mipmaps on. No downloads, no asset files.
+ *
+ * Issue #87 quality knob: buildMaterial(slot, hiQuality) gates the
+ * texture upload — LOW renders color-only materials (keeping the same
+ * roughness/metalness budget so gloss differentiation survives the
+ * fast path), HIGH attaches the procedural map. Anisotropy is a
+ * session-wide setter over the shared texture cache.
  */
 
 import {
   CanvasTexture,
   Color,
+  LinearFilter,
   MeshStandardMaterial,
-  NearestFilter,
   RepeatWrapping,
   SRGBColorSpace,
   type Texture,
 } from 'three';
 import { TEXTURE_SIZE, TILE_METERS } from './types';
 
-/** Kinds the factory supports (four floor enums + wall). */
-export type TextureKind = 'wood' | 'tile' | 'carpet' | 'concrete' | 'wall';
+/** Kinds the factory supports (four floor enums + wall + roof shingle). */
+export type TextureKind =
+  | 'wood'
+  | 'tile'
+  | 'carpet'
+  | 'concrete'
+  | 'wall'
+  | 'roofShingle';
 
 /** Cache: one canvas allocation per kind per session. */
 const canvasCache = new Map<TextureKind, HTMLCanvasElement>();
@@ -142,6 +154,84 @@ function drawWall(ctx: CanvasRenderingContext2D, rng: () => number): void {
   }
 }
 
+/**
+ * Draw asphalt/clay shingles (issue #87): horizontal COURSES of rounded
+ * tabs with a per-row half-tab STAGGER (brick bond) over a terracotta
+ * luminance ramp. Courses wrap seamlessly horizontally (stagger offsets
+ * are multiples of the tab width) and vertically (row height divides
+ * 512), so RepeatWrapping shows no seams.
+ */
+function drawRoofShingle(
+  ctx: CanvasRenderingContext2D,
+  rng: () => number,
+): void {
+  // Terracotta base slightly deeper than the flat #b0623f so painted
+  // tabs can rise ABOVE it toward lighter clay tones.
+  ctx.fillStyle = '#8f4a2e';
+  ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+
+  const rows = 8;
+  const rowH = TEXTURE_SIZE / rows;
+  const tabs = 8;
+  const tabW = TEXTURE_SIZE / tabs;
+
+  for (let r = 0; r < rows; r += 1) {
+    // Brick-bond stagger: shift alternate rows by HALF a tab — a
+    // multiple of tabW, so the pattern wraps horizontally.
+    const stagger = (r % 2) * (tabW / 2);
+    // Per-course terracotta ramp: subtle luminance wave, never pure
+    // random, so adjacent courses stay in-family.
+    const ramp = 0.88 + 0.24 * ((r * 7919) % 97) / 97;
+    for (let t = 0; t < tabs; t += 1) {
+      const tx = t * tabW + stagger;
+      // Wrap the overshooting half-tab back to x=0 (RepeatWrapping
+      // equivalence: the canvas must be seamless on its own).
+      const drawTab = (x: number): void => {
+        const inset = 2 + rng() * 2.5;
+        const w = tabW - inset * 2;
+        const h = rowH - 3 - rng() * 2;
+        // Clay tone: hue-stable ramp × per-tab jitter (kept small so
+        // the roof reads as one material, not confetti).
+        const jit = 0.94 + rng() * 0.12;
+        const cr = Math.round(196 * ramp * jit);
+        const cg = Math.round(98 * ramp * jit);
+        const cb = Math.round(63 * ramp * jit);
+        ctx.fillStyle = `rgb(${cr}, ${cg}, ${cb})`;
+        // Rounded-bottom tab (arc) clipped to its cell.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x + inset, r * rowH, w, rowH);
+        ctx.clip();
+        ctx.beginPath();
+        ctx.moveTo(x + inset, r * rowH);
+        ctx.lineTo(x + inset, r * rowH + h);
+        ctx.quadraticCurveTo(
+          x + tabW / 2,
+          r * rowH + h + 8,
+          x + inset + w,
+          r * rowH + h,
+        );
+        ctx.lineTo(x + inset + w, r * rowH);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      };
+      drawTab(tx);
+      if (tx + tabW > TEXTURE_SIZE) drawTab(tx - TEXTURE_SIZE);
+    }
+    // Course shadow gap: thin dark seam under each row sells depth.
+    ctx.fillStyle = 'rgba(52, 24, 14, 0.45)';
+    ctx.fillRect(0, r * rowH, TEXTURE_SIZE, 2);
+  }
+
+  // Sparse granule flecks (weathering) — few enough to stay subtle.
+  for (let sp = 0; sp < 900; sp += 1) {
+    const lum = 120 + Math.round(rng() * 110);
+    ctx.fillStyle = `rgba(${lum}, ${Math.round(lum * 0.55)}, ${Math.round(lum * 0.4)}, ${(rng() * 0.28).toFixed(2)})`;
+    ctx.fillRect(rng() * TEXTURE_SIZE, rng() * TEXTURE_SIZE, 1.6, 1.6);
+  }
+}
+
 const DRAWERS: Record<
   TextureKind,
   (ctx: CanvasRenderingContext2D, rng: () => number) => void
@@ -151,6 +241,7 @@ const DRAWERS: Record<
   carpet: drawCarpet,
   concrete: drawConcrete,
   wall: drawWall,
+  roofShingle: drawRoofShingle,
 };
 
 /** Base colors backing each kind when textures can't upload (fallback). */
@@ -160,6 +251,7 @@ export const FALLBACK_COLORS: Record<TextureKind, string> = {
   carpet: '#6b7f8f',
   concrete: '#9aa0a6',
   wall: '#e8e2d8',
+  roofShingle: '#b0623f',
 };
 
 /** Render (or fetch from cache) the 512² canvas for a texture kind. */
@@ -205,6 +297,21 @@ export function getTextureCanvas(kind: TextureKind): HTMLCanvasElement {
   return canvas;
 }
 
+/** Session-wide anisotropy sample count; conservative 4 until the app wires the renderer's real capability. */
+let maxAniso = 4;
+
+/**
+ * Raise the anisotropy of every cached texture (call once after renderer
+ * init with renderer.capabilities.getMaxAnisotropy()). Applies to
+ * textures created LATER too — the value lives in this module's closure.
+ */
+export function setMaxAnisotropy(n: number): void {
+  const sane = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+  if (sane === maxAniso) return;
+  maxAniso = sane;
+  for (const tex of textureCache.values()) tex.anisotropy = sane;
+}
+
 /** Upload (or fetch) the THREE.CanvasTexture wrapping a cached canvas. */
 export function getTexture(kind: TextureKind): Texture {
   const cached = textureCache.get(kind);
@@ -214,7 +321,12 @@ export function getTexture(kind: TextureKind): Texture {
   tex.wrapT = RepeatWrapping;
   tex.colorSpace = SRGBColorSpace;
   tex.generateMipmaps = true;
-  tex.magFilter = NearestFilter;
+  // Linear magnification (#87): NearestFilter fought the mipmapped
+  // minification chain (aliasing shimmer at grazing angles). Linear
+  // complements the mipmap pyramid; only reachable on the HIGH path
+  // since LOW materials carry no map at all.
+  tex.magFilter = LinearFilter;
+  tex.anisotropy = maxAniso;
   textureCache.set(kind, tex);
   return tex;
 }
@@ -230,25 +342,71 @@ export function repeatsFor(meters: number): number {
   return Math.max(1, meters / TILE_METERS);
 }
 
-/** Build the diffuse material for a bucket slot. */
-export function buildMaterial(
-  slot:
-    | 'wall'
-    | 'ceiling'
-    | 'roof'
-    | TextureKind
-    | 'glass'
-    | 'windowFrame'
-    | 'furn-wood'
-    | 'furn-fabric'
-    | 'furn-porcelain'
-    | 'furn-laminate',
-): MeshStandardMaterial {
+/** Union of every bucket slot buildMaterial accepts (mirrors the adapter's MaterialSlotId usage). 'roofShingle' is a TEXTURE kind only — never a bucket slot. */
+export type MaterialSlot =
+  | 'wall'
+  | 'ceiling'
+  | 'roof'
+  | Exclude<TextureKind, 'roofShingle'>
+  | 'glass'
+  | 'windowFrame'
+  | 'furn-wood'
+  | 'furn-fabric'
+  | 'furn-porcelain'
+  | 'furn-laminate';
+
+/**
+ * Flat roughness per slot — the shipped budget (glass 0.15 ≪ wall
+ * 0.92) kept IDENTICAL on both quality tiers so gloss differentiation
+ * survives the LOW fast path (#87 requirement).
+ */
+const FLAT_ROUGHNESS: Record<MaterialSlot, number> = {
+  wall: 0.92,
+  ceiling: 1,
+  roof: 0.85,
+  glass: 0.15,
+  windowFrame: 0.6,
+  'furn-wood': 0.72,
+  'furn-fabric': 0.95,
+  'furn-porcelain': 0.25,
+  'furn-laminate': 0.55,
+  wood: 0.72,
+  tile: 0.72,
+  carpet: 1,
+  concrete: 0.72,
+};
+
+/** Flat colors for the LOW (untextured) fast path, per slot. */
+const SLOT_FLAT_COLORS: Record<MaterialSlot, string> = {
+  wall: '#e8e2d8',
+  ceiling: '#fafafa',
+  roof: '#b0623f',
+  glass: '#aac8dd',
+  windowFrame: '#3a3f44',
+  'furn-wood': '#a06a3c',
+  'furn-fabric': '#7a8ba0',
+  'furn-porcelain': '#f4f4f0',
+  'furn-laminate': '#c8b89a',
+  wood: '#a06a3c',
+  tile: '#ccd3d8',
+  carpet: '#6b7f8f',
+  concrete: '#9aa0a6',
+};
+
+/**
+ * Build the diffuse material for a bucket slot. `hiQuality` (issue #87)
+ * gates the procedural texture pass: HIGH attaches the cached canvas map
+ * (plus slight roughness retune); LOW renders a flat color while
+ * KEEPING the roughness/metalness budget — the gloss differentiation
+ * (glass 0.15 ≪ wall 0.92) survives the fast path, only the surface
+ * variation drops off.
+ */
+export function buildMaterial(slot: MaterialSlot, hiQuality = true): MeshStandardMaterial {
   if (slot === 'glass') {
     // Translucent pane: pale blue, cheap transparency, no depth write
     // (avoids sorting artifacts against wall rims). Must NOT cast
     // shadows — sceneBuilder only enables castShadow for 'wall'.
-    const mat = new MeshStandardMaterial({
+    return new MeshStandardMaterial({
       color: new Color('#aac8dd'),
       transparent: true,
       opacity: 0.25,
@@ -256,7 +414,6 @@ export function buildMaterial(
       roughness: 0.15,
       metalness: 0,
     });
-    return mat;
   }
   if (slot === 'windowFrame') {
     return new MeshStandardMaterial({
@@ -265,11 +422,29 @@ export function buildMaterial(
       metalness: 0.1,
     });
   }
+  if (slot === 'ceiling') {
+    // Ceiling stays flat white at BOTH tiers — no texture exists for
+    // it and none is wanted (overhead uniformity reads cleaner).
+    return new MeshStandardMaterial({
+      color: new Color('#fafafa'),
+      roughness: 1,
+      metalness: 0,
+    });
+  }
+  if (!hiQuality) {
+    // LOW fast path: flat color, same roughness family. No texture
+    // upload happens for ANY slot, keeping the tier measurably cheap.
+    return new MeshStandardMaterial({
+      color: new Color(SLOT_FLAT_COLORS[slot]),
+      roughness: FLAT_ROUGHNESS[slot],
+      metalness: 0,
+    });
+  }
   if (slot === 'furn-wood') {
     // Reuse the cached wood texture — free realism win.
     return new MeshStandardMaterial({
       map: getTexture('wood'),
-      roughness: 0.7,
+      roughness: 0.72,
       metalness: 0,
     });
   }
@@ -295,34 +470,27 @@ export function buildMaterial(
     });
   }
   if (slot === 'wall') {
-    const mat = new MeshStandardMaterial({
+    return new MeshStandardMaterial({
       map: getTexture('wall'),
       roughness: 0.92,
       metalness: 0,
     });
-    return mat;
-  }
-  if (slot === 'ceiling') {
-    return new MeshStandardMaterial({
-      color: new Color('#fafafa'),
-      roughness: 1,
-      metalness: 0,
-    });
   }
   if (slot === 'roof') {
-    // Exterior clay-tile plane (pkg 8.1): terracotta, matte, textured
-    // with the concrete drawer's mineral speckle — visually distinct
-    // from interior plaster ('wall') so painting walls never touches
-    // roof planes (decoupled repaint, sub-plan justification).
+    // Exterior shingle plane (pkg 8.1 + #87): now textured with the
+    // DEDICATED roofShingle drawer (courses + staggered tabs +
+    // terracotta ramp) instead of borrowing concrete's mineral speckle.
+    // Still decoupled from interior plaster so painting walls never
+    // touches roof planes.
     return new MeshStandardMaterial({
-      map: getTexture('concrete'),
-      color: new Color('#b0623f'),
+      map: getTexture('roofShingle'),
+      color: new Color('#ffffff'),
       roughness: 0.85,
       metalness: 0,
     });
   }
   // Remaining slots are the floor TextureKinds only (glass/windowFrame/
-  // furn-* arms all returned above); narrow exhaustively.
+  // furn-*/ceiling arms all returned above); narrow exhaustively.
   const kind: TextureKind =
     slot === 'wood' || slot === 'tile' || slot === 'carpet' || slot === 'concrete'
       ? slot

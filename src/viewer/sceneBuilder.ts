@@ -31,6 +31,7 @@ import {
 } from 'three';
 
 import { buildMaterial } from './materials';
+import { isHighQuality } from './quality';
 import type { AdaptedScene } from './types';
 
 /** Shadow map resolution, squared texels. */
@@ -183,12 +184,17 @@ export function buildViewerScene(adapted: AdaptedScene): BuiltScene {
 
   const meshes: Mesh[] = [];
 
+  // Quality knob (#87): read ONCE per build — every bucket shares the
+  // same tier so a scene never mixes textured and flattened slots.
+  const hiQuality = isHighQuality();
+
   for (const bucket of adapted.buckets) {
     const geo = bucketGeometry(bucket.positions, bucket.indices);
     const mat = buildMaterial(
       bucket.slot === 'wall' || bucket.slot === 'ceiling'
         ? bucket.slot
         : (bucket.slot as Parameters<typeof buildMaterial>[0]),
+      hiQuality,
     );
 
     // Walls are seen from both sides (outer rim + inner face) and
