@@ -3,9 +3,15 @@
  * every state change. Lives here (not in controller.ts) so the gesture
  * math stays unit-testable without a real canvas/browser.
  */
-import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
-import { flatFurniture, flatOpenings, flatRooms, migrate, validateFloorplan } from '../shared/schema';
-import { AutosaveManager } from './autosave';
+import type { FloorplanData, FurnitureItem, Room } from "../shared/schema";
+import {
+  flatFurniture,
+  flatOpenings,
+  flatRooms,
+  migrate,
+  validateFloorplan,
+} from "../shared/schema";
+import { AutosaveManager } from "./autosave";
 import {
   attemptDrop,
   classifyCorner,
@@ -27,8 +33,8 @@ import {
   type Camera,
   type GhostPreview,
   type InteractionPhase,
-} from './controller';
-import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from './model/constants';
+} from "./controller";
+import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from "./model/constants";
 import {
   loadSnapSettings,
   parsePitch,
@@ -36,7 +42,7 @@ import {
   safeLocalStorage,
   saveSnapSettings,
   type SnapSettings,
-} from './model/settings';
+} from "./model/settings";
 import {
   clampTForDrag,
   nearestSegment,
@@ -66,8 +72,15 @@ import {
   UNDERLAY_ROTATE_STEP_DEG,
   type UnderlayState,
 } from './model/underlay';
+import {
+  mountInspectorPanel,
+  sameSegmentAddress,
+  type InspectorPanel,
+  type SelectionDescriptor,
+  type SegmentAddress,
+} from './inspectorPanel';
 import { flashMessage, type EditorDomRefs } from './ui';
-import { paintScene } from './render';
+import { paintScene, paintSelectedSegmentOverlay } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
@@ -84,7 +97,7 @@ import {
   makeMeasureId,
   saveMeasurements,
   type Measurement,
-} from './model/measure';
+} from "./model/measure";
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -102,7 +115,7 @@ interface OpeningDragCandidate {
   id: string;
   roomId: string;
   segIndex: number;
-  kind: 'door' | 'window';
+  kind: "door" | "window";
   width: number;
   sillHeight: number;
   headHeight: number;
@@ -130,7 +143,7 @@ export function openingCommitNotice(
   rowsBefore: number,
   rowsAfter: number,
 ): string | null {
-  return rowsAfter - rowsBefore === 1 ? 'Opening pierces only this wall' : null;
+  return rowsAfter - rowsBefore === 1 ? "Opening pierces only this wall" : null;
 }
 
 /* -------------------- pkg 12.1 helpers (issue #99) ------------------------ */
@@ -199,7 +212,11 @@ function planBounds(plan: FloorplanData): Bounds | null {
  * centre. Missing or zero-extent geometry yields the neutral boot camera
  * (no division by zero).
  */
-export function computeFitCamera(plan: FloorplanData, w: number, h: number): Camera {
+export function computeFitCamera(
+  plan: FloorplanData,
+  w: number,
+  h: number,
+): Camera {
   const b = planBounds(plan);
   if (b === null || !(w > 0) || !(h > 0)) return { ...NEUTRAL_CAMERA };
   const bw = b.maxX - b.minX;
@@ -208,7 +225,7 @@ export function computeFitCamera(plan: FloorplanData, w: number, h: number): Cam
   const scale = clampScale(Math.min(w / bw, h / bh) * (1 - FIT_MARGIN));
   const cx = (b.minX + b.maxX) / 2;
   const cy = (b.minY + b.maxY) / 2;
-  return { originX: cx - (w / 2) / scale, originY: cy + (h / 2) / scale, scale };
+  return { originX: cx - w / 2 / scale, originY: cy + h / 2 / scale, scale };
 }
 
 /**
@@ -216,10 +233,19 @@ export function computeFitCamera(plan: FloorplanData, w: number, h: number): Cam
  * put, so the buttons read as a viewport zoom rather than a pan. Clamped
  * to the shared MIN/MAX zoom scales.
  */
-export function zoomAboutCenter(cam: Camera, factor: number, w: number, h: number): Camera {
+export function zoomAboutCenter(
+  cam: Camera,
+  factor: number,
+  w: number,
+  h: number,
+): Camera {
   const scale = clampScale(cam.scale * factor);
   const center = screenToWorld(cam, [w / 2, h / 2]);
-  return { originX: center[0] - (w / 2) / scale, originY: center[1] + (h / 2) / scale, scale };
+  return {
+    originX: center[0] - w / 2 / scale,
+    originY: center[1] + h / 2 / scale,
+    scale,
+  };
 }
 
 const ZOOM_STEP = 1.1;
@@ -237,15 +263,15 @@ export function initEditorInteraction(
   autosave: AutosaveManager,
 ): void {
   const canvas = refs.canvas;
-  const ctx = canvas.getContext('2d'); // null in stub/happy-dom environments
+  const ctx = canvas.getContext("2d"); // null in stub/happy-dom environments
   const cam: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
-  let tool: AnyToolMode = 'select';
-  let phase: InteractionPhase = { tag: 'idle' };
+  let tool: AnyToolMode = "select";
+  let phase: InteractionPhase = { tag: "idle" };
   let hoverRoomId: string | null = null;
   /** Issue #53: index of the resize handle under the cursor, if any. */
   let hoverHandle: number | null = null;
   // pkg 3 (issue #4):
-  let stampType: string = 'bed';
+  let stampType: string = "bed";
   let ghost: GhostPreview | null = null;
   let hoverSeg: { roomId: string; segIndex: number } | null = null;
   let draggingFurnitureId: string | null = null;
@@ -276,6 +302,15 @@ export function initEditorInteraction(
     measurements = []; // no-storage stub environments
   }
   let measureDraft: { a: Pt } | null = null;
+  // Pkg 12.3 (issue #101): UI-LOCAL wall-segment selection. Walls are
+  // NOT entities — a segment is addressed {roomId, segmentIndex} and
+  // lives here only (no store state, no schema churn). Populated by the
+  // hover-segment path (door/window tools) and by proximity clicks on a
+  // selected room; cleared whenever the selection moves elsewhere.
+  let selectedSegment: SegmentAddress | null = null;
+  // The inspector panel (pure renderer — mounted below, rendered on
+  // every store notify + segment change).
+  let inspector: InspectorPanel | null = null;
 
   /* ---------- pkg 12.1 (issue #99): blueprint underlay ---------- */
 
@@ -403,6 +438,19 @@ export function initEditorInteraction(
       underlayImg,
       underlaySelected && underlayInteractable(activeUnderlay()),
     );
+    // Pkg 12.3 (issue #101, fix round): the WALL case paints WHICH
+    // segment the inspector is addressing (yellow, same readout path as
+    // the hoverSeg highlight) — the near-wall click upgrade is otherwise
+    // invisible on canvas. Shown only when the panel can actually be
+    // seen (open) so the select-tool idle canvas stays unpolluted.
+    if (
+      inspector !== null &&
+      inspector.isOpen() &&
+      selectedSegment &&
+      selectedSegment.roomId === store.getState().selectedId
+    ) {
+      paintSelectedSegmentOverlay(ctx, cam, view, selectedSegment);
+    }
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
     paintMeasurementBadges(ctx, cam, view, dimensionsVisible);
@@ -412,16 +460,15 @@ export function initEditorInteraction(
     // painter below keeps whole-plan scope.
     const activeFloorIdx = store.getState().activeFloorIdx;
     paintMeasureAnnotations(
-      ctx, cam,
+      ctx,
+      cam,
       measurements.filter((m) => (m.floorIdx ?? 0) === activeFloorIdx),
       dimensionsVisible,
     );
     // pkg 2 (issue #67): live angle readouts during gestures.
     // Deliberately ABSENT from the export path below — these are
     // gesture-live affordances, not plan content.
-    paintAngleReadouts(
-      ctx, cam, view, phase, hoverSeg, dimensionsVisible,
-    );
+    paintAngleReadouts(ctx, cam, view, phase, hoverSeg, dimensionsVisible);
   }
 
   function snapToleranceWorld(): number {
@@ -450,11 +497,7 @@ export function initEditorInteraction(
       snapToleranceWorld(),
       excludeIds,
     );
-    return resolveSnap(
-      worldPt,
-      geo.snapped ? geo.point : null,
-      snapSettings,
-    );
+    return resolveSnap(worldPt, geo.snapped ? geo.point : null, snapSettings);
   }
 
   /* ---------- pointer helpers ---------- */
@@ -472,13 +515,18 @@ export function initEditorInteraction(
     // pkg 7.2: counts + total describe the ACTIVE floor (the storey
     // being edited); the floor indicator badge carries the floor name.
     const view = activeFloorPlan(st);
-    const parts: string[] = [`rooms: ${flatRooms(view).length}`, `tool: ${tool}`];
-    if (flatOpenings(view).length > 0) parts.push(`openings: ${flatOpenings(view).length}`);
-    if (flatFurniture(view).length > 0) parts.push(`furniture: ${flatFurniture(view).length}`);
-    if (st.selectedId) parts.push('selected: 1');
-    if (store.canUndo()) parts.push('undo ↺');
-    if (store.canRedo()) parts.push('redo ↻');
-    refs.status.textContent = parts.join(' · ');
+    const parts: string[] = [
+      `rooms: ${flatRooms(view).length}`,
+      `tool: ${tool}`,
+    ];
+    if (flatOpenings(view).length > 0)
+      parts.push(`openings: ${flatOpenings(view).length}`);
+    if (flatFurniture(view).length > 0)
+      parts.push(`furniture: ${flatFurniture(view).length}`);
+    if (st.selectedId) parts.push("selected: 1");
+    if (store.canUndo()) parts.push("undo ↺");
+    if (store.canRedo()) parts.push("redo ↻");
+    refs.status.textContent = parts.join(" · ");
     // pkg 6 (issue #7): livable-area total + contextual tool hint.
     refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(view));
     const hint = toolHint(tool) || GLOBAL_TOOL_HINT;
@@ -499,12 +547,68 @@ export function initEditorInteraction(
   /** pkg 7.2 (issue #75): sync the floor-indicator badge + nav buttons. */
   function refreshFloorIndicator(): void {
     const st = store.getState();
-    const floor = st.data.floors[Math.min(st.activeFloorIdx, st.data.floors.length - 1)];
+    const floor =
+      st.data.floors[Math.min(st.activeFloorIdx, st.data.floors.length - 1)];
     refs.floorBadge.textContent = `${floor.name} · Level ${st.activeFloorIdx + 1}`;
     refs.btnPrevFloor.disabled = st.activeFloorIdx <= 0;
     refs.btnNextFloor.disabled = st.activeFloorIdx >= st.data.floors.length - 1;
     // Deleting the sole floor is refused by the reducer; reflect that.
     refs.btnDeleteFloor.disabled = st.data.floors.length <= 1;
+  }
+
+  /* ---------- pkg 12.3 (issue #101): inspector panel ---------- */
+
+  /**
+   * Resolve the CURRENT selection into a kind-tagged descriptor.
+   * selectedId is a bare string (store.ts:117) — the KIND comes from
+   * scanning the active floor's flats (mirrors the undo reconciliation
+   * scan in store.ts). A selected ROOM upgrades to the WALL case when
+   * a UI-local segment address is live (walls are not entities).
+   */
+  function resolveSelection(): SelectionDescriptor {
+    const st = store.getState();
+    const sel = st.selectedId;
+    if (sel === null) return { kind: "none" };
+    const view = activeFloorPlan(st);
+    const room = flatRooms(view).find((r) => r.id === sel);
+    if (room) {
+      if (
+        selectedSegment &&
+        selectedSegment.roomId === room.id &&
+        selectedSegment.segIndex >= 0 &&
+        selectedSegment.segIndex < room.polygon.length
+      ) {
+        return { kind: "wall", room, segIndex: selectedSegment.segIndex };
+      }
+      return { kind: "room", room };
+    }
+    const opening = flatOpenings(view).find((o) => o.id === sel);
+    if (opening) {
+      const host = flatRooms(view).find((r) => r.id === opening.roomId);
+      // Host room always exists (deleteRoom cascades openings), but a
+      // defensive bail beats constructing a fake Room.
+      if (!host) return { kind: "none" };
+      return { kind: "opening", opening, room: host };
+    }
+    const item = flatFurniture(view).find((f) => f.id === sel);
+    if (item) return { kind: "furniture", item };
+    return { kind: "none" };
+  }
+
+  /** Re-render the inspector IF it is open (cheap no-op collapsed). */
+  function refreshInspector(): void {
+    if (inspector === null || !inspector.isOpen()) return;
+    inspector.render(resolveSelection(), store.getState().data);
+  }
+
+  /** Assign the UI-local segment address + re-render the panel. */
+  function setSelectedSegment(addr: SegmentAddress | null): void {
+    if (sameSegmentAddress(selectedSegment, addr)) return;
+    selectedSegment = addr;
+    refreshInspector();
+    // Repaint so the canvas segment overlay (affordance for the WALL
+    // case) tracks the panel's address.
+    repaint();
   }
 
   store.subscribe((_s) => {
@@ -517,46 +621,111 @@ export function initEditorInteraction(
     refreshBadgeAndButtons();
     refreshFloorIndicator();
     refreshStatus();
+    refreshInspector();
     repaint();
   });
+
+  /**
+   * Pkg 12.3 (issue #101): mount + toggle the inspector panel. The panel
+   * is a PURE RENDERER (inspectorPanel.ts) fed by resolveSelection(); it
+   * commits through the SAME store commands the popovers use — no new
+   * commands, no forked validation (errors surface via flashMessage).
+   */
+  inspector = mountInspectorPanel(
+    (cmd) => store.dispatch(cmd as Parameters<typeof store.dispatch>[0]),
+    (msg) => flashMessage(refs, msg),
+  );
+  refs.inspectorDock.appendChild(inspector.root);
+
+  function setInspectorOpen(open: boolean): void {
+    inspector!.setOpen(open);
+    refs.btnInspector.setAttribute('aria-pressed', String(open));
+    // Repaint: the canvas segment overlay draws only while the panel is
+    // open (visibility tied to the affordance it explains).
+    repaint();
+    if (open) {
+      refreshInspector();
+      // Heading into the panel body puts focus INSIDE the dock — the
+      // precondition for the panel-scoped Esc handler below.
+      inspector!.root.setAttribute("tabindex", "-1");
+      inspector!.root.focus();
+    }
+  }
+
+  refs.btnInspector.addEventListener("click", () => {
+    setInspectorOpen(!inspector!.isOpen());
+  });
+
+  // Pkg 12.3 (issue #101): Esc / I act on the panel ONLY while focus
+  // sits INSIDE it (capture phase + containment gate) — canvas-focused
+  // strokes pass straight through to the canvas handler, so the panel
+  // never eats the drawing-Esc path. In-flight gestures always win the
+  // key (same drawGestureInProgress guard as the popovers). Letter keys
+  // typed into the panel's own INPUTS are ignored (typing ≠ toggling).
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!inspector!.isOpen()) return;
+      if (!inspector!.root.contains(document.activeElement)) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const target = ev.target as HTMLElement;
+      const typingIntoField =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable;
+      if (ev.key === "Escape") {
+        if (drawGestureInProgress()) return;
+        ev.stopPropagation();
+        setInspectorOpen(false);
+        refs.btnInspector.focus();
+      } else if ((ev.key === "i" || ev.key === "I") && !typingIntoField) {
+        if (drawGestureInProgress()) return;
+        ev.stopPropagation();
+        setInspectorOpen(false);
+        refs.btnInspector.focus();
+      }
+    },
+    true,
+  );
 
   /* ---------- toolbar ---------- */
   function setActiveTool(next: AnyToolMode): void {
     tool = next;
     dragOpening = null; // #61: switching tools abandons any opening candidate
     measureDraft = null; // #66: switching tools abandons a pending anchor
-    if (next === 'select') {
-      phase = { tag: 'idle' };
+    if (next === "select") {
+      phase = { tag: "idle" };
     } else {
-      store.dispatch({ type: 'setEntitySelection', entityId: null });
-      phase = { tag: 'idle' };
+      store.dispatch({ type: "setEntitySelection", entityId: null });
+      phase = { tag: "idle" };
     }
 
     // Furniture palette rides shotgun with the stamp tool.
-    refs.palette.hidden = tool !== 'stamp';
+    refs.palette.hidden = tool !== "stamp";
 
     for (const [btn, val] of [
-      [refs.btnSelect, 'select'],
-      [refs.btnRect, 'rectangle'],
-      [refs.btnPoly, 'polygon'],
-      [refs.btnDoor, 'door'],
-      [refs.btnWindow, 'window'],
-      [refs.btnStamp, 'stamp'],
-      [refs.btnAddMeasure, 'measure'],
+      [refs.btnSelect, "select"],
+      [refs.btnRect, "rectangle"],
+      [refs.btnPoly, "polygon"],
+      [refs.btnDoor, "door"],
+      [refs.btnWindow, "window"],
+      [refs.btnStamp, "stamp"],
+      [refs.btnAddMeasure, "measure"],
     ] as Array<[HTMLButtonElement, AnyToolMode]>) {
-      btn.classList.toggle('active', val === tool);
-      btn.setAttribute('aria-pressed', String(val === tool));
+      btn.classList.toggle("active", val === tool);
+      btn.setAttribute("aria-pressed", String(val === tool));
     }
     refreshStatus();
     repaint();
   }
 
-  refs.btnSelect.addEventListener('click', () => setActiveTool('select'));
+  refs.btnSelect.addEventListener("click", () => setActiveTool("select"));
   // Issue #60: "Dimensions" toggle — flips aria-pressed, repaints.
-  refs.btnDimensions.addEventListener('click', () => {
+  refs.btnDimensions.addEventListener("click", () => {
     dimensionsVisible = !dimensionsVisible;
-    refs.btnDimensions.setAttribute('aria-pressed', String(dimensionsVisible));
-    refs.btnDimensions.classList.toggle('active', dimensionsVisible);
+    refs.btnDimensions.setAttribute("aria-pressed", String(dimensionsVisible));
+    refs.btnDimensions.classList.toggle("active", dimensionsVisible);
     repaint();
   });
 
@@ -564,11 +733,11 @@ export function initEditorInteraction(
 
   /** Sync popover controls from the current settings. */
   const syncSnapControls = (): void => {
-    refs.snapPopover.querySelectorAll<HTMLInputElement>(
-      'input[name="snap-pitch"]',
-    ).forEach((r) => {
-      r.checked = parsePitch(Number(r.value)) === snapSettings.pitch;
-    });
+    refs.snapPopover
+      .querySelectorAll<HTMLInputElement>('input[name="snap-pitch"]')
+      .forEach((r) => {
+        r.checked = parsePitch(Number(r.value)) === snapSettings.pitch;
+      });
     const masterCb = refs.snapPopover.querySelector<HTMLInputElement>(
       '[data-testid="snap-master"]',
     );
@@ -577,29 +746,29 @@ export function initEditorInteraction(
 
   const setSnapPopoverOpen = (open: boolean): void => {
     refs.snapPopover.hidden = !open;
-    refs.btnSnap.setAttribute('aria-expanded', open ? 'true' : 'false');
+    refs.btnSnap.setAttribute("aria-expanded", open ? "true" : "false");
   };
 
-  refs.btnSnap.addEventListener('click', () => {
+  refs.btnSnap.addEventListener("click", () => {
     // hidden===true means the popover is closed, i.e. we are OPENING it.
     const opening = refs.snapPopover.hidden === true;
     if (opening) syncSnapControls();
     setSnapPopoverOpen(opening);
   });
 
-  refs.snapPopover.addEventListener('change', (ev) => {
+  refs.snapPopover.addEventListener("change", (ev) => {
     const target = ev.target as HTMLInputElement;
-    if (target.name === 'snap-pitch') {
+    if (target.name === "snap-pitch") {
       const pitch = parsePitch(Number(target.value));
       if (pitch !== null) updateSnapSettings({ ...snapSettings, pitch });
-    } else if (target.dataset.testid === 'snap-master') {
+    } else if (target.dataset.testid === "snap-master") {
       updateSnapSettings({ ...snapSettings, master: target.checked });
     }
   });
 
   // Outside click closes the popover (first-popover discipline: dumb
   // listeners, no focus trap).
-  document.addEventListener('pointerdown', (ev) => {
+  document.addEventListener("pointerdown", (ev) => {
     if (refs.snapPopover.hidden) return;
     if (refs.snapPopover.contains(ev.target as Node)) return;
     if (refs.btnSnap.contains(ev.target as Node)) return;
@@ -610,18 +779,22 @@ export function initEditorInteraction(
   // Escape there would starve the canvas draw-cancel path (below), the
   // exact bug this guard exists for. The popover may stay open; the
   // gesture always wins the key.
-  const drawGestureInProgress = (): boolean => phase.tag !== 'idle';
-  document.addEventListener('keydown', (ev) => {
-    if (
-      !refs.snapPopover.hidden &&
-      ev.key === 'Escape' &&
-      !drawGestureInProgress()
-    ) {
-      ev.stopPropagation();
-      setSnapPopoverOpen(false);
-    }
-  }, true);
-  refs.btnRect.addEventListener('click', () => setActiveTool('rectangle'));
+  const drawGestureInProgress = (): boolean => phase.tag !== "idle";
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (
+        !refs.snapPopover.hidden &&
+        ev.key === "Escape" &&
+        !drawGestureInProgress()
+      ) {
+        ev.stopPropagation();
+        setSnapPopoverOpen(false);
+      }
+    },
+    true,
+  );
+  refs.btnRect.addEventListener("click", () => setActiveTool("rectangle"));
 
   /* ---------- pkg 12.1 (issue #99): underlay UI ---------- */
 
@@ -789,31 +962,36 @@ export function initEditorInteraction(
 
   const setFloorPopoverOpen = (open: boolean): void => {
     refs.floorPopover.hidden = !open;
-    refs.floorBadge.setAttribute('aria-expanded', open ? 'true' : 'false');
+    refs.floorBadge.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) {
       // Seed the rename field with the active floor's current name.
-      const name = store.getState().data.floors[store.getState().activeFloorIdx]?.name ?? '';
+      const name =
+        store.getState().data.floors[store.getState().activeFloorIdx]?.name ??
+        "";
       refs.floorRenameInput.value = name;
       refs.floorRenameInput.focus();
       refs.floorRenameInput.select();
     }
   };
 
-  refs.btnPrevFloor.addEventListener('click', () => switchFloor(-1));
-  refs.btnNextFloor.addEventListener('click', () => switchFloor(1));
-  refs.btnAddFloor.addEventListener('click', () => {
-    const res = store.dispatch({ type: 'addFloor' });
+  refs.btnPrevFloor.addEventListener("click", () => switchFloor(-1));
+  refs.btnNextFloor.addEventListener("click", () => switchFloor(1));
+  refs.btnAddFloor.addEventListener("click", () => {
+    const res = store.dispatch({ type: "addFloor" });
     if (!res.ok) flashMessage(refs, res.error);
   });
 
   // The badge doubles as the popover toggle (aria-expanded + popup).
-  refs.floorBadge.addEventListener('click', () => {
+  refs.floorBadge.addEventListener("click", () => {
     setFloorPopoverOpen(refs.floorPopover.hidden === true);
   });
 
-  refs.floorRenameForm.addEventListener('submit', (ev) => {
+  refs.floorRenameForm.addEventListener("submit", (ev) => {
     ev.preventDefault();
-    const res = store.dispatch({ type: 'renameFloor', name: refs.floorRenameInput.value });
+    const res = store.dispatch({
+      type: "renameFloor",
+      name: refs.floorRenameInput.value,
+    });
     if (!res.ok) {
       flashMessage(refs, res.error);
       return;
@@ -821,14 +999,14 @@ export function initEditorInteraction(
     setFloorPopoverOpen(false);
   });
 
-  refs.btnDeleteFloor.addEventListener('click', () => {
-    const res = store.dispatch({ type: 'deleteFloor' });
+  refs.btnDeleteFloor.addEventListener("click", () => {
+    const res = store.dispatch({ type: "deleteFloor" });
     if (!res.ok) flashMessage(refs, res.error);
     else setFloorPopoverOpen(false);
   });
 
   // Outside click closes the popover (dumb listeners, no focus trap).
-  document.addEventListener('pointerdown', (ev) => {
+  document.addEventListener("pointerdown", (ev) => {
     if (refs.floorPopover.hidden) return;
     if (refs.floorPopover.contains(ev.target as Node)) return;
     if (refs.floorBadge.contains(ev.target as Node)) return;
@@ -836,16 +1014,20 @@ export function initEditorInteraction(
   });
   // Escape closes it too (capture phase so canvas key handling is moot),
   // except mid-gesture (Issue #94 — see drawGestureInProgress above).
-  document.addEventListener('keydown', (ev) => {
-    if (
-      !refs.floorPopover.hidden &&
-      ev.key === 'Escape' &&
-      !drawGestureInProgress()
-    ) {
-      ev.stopPropagation();
-      setFloorPopoverOpen(false);
-    }
-  }, true);
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (
+        !refs.floorPopover.hidden &&
+        ev.key === "Escape" &&
+        !drawGestureInProgress()
+      ) {
+        ev.stopPropagation();
+        setFloorPopoverOpen(false);
+      }
+    },
+    true,
+  );
 
   /* ---------- pkg 8.1 (issue #83): wall-lean popover ---------- */
 
@@ -857,16 +1039,16 @@ export function initEditorInteraction(
    */
   function populateLeanPopover(room: Room): void {
     refs.leanSegFieldset.replaceChildren(
-      refs.leanSegFieldset.querySelector('legend')!,
+      refs.leanSegFieldset.querySelector("legend")!,
     );
     const rows = room.roofs ?? [];
     let anyChecked = false;
     for (let i = 0; i < room.polygon.length; i += 1) {
-      const label = document.createElement('label');
-      label.className = 'snap-radio';
-      const radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'lean-seg';
+      const label = document.createElement("label");
+      label.className = "snap-radio";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "lean-seg";
       radio.value = String(i);
       radio.dataset.testid = `lean-seg-${i}`;
       const row = rows.find((r) => r.segmentIndex === i);
@@ -879,9 +1061,9 @@ export function initEditorInteraction(
     }
     // Nothing leaned yet: preselect Wall 1 so keyboard flow starts sane.
     if (!anyChecked) {
-      refs.leanSegFieldset.querySelector<HTMLInputElement>(
-        'input[name="lean-seg"]',
-      )?.setAttribute('checked', 'checked');
+      refs.leanSegFieldset
+        .querySelector<HTMLInputElement>('input[name="lean-seg"]')
+        ?.setAttribute("checked", "checked");
     }
     // Checked segment drives the slider seed (stored lean, else 0).
     syncLeanSlider();
@@ -890,9 +1072,10 @@ export function initEditorInteraction(
   /** Slider ← checked radio segment's stored lean (0 when none). */
   function syncLeanSlider(): void {
     const st = store.getState();
-    const room = st.selectedId !== null
-      ? flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId)
-      : undefined;
+    const room =
+      st.selectedId !== null
+        ? flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId)
+        : undefined;
     const checked = refs.leanSegFieldset.querySelector<HTMLInputElement>(
       'input[name="lean-seg"]:checked',
     );
@@ -922,16 +1105,16 @@ export function initEditorInteraction(
     return Number.isInteger(si) ? si : null;
   }
 
-  refs.leanSegFieldset.addEventListener('change', () => {
+  refs.leanSegFieldset.addEventListener("change", () => {
     syncLeanSlider();
   });
 
   // Live degree readout while the slider moves (committed on Apply).
-  refs.leanSlider.addEventListener('input', () => {
+  refs.leanSlider.addEventListener("input", () => {
     refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
   });
 
-  refs.leanForm.addEventListener('submit', (ev) => {
+  refs.leanForm.addEventListener("submit", (ev) => {
     ev.preventDefault();
     const st = store.getState();
     const roomId = st.selectedId;
@@ -941,9 +1124,15 @@ export function initEditorInteraction(
     const leanDeg = Math.round(Number(refs.leanSlider.value));
     // Lean 0 strips the row (reduceSetWallLean treats it as clear too,
     // but routing through clearWallLean exercises the explicit path).
-    const res = leanDeg === 0
-      ? store.dispatch({ type: 'clearWallLean', roomId, segmentIndex: si })
-      : store.dispatch({ type: 'setWallLean', roomId, segmentIndex: si, leanDeg });
+    const res =
+      leanDeg === 0
+        ? store.dispatch({ type: "clearWallLean", roomId, segmentIndex: si })
+        : store.dispatch({
+            type: "setWallLean",
+            roomId,
+            segmentIndex: si,
+            leanDeg,
+          });
     if (!res.ok) {
       flashMessage(refs, res.error);
       return;
@@ -951,13 +1140,17 @@ export function initEditorInteraction(
     setLeanPopoverOpen(false);
   });
 
-  refs.btnClearLean.addEventListener('click', () => {
+  refs.btnClearLean.addEventListener("click", () => {
     const st = store.getState();
     const roomId = st.selectedId;
     if (roomId === null) return;
     const si = checkedLeanSeg();
     if (si === null) return;
-    const res = store.dispatch({ type: 'clearWallLean', roomId, segmentIndex: si });
+    const res = store.dispatch({
+      type: "clearWallLean",
+      roomId,
+      segmentIndex: si,
+    });
     if (!res.ok) {
       flashMessage(refs, res.error);
       return;
@@ -966,53 +1159,60 @@ export function initEditorInteraction(
   });
 
   // Outside click closes the popover (dumb listeners, no focus trap).
-  document.addEventListener('pointerdown', (ev) => {
+  document.addEventListener("pointerdown", (ev) => {
     if (refs.leanPopover.hidden) return;
     if (refs.leanPopover.contains(ev.target as Node)) return;
     setLeanPopoverOpen(false);
   });
   // Escape closes it too (capture phase so canvas key handling is moot),
   // except mid-gesture (Issue #94 — see drawGestureInProgress above).
-  document.addEventListener('keydown', (ev) => {
-    if (
-      !refs.leanPopover.hidden &&
-      ev.key === 'Escape' &&
-      !drawGestureInProgress()
-    ) {
-      ev.stopPropagation();
-      setLeanPopoverOpen(false);
-    }
-  }, true);
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (
+        !refs.leanPopover.hidden &&
+        ev.key === "Escape" &&
+        !drawGestureInProgress()
+      ) {
+        ev.stopPropagation();
+        setLeanPopoverOpen(false);
+      }
+    },
+    true,
+  );
 
-
-  refs.btnPoly.addEventListener('click', () => setActiveTool('polygon'));
-  refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
-  refs.btnWindow.addEventListener('click', () => setActiveTool('window'));
-  refs.btnStamp.addEventListener('click', () => setActiveTool('stamp'));
-  refs.btnAddMeasure.addEventListener('click', () => setActiveTool('measure'));
+  refs.btnPoly.addEventListener("click", () => setActiveTool("polygon"));
+  refs.btnDoor.addEventListener("click", () => setActiveTool("door"));
+  refs.btnWindow.addEventListener("click", () => setActiveTool("window"));
+  refs.btnStamp.addEventListener("click", () => setActiveTool("stamp"));
+  refs.btnAddMeasure.addEventListener("click", () => setActiveTool("measure"));
   // Issue #66: wipe all annotations (persists immediately).
-  refs.btnClearMeasure.addEventListener('click', () => {
+  refs.btnClearMeasure.addEventListener("click", () => {
     measurements = [];
     saveMeasurements(window.localStorage, measurements);
     repaint();
   });
 
-  for (const chip of Array.from(refs.palette.querySelectorAll<HTMLButtonElement>('.palette-chip'))) {
-    chip.addEventListener('click', () => {
+  for (const chip of Array.from(
+    refs.palette.querySelectorAll<HTMLButtonElement>(".palette-chip"),
+  )) {
+    chip.addEventListener("click", () => {
       const t = chip.dataset.stampType;
       if (t && FURNITURE_DEFAULTS[t]) {
         stampType = t;
-        for (const c of Array.from(refs.palette.querySelectorAll<HTMLButtonElement>('.palette-chip'))) {
-          c.classList.toggle('active', c === chip);
+        for (const c of Array.from(
+          refs.palette.querySelectorAll<HTMLButtonElement>(".palette-chip"),
+        )) {
+          c.classList.toggle("active", c === chip);
         }
       }
     });
   }
 
-  refs.btnUndo.addEventListener('click', () => {
+  refs.btnUndo.addEventListener("click", () => {
     store.undo();
   });
-  refs.btnRedo.addEventListener('click', () => {
+  refs.btnRedo.addEventListener("click", () => {
     store.redo();
   });
 
@@ -1028,8 +1228,21 @@ export function initEditorInteraction(
       const scaledCam: Camera = { ...cam, scale: cam.scale * scale };
       // pkg 7.2 scope ruling (SUB_PLAN): image export is a WHOLE-PLAN
       // writer — unlike the live canvas, it keeps full-plan scope.
-      paintScene(ctx, w, h, scaledCam, store.getState().data, { tag: 'idle' }, null);
-      paintMeasurementBadges(ctx, scaledCam, store.getState().data, dimensionsVisible);
+      paintScene(
+        ctx,
+        w,
+        h,
+        scaledCam,
+        store.getState().data,
+        { tag: "idle" },
+        null,
+      );
+      paintMeasurementBadges(
+        ctx,
+        scaledCam,
+        store.getState().data,
+        dimensionsVisible,
+      );
       paintMeasureAnnotations(ctx, scaledCam, measurements, dimensionsVisible);
     };
   }
@@ -1046,12 +1259,15 @@ export function initEditorInteraction(
         choice,
       );
       downloadExport(result);
-      flashMessage(refs, `Exported ${result.filename} (${result.width}\u00D7${result.height}).`);
+      flashMessage(
+        refs,
+        `Exported ${result.filename} (${result.width}\u00D7${result.height}).`,
+      );
     } catch (err) {
       flashMessage(refs, `Export failed: ${(err as Error).message}`);
     }
   }
-  refs.btnExport.addEventListener('click', () => {
+  refs.btnExport.addEventListener("click", () => {
     void runExportFlow();
   });
 
@@ -1072,17 +1288,17 @@ export function initEditorInteraction(
         /* fall through to the legacy rung */
       }
     }
-    const ta = document.createElement('textarea');
+    const ta = document.createElement("textarea");
     try {
       ta.value = text;
       // Position off-screen but NOT display:none — detached/hidden
       // editors are excluded from some browsers' copy paths.
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
-      return document.execCommand('copy');
+      return document.execCommand("copy");
     } catch {
       return false;
     } finally {
@@ -1093,13 +1309,13 @@ export function initEditorInteraction(
     }
   }
 
-  refs.btnShare.addEventListener('click', () => {
+  refs.btnShare.addEventListener("click", () => {
     void (async () => {
       // Feature-detect AT THE BUTTON (codec stays native-only by
       // design): browsers lacking CompressionStream get a clear
       // message instead of a half-encoded link.
-      if (typeof CompressionStream === 'undefined') {
-        flashMessage(refs, 'Sharing is unavailable in this browser.');
+      if (typeof CompressionStream === "undefined") {
+        flashMessage(refs, "Sharing is unavailable in this browser.");
         return;
       }
       let out: Awaited<ReturnType<typeof encodeShare>>;
@@ -1116,7 +1332,7 @@ export function initEditorInteraction(
       const url = `${location.origin}/viewer#plan=${out.fragment}`;
       const copied = await copyToClipboard(url);
       if (!copied) {
-        flashMessage(refs, 'Could not copy — clipboard unavailable.');
+        flashMessage(refs, "Could not copy — clipboard unavailable.");
         return;
       }
       if (out.warning) {
@@ -1126,36 +1342,35 @@ export function initEditorInteraction(
           5000,
         );
       } else {
-        flashMessage(refs, 'Share link copied to clipboard.');
+        flashMessage(refs, "Share link copied to clipboard.");
       }
     })();
   });
 
-  refs.btnExportJson.addEventListener('click', () => {
+  refs.btnExportJson.addEventListener("click", () => {
     // Symmetric counterpart to Import: pretty-printed JSON of the live
     // store, downloaded through the same Blob dance as export.ts.
-    const blob = new Blob(
-      [JSON.stringify(store.getState().data, null, 2)],
-      { type: 'application/json' },
-    );
+    const blob = new Blob([JSON.stringify(store.getState().data, null, 2)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = `floorplan-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
-    flashMessage(refs, 'Plan exported as JSON.');
+    flashMessage(refs, "Plan exported as JSON.");
   });
 
   const importFileInputEl = refs.importFileInput;
-  refs.btnImport.addEventListener('click', () => {
-    importFileInputEl.value = ''; // re-picking the same file must re-fire change
+  refs.btnImport.addEventListener("click", () => {
+    importFileInputEl.value = ""; // re-picking the same file must re-fire change
     importFileInputEl.click();
   });
 
-  importFileInputEl.addEventListener('change', () => {
+  importFileInputEl.addEventListener("change", () => {
     const file = importFileInputEl.files?.[0];
     if (!file) return;
     void (async () => {
@@ -1163,14 +1378,14 @@ export function initEditorInteraction(
       try {
         text = await file.text();
       } catch {
-        flashMessage(refs, 'Could not read the selected file.');
+        flashMessage(refs, "Could not read the selected file.");
         return;
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
       } catch {
-        flashMessage(refs, 'Not a valid JSON file.');
+        flashMessage(refs, "Not a valid JSON file.");
         return;
       }
       // migrate + validate DIRECTLY (NOT normalizeIncoming — it silently
@@ -1178,7 +1393,7 @@ export function initEditorInteraction(
       // typo'd import). Failure leaves the store untouched.
       const migrated = migrate(parsed);
       if (!migrated.ok || !migrated.data) {
-        flashMessage(refs, 'Import failed: unsupported schema version.');
+        flashMessage(refs, "Import failed: unsupported schema version.");
         return;
       }
       const validated = validateFloorplan(migrated.data);
@@ -1195,9 +1410,9 @@ export function initEditorInteraction(
     })();
   });
 
-  refs.btnHelp.addEventListener('click', () => toggleHelpModal());
+  refs.btnHelp.addEventListener("click", () => toggleHelpModal());
   initShortcuts();
-  window.addEventListener('beforeunload', closeHelpModal, { once: true });
+  window.addEventListener("beforeunload", closeHelpModal, { once: true });
 
   /**
    * Delete routes by WHAT is selected: furniture stamp → deleteFurniture,
@@ -1210,16 +1425,16 @@ export function initEditorInteraction(
     // the ACTIVE floor is clickable — route against its view.
     const view = activeFloorPlan(store.getState());
     if (flatFurniture(view).some((f) => f.id === sel)) {
-      store.dispatch({ type: 'deleteFurniture', furnitureId: sel });
+      store.dispatch({ type: "deleteFurniture", furnitureId: sel });
       return;
     }
     if (flatOpenings(view).some((o) => o.id === sel)) {
-      store.dispatch({ type: 'deleteOpening', openingId: sel, syncPair: true });
+      store.dispatch({ type: "deleteOpening", openingId: sel, syncPair: true });
       return;
     }
-    store.dispatch({ type: 'deleteRoom', roomId: sel });
+    store.dispatch({ type: "deleteRoom", roomId: sel });
   }
-  refs.btnDelete.addEventListener('click', () => routeDelete());
+  refs.btnDelete.addEventListener("click", () => routeDelete());
 
   /* ---------- pkg 2 (issue #46): center + zoom buttons ---------- */
 
@@ -1236,50 +1451,61 @@ export function initEditorInteraction(
     repaint();
   }
 
-  refs.btnCenter.addEventListener('click', () => {
+  refs.btnCenter.addEventListener("click", () => {
     const { w, h } = viewportSize();
     // pkg 7.2: fit-camera frames the ACTIVE floor (whole-plan writers
     // like export keep full scope).
     applyCamera(computeFitCamera(activeFloorPlan(store.getState()), w, h));
   });
-  refs.btnZoomIn.addEventListener('click', () => {
+  refs.btnZoomIn.addEventListener("click", () => {
     const { w, h } = viewportSize();
     applyCamera(zoomAboutCenter(cam, ZOOM_BUTTON_STEP, w, h));
   });
-  refs.btnZoomOut.addEventListener('click', () => {
+  refs.btnZoomOut.addEventListener("click", () => {
     const { w, h } = viewportSize();
     applyCamera(zoomAboutCenter(cam, 1 / ZOOM_BUTTON_STEP, w, h));
   });
 
   // Read-only debug seam for e2e: main.ts's __casaplaza bridge is out of
   // Pkg 2's grant, so the camera is exposed from glue instead.
-  (window as unknown as { __editorCam?: () => Camera }).__editorCam = () => ({ ...cam });
+  (window as unknown as { __editorCam?: () => Camera }).__editorCam = () => ({
+    ...cam,
+  });
 
   // Issue #53 read-only seam: screen-space resize-handle centres of the
   // currently-selected room (empty when nothing is selected). Same
   // precedent as __editorCam — lets e2e assert handle count + aim grabs.
-  (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles = () => {
-    const st = store.getState();
-    if (st.selectedId === null) return [];
-    const room = flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId);
-    if (!room) return [];
-    return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
-  };
+  (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles =
+    () => {
+      const st = store.getState();
+      if (st.selectedId === null) return [];
+      const room = flatRooms(activeFloorPlan(st)).find(
+        (r) => r.id === st.selectedId,
+      );
+      if (!room) return [];
+      return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
+    };
 
   // Issue #66 read-only seams (same precedent as __editorHandles): the
   // annotation list and the Dimensions flag are canvas-drawn, so e2e
   // observes them through here.
-  (window as unknown as { __editorMeasurements?: () => Measurement[] }).__editorMeasurements =
-    () => measurements.slice();
-  (window as unknown as { __editorDimsVisible?: () => boolean }).__editorDimsVisible =
-    () => dimensionsVisible;
+  (
+    window as unknown as { __editorMeasurements?: () => Measurement[] }
+  ).__editorMeasurements = () => measurements.slice();
+  (
+    window as unknown as { __editorDimsVisible?: () => boolean }
+  ).__editorDimsVisible = () => dimensionsVisible;
 
   // pkg 8.1 (issue #83) read-only seam (same precedent): the v1 wire
   // bridge DROPS the roofs field, so e2e asserts the active floor's
   // leans through here instead.
   (
     window as unknown as {
-      __editorLeans?: () => Array<{ roomId: string; segmentIndex: number; leanDeg: number }>;
+      __editorLeans?: () => Array<{
+        roomId: string;
+        segmentIndex: number;
+        leanDeg: number;
+      }>;
     }
   ).__editorLeans = () =>
     flatRooms(activeFloorPlan(store.getState())).flatMap((room) =>
@@ -1309,9 +1535,6 @@ export function initEditorInteraction(
         ? null
         : { ...u, dataUrl: u.dataUrl.startsWith('data:') ? 'data:' : '' };
     };
-
-
-
   /* ---------- pkg 3 helpers (issue #4) ---------- */
 
   /** Top-most furniture whose rotated rect contains the world point. */
@@ -1344,7 +1567,7 @@ export function initEditorInteraction(
   function updateOpeningHover(worldPt: Pt): void {
     ghost = null;
     hoverSeg = null;
-    if (tool !== 'door' && tool !== 'window') return;
+    if (tool !== "door" && tool !== "window") return;
     const kind = tool;
     // pkg 7.2: ghosts pair against the ACTIVE floor's walls only.
     const plan = activeFloorPlan(store.getState());
@@ -1356,7 +1579,12 @@ export function initEditorInteraction(
       if (!seg) continue;
       const a = seg.a;
       const b = seg.b;
-      const proj = projectOntoSegment(worldPt, { index: seg.index, a, b, length: seg.length });
+      const proj = projectOntoSegment(worldPt, {
+        index: seg.index,
+        a,
+        b,
+        length: seg.length,
+      });
       const cp = pointAtT(seg, proj);
       const d = Math.hypot(cp[0] - worldPt[0], cp[1] - worldPt[1]);
       if (d < bestDist) {
@@ -1370,8 +1598,14 @@ export function initEditorInteraction(
     hoverSeg = { roomId: bestRoomId, segIndex: bestSeg.index };
     const defs = OPENING_DEFAULTS[kind];
     const err = validateOpeningDraft(
-      plan, bestRoomId, bestSeg.index, kind, t,
-      defs.width, defs.sillHeight, defs.headHeight,
+      plan,
+      bestRoomId,
+      bestSeg.index,
+      kind,
+      t,
+      defs.width,
+      defs.sillHeight,
+      defs.headHeight,
     );
     ghost = { kind, seg: bestSeg, t, width: defs.width, valid: err === null };
   }
@@ -1385,14 +1619,26 @@ export function initEditorInteraction(
    * across the dispatch: +1 row means the cut pierces only this wall,
    * +2 rows is the silent shared-door success.
    */
-  function commitOpening(kind: 'door' | 'window'): void {
-    if (!ghost || !ghost.seg || ghost.t === undefined || !ghost.valid || !hoverSeg) {
+  function commitOpening(kind: "door" | "window"): void {
+    if (
+      !ghost ||
+      !ghost.seg ||
+      ghost.t === undefined ||
+      !ghost.valid ||
+      !hoverSeg
+    ) {
       return;
     }
     const defs = OPENING_DEFAULTS[kind];
     const err = validateOpeningDraft(
-      activeFloorPlan(store.getState()), hoverSeg.roomId, hoverSeg.segIndex, kind,
-      ghost.t, defs.width, defs.sillHeight, defs.headHeight,
+      activeFloorPlan(store.getState()),
+      hoverSeg.roomId,
+      hoverSeg.segIndex,
+      kind,
+      ghost.t,
+      defs.width,
+      defs.sillHeight,
+      defs.headHeight,
     );
     if (err !== null) {
       flashMessage(refs, openingErrorMessage(err, kind));
@@ -1401,7 +1647,7 @@ export function initEditorInteraction(
     // pkg 7.2: the notice diffs the ACTIVE floor's opening rows.
     const rowsBefore = flatOpenings(activeFloorPlan(store.getState())).length;
     const res = store.dispatch({
-      type: 'addOpening',
+      type: "addOpening",
       roomId: hoverSeg.roomId,
       segmentIndex: hoverSeg.segIndex,
       kind,
@@ -1422,11 +1668,11 @@ export function initEditorInteraction(
   }
 
   /* ---------- pointer interactions ---------- */
-  canvas.addEventListener('pointerdown', (ev) => {
+  canvas.addEventListener("pointerdown", (ev) => {
     if (ev.button === 1 || ev.altKey) {
       // Middle-button or alt-drag pans.
       const pos = evPos(ev);
-      phase = { tag: 'panning', startX: pos[0], startY: pos[1] };
+      phase = { tag: "panning", startX: pos[0], startY: pos[1] };
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
@@ -1438,7 +1684,7 @@ export function initEditorInteraction(
     // machine — first click anchors, second click commits, and a click
     // on an existing label REMOVES that annotation. Both points snap via
     // the shared snapPoint() policy.
-    if (tool === 'measure') {
+    if (tool === "measure") {
       const hit = labelHitTest(evPos(ev), measurements, cam);
       if (hit) {
         measurements = measurements.filter((m) => m.id !== hit.id);
@@ -1455,7 +1701,12 @@ export function initEditorInteraction(
           // Tag with the floor it was drawn on (reviewer #75): the live
           // canvas filters to the active floor; the export painter keeps
           // whole-plan scope.
-          { id: makeMeasureId(), a: measureDraft.a, b: snapped, floorIdx: store.getState().activeFloorIdx },
+          {
+            id: makeMeasureId(),
+            a: measureDraft.a,
+            b: snapped,
+            floorIdx: store.getState().activeFloorIdx,
+          },
         ];
         measureDraft = null;
         saveMeasurements(window.localStorage, measurements);
@@ -1464,14 +1715,18 @@ export function initEditorInteraction(
       return;
     }
 
-    if (tool === 'rectangle') {
+    if (tool === "rectangle") {
       // Snap the anchor corner to grid/foreign geometry like any other gesture.
-      phase = { tag: 'drawingRect', corner1: snapPoint(worldPt), cursor: snapPoint(worldPt) };
+      phase = {
+        tag: "drawingRect",
+        corner1: snapPoint(worldPt),
+        cursor: snapPoint(worldPt),
+      };
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
 
-    if (tool === 'door' || tool === 'window') {
+    if (tool === "door" || tool === "window") {
       // Refresh the ghost at the CLICK point (touch devices skip hover),
       // then commit when the draft validates.
       updateOpeningHover(worldPt);
@@ -1493,7 +1748,7 @@ export function initEditorInteraction(
           OPENING_DEFAULTS[tool].sillHeight,
           OPENING_DEFAULTS[tool].headHeight,
         );
-        flashMessage(refs, openingErrorMessage(code ?? 'UNKNOWN', tool));
+        flashMessage(refs, openingErrorMessage(code ?? "UNKNOWN", tool));
       } else {
         flashMessage(refs, `Move closer to a wall to place the ${tool}.`);
       }
@@ -1501,26 +1756,26 @@ export function initEditorInteraction(
       return;
     }
 
-    if (tool === 'stamp') {
+    if (tool === "stamp") {
       const def = FURNITURE_DEFAULTS[stampType];
       if (!def) return;
       // pkg 7.2: stamps land on the ACTIVE floor.
       const view = activeFloorPlan(store.getState());
       const outcome = attemptDrop(view, def.footprint, worldPt);
-      if (outcome.verdict === 'rejected') {
+      if (outcome.verdict === "rejected") {
         flashMessage(
           refs,
-          outcome.reason === 'NO_ROOM_AT_POINT'
-            ? 'Click inside a room to place furniture.'
-            : 'That piece does not fit anywhere in this room — placement cancelled.',
+          outcome.reason === "NO_ROOM_AT_POINT"
+            ? "Click inside a room to place furniture."
+            : "That piece does not fit anywhere in this room — placement cancelled.",
         );
         repaint();
         return;
       }
       const host = roomAt(worldPt, view)!;
-      const pos = outcome.verdict === 'warn' ? outcome.snappedTo : worldPt;
+      const pos = outcome.verdict === "warn" ? outcome.snappedTo : worldPt;
       const res = store.dispatch({
-        type: 'addFurniture',
+        type: "addFurniture",
         itemType: stampType,
         roomId: host.id,
         position: pos,
@@ -1529,18 +1784,21 @@ export function initEditorInteraction(
       });
       if (!res.ok) {
         flashMessage(refs, res.error);
-      } else if (outcome.verdict === 'warn') {
-        flashMessage(refs, 'Placed, but adjusted inward to stay inside the room.');
+      } else if (outcome.verdict === "warn") {
+        flashMessage(
+          refs,
+          "Placed, but adjusted inward to stay inside the room.",
+        );
       }
       repaint();
       return;
     }
 
-    if (tool === 'polygon') {
-      const cur = phase.tag === 'drawingPoly' ? phase : null;
+    if (tool === "polygon") {
+      const cur = phase.tag === "drawingPoly" ? phase : null;
       if (cur === null) {
         const first = snapPoint(worldPt);
-        phase = { tag: 'drawingPoly', points: [first], cursor: first };
+        phase = { tag: "drawingPoly", points: [first], cursor: first };
       } else if (
         dist(cur.points[0], worldPt) * cam.scale <= CLOSE_HIT_RADIUS_PX &&
         cur.points.length >= POLYGON_MIN_POINTS
@@ -1582,10 +1840,10 @@ export function initEditorInteraction(
     // Furniture takes grab priority over rooms (smaller primitive).
     const grabbed = furnitureItemAt(worldPt, view);
     if (grabbed) {
-      store.dispatch({ type: 'setEntitySelection', entityId: grabbed.id });
+      store.dispatch({ type: "setEntitySelection", entityId: grabbed.id });
       draggingFurnitureId = grabbed.id;
       store.beginGesture();
-      phase = { tag: 'draggingFurniture', furnitureId: grabbed.id };
+      phase = { tag: "draggingFurniture", furnitureId: grabbed.id };
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
@@ -1597,8 +1855,10 @@ export function initEditorInteraction(
     const openingHit = openingAt(worldPt, view);
     if (openingHit) {
       const hitRoom = flatRooms(view).find((r) => r.id === openingHit.roomId);
-      const hitSeg = hitRoom ? roomSegments(hitRoom)[openingHit.segmentIndex] : undefined;
-      store.dispatch({ type: 'setEntitySelection', entityId: openingHit.id });
+      const hitSeg = hitRoom
+        ? roomSegments(hitRoom)[openingHit.segmentIndex]
+        : undefined;
+      store.dispatch({ type: "setEntitySelection", entityId: openingHit.id });
       dragOpening = hitSeg
         ? {
             id: openingHit.id,
@@ -1615,7 +1875,7 @@ export function initEditorInteraction(
             lastErr: null,
           }
         : null;
-      phase = { tag: 'idle' };
+      phase = { tag: "idle" };
       return;
     }
 
@@ -1626,21 +1886,34 @@ export function initEditorInteraction(
         const handle = resizeHandleAt(worldPt, clicked, handleToleranceWorld());
         if (handle !== null) {
           store.beginGesture();
-          phase = { tag: 'resizing', vertexIndex: handle, selectedRoomId: clicked.id };
+          phase = {
+            tag: "resizing",
+            vertexIndex: handle,
+            selectedRoomId: clicked.id,
+          };
           canvas.setPointerCapture(ev.pointerId);
           return;
         }
       }
-      store.dispatch({ type: 'setSelection', roomId: clicked.id });
+      store.dispatch({ type: "setSelection", roomId: clicked.id });
+      // Pkg 12.3 (issue #101): a click NEAR a wall upgrades the room
+      // selection to the WALL case in the inspector (UI-local segment
+      // address — walls are not entities). Far-from-walls clicks keep
+      // the plain room view.
+      const nearSeg = nearestSegment(clicked, worldPt);
+      setSelectedSegment(
+        nearSeg ? { roomId: clicked.id, segIndex: nearSeg.index } : null,
+      );
       // Offset from the grabbed POINT to the room's anchor vertex, so the
       // vertex follows the cursor exactly (no teleport on first move).
       const grabOffset = vecSub(clicked.polygon[0], worldPt);
       store.beginGesture();
-      phase = { tag: 'dragging', grabOffset, selectedRoomId: clicked.id };
+      phase = { tag: "dragging", grabOffset, selectedRoomId: clicked.id };
       canvas.setPointerCapture(ev.pointerId);
     } else {
-      store.dispatch({ type: 'setSelection', roomId: null });
-      phase = { tag: 'idle' };
+      store.dispatch({ type: "setSelection", roomId: null });
+      setSelectedSegment(null);
+      phase = { tag: "idle" };
     }
   });
 
@@ -1693,7 +1966,7 @@ export function initEditorInteraction(
     });
     const err =
       fitErr ??
-      (openingDragClash(plan, d.id, t) ? 'CLASHES_EXISTING_OPENING' : null);
+      (openingDragClash(plan, d.id, t) ? "CLASHES_EXISTING_OPENING" : null);
     d.lastErr = err;
     ghost = {
       kind: d.kind,
@@ -1705,7 +1978,7 @@ export function initEditorInteraction(
     if (err === null) {
       d.lastValidT = t;
       store.dispatch({
-        type: 'moveOpening',
+        type: "moveOpening",
         openingId: d.id,
         tCenter: t,
         syncPair: true,
@@ -1714,7 +1987,7 @@ export function initEditorInteraction(
     repaint();
   }
 
-  canvas.addEventListener('pointermove', (ev) => {
+  canvas.addEventListener("pointermove", (ev) => {
     const worldPt = evWorld(ev);
 
     // pkg 12.1 (issue #99): an in-flight underlay corner resize owns
@@ -1735,49 +2008,69 @@ export function initEditorInteraction(
     }
 
     // pkg 3: opening-tool ghost slide + wall highlight (any phase-less move).
-    if (tool === 'door' || tool === 'window') {
+    if (tool === "door" || tool === "window") {
       updateOpeningHover(worldPt);
       repaint();
       return;
     }
 
-    if (tool === 'stamp') {
+    if (tool === "stamp") {
       // Live ghost rect under the cursor for the armed stamp type.
       const def = FURNITURE_DEFAULTS[stampType];
       if (def) {
         // pkg 7.2: the ghost judges placement against the ACTIVE floor.
-        const outcome = attemptDrop(activeFloorPlan(store.getState()), def.footprint, worldPt);
+        const outcome = attemptDrop(
+          activeFloorPlan(store.getState()),
+          def.footprint,
+          worldPt,
+        );
         ghost = {
-          kind: 'stamp',
-          pos: outcome.verdict === 'warn' ? outcome.snappedTo : worldPt,
+          kind: "stamp",
+          pos: outcome.verdict === "warn" ? outcome.snappedTo : worldPt,
           footprint: [def.footprint[0], def.footprint[1]],
           rotationDeg: 0,
-          valid: outcome.verdict !== 'rejected',
+          valid: outcome.verdict !== "rejected",
         };
       }
       repaint();
       return;
     }
 
-    if (phase.tag === 'draggingFurniture') {
+    if (phase.tag === "draggingFurniture") {
       const fid = draggingFurnitureId;
       if (fid) {
-        const verdict = judgeMoveTarget(activeFloorPlan(store.getState()), fid, worldPt);
-        if (verdict.verdict === 'rejected') {
+        const verdict = judgeMoveTarget(
+          activeFloorPlan(store.getState()),
+          fid,
+          worldPt,
+        );
+        if (verdict.verdict === "rejected") {
           // Snap-back: revert to the item's last committed position.
-          const item = flatFurniture(activeFloorPlan(store.getState())).find((f) => f.id === fid);
+          const item = flatFurniture(activeFloorPlan(store.getState())).find(
+            (f) => f.id === fid,
+          );
           if (item) {
-            store.dispatch({ type: 'moveFurniture', furnitureId: fid, position: item.position });
-            flashMessage(refs, 'Piece pulled outside the room — snapped back to its last valid spot.');
+            store.dispatch({
+              type: "moveFurniture",
+              furnitureId: fid,
+              position: item.position,
+            });
+            flashMessage(
+              refs,
+              "Piece pulled outside the room — snapped back to its last valid spot.",
+            );
           }
         } else {
           store.dispatch({
-            type: 'moveFurniture',
+            type: "moveFurniture",
             furnitureId: fid,
             position: verdict.resolved,
           });
-          if (verdict.verdict === 'warn') {
-            flashMessage(refs, 'Moved, but clamped to keep the piece inside the room.');
+          if (verdict.verdict === "warn") {
+            flashMessage(
+              refs,
+              "Moved, but clamped to keep the piece inside the room.",
+            );
           }
         }
       }
@@ -1785,7 +2078,7 @@ export function initEditorInteraction(
       return;
     }
 
-    if (phase.tag === 'panning') {
+    if (phase.tag === "panning") {
       const pos = evPos(ev);
       cam.originX -= (pos[0] - phase.startX) / cam.scale;
       cam.originY += (pos[1] - phase.startY) / cam.scale;
@@ -1795,21 +2088,23 @@ export function initEditorInteraction(
       return;
     }
 
-    if (phase.tag === 'drawingRect') {
+    if (phase.tag === "drawingRect") {
       phase = { ...phase, cursor: snapPoint(worldPt) };
       repaint();
       return;
     }
 
-    if (phase.tag === 'drawingPoly') {
+    if (phase.tag === "drawingPoly") {
       phase = { ...phase, cursor: snapPoint(worldPt) };
       repaint();
       return;
     }
 
-    if (phase.tag === 'dragging') {
+    if (phase.tag === "dragging") {
       const rid = phase.selectedRoomId;
-      const room = flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === rid);
+      const room = flatRooms(activeFloorPlan(store.getState())).find(
+        (r) => r.id === rid,
+      );
       if (!room) return;
       // Cursor's target for the anchor vertex = worldPt + grabOffset
       // (grabOffset = anchor - grabPoint at pickup).
@@ -1821,21 +2116,23 @@ export function initEditorInteraction(
         [room.id],
       );
       const delta = vecSub(sn.point, room.polygon[0]);
-      store.dispatch({ type: 'moveRoom', roomId: room.id, delta });
+      store.dispatch({ type: "moveRoom", roomId: room.id, delta });
       repaint();
       return;
     }
 
-    if (phase.tag === 'resizing') {
+    if (phase.tag === "resizing") {
       const vid = phase.vertexIndex;
       const rid = phase.selectedRoomId;
-      const room = flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === rid);
+      const room = flatRooms(activeFloorPlan(store.getState())).find(
+        (r) => r.id === rid,
+      );
       if (!room) return;
       // Issue #53: route the dragged vertex through the SAME snap policy
       // as draw-time (snapPoint = foreign geometry, else 0.5 m grid), so
       // corner drags snap identically to how they were drawn.
       store.dispatch({
-        type: 'resizeRoom',
+        type: "resizeRoom",
         roomId: rid,
         vertexIndex: vid,
         newPos: snapPoint(worldPt, [rid]),
@@ -1850,22 +2147,28 @@ export function initEditorInteraction(
     // pkg 7.2: hover affordances read the ACTIVE floor.
     const view = activeFloorPlan(st);
     const selId = st.selectedId;
-    const selRoom = selId !== null ? flatRooms(view).find((r) => r.id === selId) : undefined;
-    if (tool === 'select' && selRoom) {
-      const handleIdx = resizeHandleAt(worldPt, selRoom, handleToleranceWorld());
+    const selRoom =
+      selId !== null ? flatRooms(view).find((r) => r.id === selId) : undefined;
+    if (tool === "select" && selRoom) {
+      const handleIdx = resizeHandleAt(
+        worldPt,
+        selRoom,
+        handleToleranceWorld(),
+      );
       if (handleIdx !== null) {
         hoverHandle = handleIdx;
-        canvas.style.cursor = classifyCorner(selRoom.polygon[handleIdx], selRoom) ?? 'default';
+        canvas.style.cursor =
+          classifyCorner(selRoom.polygon[handleIdx], selRoom) ?? "default";
       } else if (roomAt(worldPt, view)?.id === selId) {
         hoverHandle = null;
-        canvas.style.cursor = 'move';
+        canvas.style.cursor = "move";
       } else {
         hoverHandle = null;
-        canvas.style.cursor = 'default';
+        canvas.style.cursor = "default";
       }
     } else {
       hoverHandle = null;
-      canvas.style.cursor = '';
+      canvas.style.cursor = "";
     }
     const hit = roomAt(worldPt, view);
     const hid = hit?.id ?? null;
@@ -1879,7 +2182,7 @@ export function initEditorInteraction(
     dragOpening = null;
     resizingUnderlay = null; // pkg 12.1: pointercancel safety net
     store.endGesture();
-    phase = { tag: 'idle' };
+    phase = { tag: "idle" };
     repaint();
   }
 
@@ -1904,46 +2207,69 @@ export function initEditorInteraction(
         ghost = null;
         repaint();
       }
-      phase = { tag: 'idle' };
+      phase = { tag: "idle" };
       return;
     }
-    if (phase.tag === 'drawingRect' && ev.button === 0) {
+    if (phase.tag === "drawingRect" && ev.button === 0) {
       const worldPt = snapPoint(evWorld(ev));
       const minSide = Math.abs(worldPt[0] - phase.corner1[0]) * cam.scale;
       const minSideY = Math.abs(worldPt[1] - phase.corner1[1]) * cam.scale;
       if (Math.min(minSide, minSideY) < 2) {
         // Degenerate sliver — ignore rather than create a hairline room.
-        phase = { tag: 'idle' };
+        phase = { tag: "idle" };
         repaint();
         return;
       }
       const res = store.dispatch({
-        type: 'drawRoom',
+        type: "drawRoom",
         polygon: finalizeRectangle(phase.corner1, worldPt),
       });
       if (!res.ok) flashMessage(refs, res.error);
-      phase = { tag: 'idle' };
+      phase = { tag: "idle" };
       repaint();
       return;
     }
-    if (phase.tag === 'draggingFurniture') {
+    if (phase.tag === "draggingFurniture") {
       draggingFurnitureId = null;
       endDrag();
       return;
     }
-    if (phase.tag === 'dragging' || phase.tag === 'resizing' || phase.tag === 'panning') {
+    if (phase.tag === "dragging") {
+      // Pkg 12.3 (issue #101): releasing a room DRAG re-probes the
+      // pointer for wall proximity — the drag moved the geometry under
+      // the cursor, so the pre-drag segment address may be stale. The
+      // RELEASE point decides the inspector's wall-vs-room view.
+      if (tool === "select") {
+        const rid = phase.selectedRoomId;
+        const room = flatRooms(activeFloorPlan(store.getState())).find(
+          (r) => r.id === rid,
+        );
+        if (room) {
+          const nearSeg = nearestSegment(room, evWorld(ev));
+          setSelectedSegment(
+            nearSeg ? { roomId: room.id, segIndex: nearSeg.index } : null,
+          );
+        }
+      }
+      endDrag();
+      return;
+    }
+    if (phase.tag === "resizing" || phase.tag === "panning") {
       endDrag();
     }
   });
-  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 
   /* ---------- wheel zoom ---------- */
   canvas.addEventListener(
-    'wheel',
+    "wheel",
     (ev) => {
       ev.preventDefault();
       const factor = ev.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      const newScale = Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, cam.scale * factor));
+      const newScale = Math.min(
+        MAX_ZOOM_SCALE,
+        Math.max(MIN_ZOOM_SCALE, cam.scale * factor),
+      );
       const pos = evPos(ev);
       const worldUnderCursor = screenToWorld(cam, pos);
       cam.originX = worldUnderCursor[0] - pos[0] / newScale;
@@ -1955,8 +2281,8 @@ export function initEditorInteraction(
   );
 
   /* ---------- keyboard ---------- */
-  canvas.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && phase.tag === 'drawingPoly') {
+  canvas.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && phase.tag === "drawingPoly") {
       closePolygon();
       ev.preventDefault();
       return;
@@ -1970,6 +2296,14 @@ export function initEditorInteraction(
         repaint();
         return;
       }
+      // Pkg 12.3 (issue #101): when focus sits INSIDE the inspector
+      // panel, Esc collapses the panel — but never steals the key from
+      // an in-flight gesture (the canvas handlers below outrank the
+      // panel). The panel-scoped document handler in glue's inspector
+      // section covers the panel-focused case; reaching THIS handler
+      // means focus is on the canvas, so the panel never eats the
+      // drawing-Esc path (handler-order pitfall from the SUB_PLAN).
+      //
       // Abandoning an in-flight furniture drag MUST close the gesture,
       // else the leaked _gestureBase makes later atomic commands throw
       // ("non-streamable command inside gesture").
@@ -1991,7 +2325,7 @@ export function initEditorInteraction(
         repaint();
         return;
       }
-      phase = { tag: 'idle' };
+      phase = { tag: "idle" };
       repaint();
       return;
     }
@@ -2020,19 +2354,21 @@ export function initEditorInteraction(
       else store.undo();
       return;
     }
-    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'y' || ev.key === 'Y')) {
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "y" || ev.key === "Y")) {
       ev.preventDefault();
       store.redo();
       return;
     }
-    if ((ev.key === 'r' || ev.key === 'R') && !ev.ctrlKey && !ev.metaKey) {
+    if ((ev.key === "r" || ev.key === "R") && !ev.ctrlKey && !ev.metaKey) {
       const sel = store.getState().selectedId;
       if (sel === null) return;
-      const item = flatFurniture(activeFloorPlan(store.getState())).find((f) => f.id === sel);
+      const item = flatFurniture(activeFloorPlan(store.getState())).find(
+        (f) => f.id === sel,
+      );
       if (item) {
         ev.preventDefault();
         store.dispatch({
-          type: 'rotateFurniture',
+          type: "rotateFurniture",
           furnitureId: item.id,
           rotationDeg: nextRotation(item.rotationDeg),
         });
@@ -2041,7 +2377,12 @@ export function initEditorInteraction(
     }
     // Issue #68: "S" toggles the snap-settings popover. Registered in
     // shortcuts.ts (feeds the "?" help modal + README sync spec).
-    if ((ev.key === 's' || ev.key === 'S') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    if (
+      (ev.key === "s" || ev.key === "S") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
+    ) {
       const opening = refs.snapPopover.hidden === true;
       if (opening) syncSnapControls();
       setSnapPopoverOpen(opening);
@@ -2051,15 +2392,26 @@ export function initEditorInteraction(
     // pkg 8.1 (issue #83): "L" opens the wall-lean popover for the
     // SELECTED room (keyboard-first authoring — trackpad-only user).
     // Registered in shortcuts.ts (shortcut-sheet + README sync duty).
-    if ((ev.key === 'l' || ev.key === 'L') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    if (
+      (ev.key === "l" || ev.key === "L") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
+    ) {
       // Typing inside the popover's own inputs must not re-trigger.
       if (!refs.leanPopover.hidden) return;
       const sel = store.getState().selectedId;
-      const room = sel !== null
-        ? flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === sel)
-        : undefined;
+      const room =
+        sel !== null
+          ? flatRooms(activeFloorPlan(store.getState())).find(
+              (r) => r.id === sel,
+            )
+          : undefined;
       if (!room) {
-        flashMessage(refs, 'Select a room first, then press L to set a wall lean.');
+        flashMessage(
+          refs,
+          "Select a room first, then press L to set a wall lean.",
+        );
         return;
       }
       populateLeanPopover(room);
@@ -2071,15 +2423,41 @@ export function initEditorInteraction(
     // aliases (brackets need no Fn key — friendlier on laptops).
     // Registered in shortcuts.ts (shortcut-sheet duty).
     if (
-      (ev.key === 'PageUp' || ev.key === 'PageDown' || ev.key === '[' || ev.key === ']') &&
-      !ev.ctrlKey && !ev.metaKey && !ev.altKey
+      (ev.key === "PageUp" ||
+        ev.key === "PageDown" ||
+        ev.key === "[" ||
+        ev.key === "]") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
     ) {
-      const down = ev.key === 'PageDown' || ev.key === ']';
+      const down = ev.key === "PageDown" || ev.key === "]";
       switchFloor(down ? 1 : -1);
       ev.preventDefault();
       return;
     }
-    if ((ev.key === 'Backspace' || ev.key === 'Delete') && !ev.ctrlKey && !ev.metaKey) {
+    // Pkg 12.3 (issue #101): "I" toggles the inspector panel (canvas-
+    // focused stroke; the panel-scoped handler above covers focus
+    // inside the panel). Registered in shortcuts.ts (sheet duty).
+    // Mid-gesture 'I' is swallowed (same guard as the panel handler +
+    // popovers): opening the panel mid-draw would steal focus and strand
+    // Esc/Enter for the rest of the gesture.
+    if (
+      (ev.key === "i" || ev.key === "I") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
+    ) {
+      if (drawGestureInProgress()) return;
+      setInspectorOpen(!inspector!.isOpen());
+      ev.preventDefault();
+      return;
+    }
+    if (
+      (ev.key === "Backspace" || ev.key === "Delete") &&
+      !ev.ctrlKey &&
+      !ev.metaKey
+    ) {
       const sel = store.getState().selectedId;
       if (sel !== null) {
         ev.preventDefault();
@@ -2089,24 +2467,27 @@ export function initEditorInteraction(
   });
 
   function closePolygon(): void {
-    if (phase.tag !== 'drawingPoly') return;
+    if (phase.tag !== "drawingPoly") return;
     const pts = phase.points;
     if (pts.length < POLYGON_MIN_POINTS) {
-      flashMessage(refs, `Need at least ${POLYGON_MIN_POINTS} points to close a polygon`);
-      phase = { tag: 'idle' };
+      flashMessage(
+        refs,
+        `Need at least ${POLYGON_MIN_POINTS} points to close a polygon`,
+      );
+      phase = { tag: "idle" };
       repaint();
       return;
     }
-    const res = store.dispatch({ type: 'drawRoom', polygon: pts });
+    const res = store.dispatch({ type: "drawRoom", polygon: pts });
     if (!res.ok) {
       flashMessage(refs, res.error);
     }
-    phase = { tag: 'idle' };
+    phase = { tag: "idle" };
     repaint();
   }
 
-  canvas.addEventListener('dblclick', () => {
-    if (phase.tag === 'drawingPoly') closePolygon();
+  canvas.addEventListener("dblclick", () => {
+    if (phase.tag === "drawingPoly") closePolygon();
   });
 
   /* ---------- boot ---------- */
@@ -2119,7 +2500,10 @@ export function initEditorInteraction(
 }
 
 /** Hydrate the store from autosaved data (validated) or start clean. */
-export function hydrateFromAutosave(store: EditorStore, autosave: AutosaveManager): void {
+export function hydrateFromAutosave(
+  store: EditorStore,
+  autosave: AutosaveManager,
+): void {
   let hydrated: FloorplanData | null = null;
   const restored = autosave.loadStoredPlan((raw) => {
     // Migrate-at-the-door: the slot may hold a LEGACY v1 payload (older

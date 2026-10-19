@@ -2,9 +2,9 @@
  * Toolbar/status/badge/message DOM for the editor pane. Kept dumb:
  * buildUi returns refs; controller.ts wires behavior.
  */
-import { FURNITURE_DEFAULTS } from './model/constants';
-import { iconMarkup, type IconKey } from './icons';
-import { TOOL_HINTS } from './polish';
+import { FURNITURE_DEFAULTS } from "./model/constants";
+import { iconMarkup, type IconKey } from "./icons";
+import { TOOL_HINTS } from "./polish";
 
 export interface EditorDomRefs {
   toolbar: HTMLDivElement;
@@ -66,16 +66,19 @@ export interface EditorDomRefs {
   leanSlider: HTMLInputElement;
   leanValue: HTMLSpanElement;
   btnClearLean: HTMLButtonElement;
+  /* Pkg 12.3 (issue #101): inspector panel — toggle + dock. */
+  btnInspector: HTMLButtonElement;
+  inspectorDock: HTMLDivElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
-  const pane = document.createElement('section');
-  pane.className = 'pane pane-editor';
-  pane.dataset.screen = 'editor';
+  const pane = document.createElement("section");
+  pane.className = "pane pane-editor";
+  pane.dataset.screen = "editor";
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'editor-toolbar';
-  toolbar.setAttribute('role', 'toolbar');
+  const toolbar = document.createElement("div");
+  toolbar.className = "editor-toolbar";
+  toolbar.setAttribute("role", "toolbar");
 
   // Issue #54 (Pkg 3): buttons may carry an inline SVG icon. The icon is
   // APPENDED (aria-hidden) alongside a <span> holding the label, so the
@@ -86,12 +89,12 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     extraCls: string,
     icon?: IconKey,
   ): HTMLButtonElement => {
-    const b = document.createElement('button');
-    b.type = 'button';
+    const b = document.createElement("button");
+    b.type = "button";
     b.className = `editor-btn ${extraCls}`.trim();
     if (icon) b.innerHTML = iconMarkup(icon);
-    const span = document.createElement('span');
-    span.className = 'editor-btn-label';
+    const span = document.createElement("span");
+    span.className = "editor-btn-label";
     span.textContent = label;
     b.appendChild(span);
     return b;
@@ -102,7 +105,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const mkHintedBtn = (
     label: string,
     hintKey: string,
-    extraCls = '',
+    extraCls = "",
     icon?: IconKey,
   ): HTMLButtonElement => {
     const b = mkBtn(label, extraCls, icon);
@@ -116,103 +119,108 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     return b;
   };
 
-  const btnSelect = mkHintedBtn('Select', 'select', '', 'select');
-  const btnRect = mkHintedBtn('Rectangle', 'rectangle', '', 'rectangle');
-  const btnPoly = mkHintedBtn('Polygon', 'polygon', '', 'polygon');
+  const btnSelect = mkHintedBtn("Select", "select", "", "select");
+  const btnRect = mkHintedBtn("Rectangle", "rectangle", "", "rectangle");
+  const btnPoly = mkHintedBtn("Polygon", "polygon", "", "polygon");
 
   // pkg 3 (issue #4): opening + furniture tools.
-  const sep2 = document.createElement('span');
-  sep2.className = 'toolbar-sep';
-  const btnDoor = mkHintedBtn('Door', 'door', 'editor-door', 'door');
-  const btnWindow = mkHintedBtn('Window', 'window', 'editor-window', 'window');
-  const btnStamp = mkHintedBtn('Furnish', 'stamp', 'editor-stamp', 'furnish');
+  const sep2 = document.createElement("span");
+  sep2.className = "toolbar-sep";
+  const btnDoor = mkHintedBtn("Door", "door", "editor-door", "door");
+  const btnWindow = mkHintedBtn("Window", "window", "editor-window", "window");
+  const btnStamp = mkHintedBtn("Furnish", "stamp", "editor-stamp", "furnish");
 
   // Issue #66 (Pkg 1): two-point measure tool.
-  const btnMeasure = mkHintedBtn('Measure', 'measure', 'editor-measure', 'measure');
+  const btnMeasure = mkHintedBtn(
+    "Measure",
+    "measure",
+    "editor-measure",
+    "measure",
+  );
 
   // pkg 6 (issue #7): export + help buttons.
-  const sep3 = document.createElement('span');
-  sep3.className = 'toolbar-sep';
-  const btnExport = mkBtn('Export', 'editor-export', 'export');
-  btnExport.title = 'Download the plan as a PNG or JPEG image.';
+  const sep3 = document.createElement("span");
+  sep3.className = "toolbar-sep";
+  const btnExport = mkBtn("Export", "editor-export", "export");
+  btnExport.title = "Download the plan as a PNG or JPEG image.";
   btnExport.setAttribute(
-    'aria-label',
-    'Export — Download the plan as a PNG or JPEG image.',
+    "aria-label",
+    "Export — Download the plan as a PNG or JPEG image.",
   );
-  btnExport.setAttribute('data-testid', 'btn-export');
+  btnExport.setAttribute("data-testid", "btn-export");
 
   // pkg 10.1 (issue #91): share-link + JSON transfer trio. Plain
   // buttons beside Export — the mkBtn precedent keeps the accessible
   // name purely textual (Tab-reachable, getByRole-friendly; hints in
   // `title` only, never aria-label).
-  const btnShare = mkBtn('Share', 'editor-share');
-  btnShare.title = 'Copy a shareable link to this plan (works offline).';
-  btnShare.setAttribute('data-testid', 'btn-share');
-  const btnImport = mkBtn('Import', 'editor-import');
-  btnImport.title = 'Load a plan from an exported JSON file.';
-  btnImport.setAttribute('data-testid', 'btn-import');
-  const btnExportJson = mkBtn('Save JSON', 'editor-export-json');
-  btnExportJson.title = 'Download the plan as a JSON file.';
-  btnExportJson.setAttribute('data-testid', 'btn-export-json');
+  const btnShare = mkBtn("Share", "editor-share");
+  btnShare.title = "Copy a shareable link to this plan (works offline).";
+  btnShare.setAttribute("data-testid", "btn-share");
+  const btnImport = mkBtn("Import", "editor-import");
+  btnImport.title = "Load a plan from an exported JSON file.";
+  btnImport.setAttribute("data-testid", "btn-import");
+  const btnExportJson = mkBtn("Save JSON", "editor-export-json");
+  btnExportJson.title = "Download the plan as a JSON file.";
+  btnExportJson.setAttribute("data-testid", "btn-export-json");
 
   // Hidden file input backing Import: clicking the button forwards to
   // it (mouseless flows activate the same button via Enter/Space, so
   // the picker opens identically for keyboard users).
-  const importFileInput = document.createElement('input');
-  importFileInput.type = 'file';
-  importFileInput.accept = 'application/json,.json';
-  importFileInput.dataset.testid = 'import-file-input';
-  importFileInput.setAttribute('aria-hidden', 'true');
+  const importFileInput = document.createElement("input");
+  importFileInput.type = "file";
+  importFileInput.accept = "application/json,.json";
+  importFileInput.dataset.testid = "import-file-input";
+  importFileInput.setAttribute("aria-hidden", "true");
   importFileInput.tabIndex = -1;
   importFileInput.hidden = true;
 
-  const btnHelp = mkBtn('? Help', 'editor-help', 'help');
-  btnHelp.title = 'Keyboard shortcuts';
-  btnHelp.setAttribute('aria-label', 'Keyboard shortcuts');
-  btnHelp.setAttribute('data-testid', 'btn-help');
+  const btnHelp = mkBtn("? Help", "editor-help", "help");
+  btnHelp.title = "Keyboard shortcuts";
+  btnHelp.setAttribute("aria-label", "Keyboard shortcuts");
+  btnHelp.setAttribute("data-testid", "btn-help");
 
   // pkg 2 (issue #46): 2D navigation — center + zoom buttons. Hints live
   // in `title` only (an aria-label would replace the accessible name).
-  const sep4 = document.createElement('span');
-  sep4.className = 'toolbar-sep';
-  const btnCenter = mkBtn('Center', 'editor-center', 'center');
-  btnCenter.title = 'Fit the whole plan inside the viewport.';
-  btnCenter.setAttribute('data-testid', 'btn-center');
-  const btnZoomIn = mkBtn('Zoom in', 'editor-zoom-in', 'zoom-in');
-  btnZoomIn.title = 'Zoom in around the canvas centre.';
-  btnZoomIn.setAttribute('data-testid', 'btn-zoom-in');
-  const btnZoomOut = mkBtn('Zoom out', 'editor-zoom-out', 'zoom-out');
-  btnZoomOut.title = 'Zoom out around the canvas centre.';
-  btnZoomOut.setAttribute('data-testid', 'btn-zoom-out');
+  const sep4 = document.createElement("span");
+  sep4.className = "toolbar-sep";
+  const btnCenter = mkBtn("Center", "editor-center", "center");
+  btnCenter.title = "Fit the whole plan inside the viewport.";
+  btnCenter.setAttribute("data-testid", "btn-center");
+  const btnZoomIn = mkBtn("Zoom in", "editor-zoom-in", "zoom-in");
+  btnZoomIn.title = "Zoom in around the canvas centre.";
+  btnZoomIn.setAttribute("data-testid", "btn-zoom-in");
+  const btnZoomOut = mkBtn("Zoom out", "editor-zoom-out", "zoom-out");
+  btnZoomOut.title = "Zoom out around the canvas centre.";
+  btnZoomOut.setAttribute("data-testid", "btn-zoom-out");
 
-  const sep = document.createElement('span');
-  sep.className = 'toolbar-sep';
-  const btnUndo = mkBtn('Undo', 'editor-undo', 'undo');
-  const btnRedo = mkBtn('Redo', 'editor-redo', 'redo');
-  const btnDelete = mkBtn('Delete Selected', 'editor-delete', 'delete');
+  const sep = document.createElement("span");
+  sep.className = "toolbar-sep";
+  const btnUndo = mkBtn("Undo", "editor-undo", "undo");
+  const btnRedo = mkBtn("Redo", "editor-redo", "redo");
+  const btnDelete = mkBtn("Delete Selected", "editor-delete", "delete");
   btnDelete.disabled = true;
   btnUndo.disabled = true;
   btnRedo.disabled = true;
   // Issue #60: one "Dimensions" toggle gates wall length labels AND
   // room-area badges together (heartbeat of the measurement overlay).
-  const sep5 = document.createElement('span');
-  sep5.className = 'toolbar-sep';
-  const btnDimensions = mkBtn('Dimensions', 'editor-dimensions', 'dimensions');
-  btnDimensions.title = 'Show or hide wall lengths and room areas.';
-  btnDimensions.setAttribute('aria-pressed', 'true');
-  btnDimensions.setAttribute('data-testid', 'btn-dimensions');
+  const sep5 = document.createElement("span");
+  sep5.className = "toolbar-sep";
+  const btnDimensions = mkBtn("Dimensions", "editor-dimensions", "dimensions");
+  btnDimensions.title = "Show or hide wall lengths and room areas.";
+  btnDimensions.setAttribute("aria-pressed", "true");
+  btnDimensions.setAttribute("data-testid", "btn-dimensions");
   // Issue #68: snap settings (grid pitch + master switch).
-  const sep6 = document.createElement('span');
-  sep6.className = 'toolbar-sep';
-  const btnSnap = mkBtn('Snap', 'editor-snap', 'snap');
-  btnSnap.title = 'Grid pitch and snapping on/off.';
-  btnSnap.setAttribute('aria-expanded', 'false');
-  btnSnap.setAttribute('aria-haspopup', 'dialog');
-  btnSnap.setAttribute('data-testid', 'btn-snap');
+  const sep6 = document.createElement("span");
+  sep6.className = "toolbar-sep";
+  const btnSnap = mkBtn("Snap", "editor-snap", "snap");
+  btnSnap.title = "Grid pitch and snapping on/off.";
+  btnSnap.setAttribute("aria-expanded", "false");
+  btnSnap.setAttribute("aria-haspopup", "dialog");
+  btnSnap.setAttribute("data-testid", "btn-snap");
   // Issue #66: wipe-all for measure annotations, next to the toggle.
-  const btnClearMeasure = mkBtn('Clear measurements', 'editor-clear-measure');
-  btnClearMeasure.title = 'Remove every dimension annotation.';
-  btnClearMeasure.setAttribute('data-testid', 'btn-clear-measurements');
+  const btnClearMeasure = mkBtn("Clear measurements", "editor-clear-measure");
+  btnClearMeasure.title = "Remove every dimension annotation.";
+  btnClearMeasure.setAttribute("data-testid", "btn-clear-measurements");
 
   // pkg 12.1 (issue #99): blueprint underlay. Agreed insertion point vs
   // #101 — directly AFTER the Dimensions cluster, before the snap
@@ -240,22 +248,31 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // pkg 7.2 (issue #75): floor selector group — Prev / indicator+menu /
   // Next / Add. Fully mouseless: plain buttons, Tab-reachable, with
   // PageUp/PageDown + [ / ] keyboard aliases (glue.ts).
-  const sep7 = document.createElement('span');
-  sep7.className = 'toolbar-sep';
-  const btnPrevFloor = mkBtn('Previous floor', 'editor-prev-floor');
-  btnPrevFloor.title = 'Switch to the floor below (PageUp).';
-  btnPrevFloor.setAttribute('data-testid', 'btn-prev-floor');
-  const floorBadge = mkBtn('Ground · Level 1', 'editor-floor-badge');
-  floorBadge.title = 'Active floor. Click to rename or delete it.';
-  floorBadge.setAttribute('aria-expanded', 'false');
-  floorBadge.setAttribute('aria-haspopup', 'dialog');
-  floorBadge.setAttribute('data-testid', 'floor-badge');
-  const btnNextFloor = mkBtn('Next floor', 'editor-next-floor');
-  btnNextFloor.title = 'Switch to the floor above (PageDown).';
-  btnNextFloor.setAttribute('data-testid', 'btn-next-floor');
-  const btnAddFloor = mkBtn('Add floor', 'editor-add-floor');
-  btnAddFloor.title = 'Append a new floor above the current one.';
-  btnAddFloor.setAttribute('data-testid', 'btn-add-floor');
+  const sep7 = document.createElement("span");
+  sep7.className = "toolbar-sep";
+  const btnPrevFloor = mkBtn("Previous floor", "editor-prev-floor");
+  btnPrevFloor.title = "Switch to the floor below (PageUp).";
+  btnPrevFloor.setAttribute("data-testid", "btn-prev-floor");
+  const floorBadge = mkBtn("Ground · Level 1", "editor-floor-badge");
+  floorBadge.title = "Active floor. Click to rename or delete it.";
+  floorBadge.setAttribute("aria-expanded", "false");
+  floorBadge.setAttribute("aria-haspopup", "dialog");
+  floorBadge.setAttribute("data-testid", "floor-badge");
+  const btnNextFloor = mkBtn("Next floor", "editor-next-floor");
+  btnNextFloor.title = "Switch to the floor above (PageDown).";
+  btnNextFloor.setAttribute("data-testid", "btn-next-floor");
+  const btnAddFloor = mkBtn("Add floor", "editor-add-floor");
+  btnAddFloor.title = "Append a new floor above the current one.";
+  btnAddFloor.setAttribute("data-testid", "btn-add-floor");
+
+  // Pkg 12.3 (issue #101): Inspector toggle — deliberately LAST in the
+  // toolbar (agreed insertion point vs #99's Dimensions-cluster rows).
+  // The panel it toggles promotes the secret-shortcut flows (wall lean,
+  // opening dims) into a visible, keyboard-first surface.
+  const btnInspector = mkBtn("Inspector", "editor-inspector");
+  btnInspector.title = "Toggle the selection inspector panel (I).";
+  btnInspector.setAttribute("aria-pressed", "false");
+  btnInspector.setAttribute("data-testid", "btn-inspector");
 
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
@@ -265,6 +282,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
     btnClearMeasure, btnUnderlay, sep6, btnSnap,
     sep7, btnPrevFloor, floorBadge, btnNextFloor, btnAddFloor,
+    // #101 agreed insertion point: Inspector toggle LAST in the toolbar.
+    btnInspector,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -274,42 +293,48 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // absolutely positioned relative to the toolbar, closed on outside
   // click / Escape (listeners wired in glue.ts). Radio group for the
   // pitch + a master checkbox; #54 token palette styling.
-  const snapPopover = document.createElement('div');
-  snapPopover.className = 'snap-popover';
-  snapPopover.setAttribute('role', 'dialog');
-  snapPopover.setAttribute('aria-label', 'Snapping settings');
-  snapPopover.setAttribute('data-testid', 'snap-popover');
+  const snapPopover = document.createElement("div");
+  snapPopover.className = "snap-popover";
+  snapPopover.setAttribute("role", "dialog");
+  snapPopover.setAttribute("aria-label", "Snapping settings");
+  snapPopover.setAttribute("data-testid", "snap-popover");
   snapPopover.hidden = true;
 
-  const snapTitle = document.createElement('div');
-  snapTitle.className = 'snap-popover-title';
-  snapTitle.textContent = 'Snapping';
+  const snapTitle = document.createElement("div");
+  snapTitle.className = "snap-popover-title";
+  snapTitle.textContent = "Snapping";
   snapPopover.appendChild(snapTitle);
 
-  const pitchGroup = document.createElement('fieldset');
-  pitchGroup.className = 'snap-fieldset';
-  const pitchLegend = document.createElement('legend');
-  pitchLegend.textContent = 'Grid pitch (m)';
+  const pitchGroup = document.createElement("fieldset");
+  pitchGroup.className = "snap-fieldset";
+  const pitchLegend = document.createElement("legend");
+  pitchLegend.textContent = "Grid pitch (m)";
   pitchGroup.appendChild(pitchLegend);
   for (const value of [0.1, 0.25, 0.5, 1] as const) {
-    const label = document.createElement('label');
-    label.className = 'snap-radio';
-    const radio = document.createElement('input');
-    radio.type = 'radio';
-    radio.name = 'snap-pitch';
+    const label = document.createElement("label");
+    label.className = "snap-radio";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "snap-pitch";
     radio.value = String(value);
-    radio.dataset.testid = `snap-pitch-${String(value).replace('.', '-')}`;
-    label.append(radio, document.createTextNode(` ${value.toFixed(value < 1 ? 2 : 1)} m`));
+    radio.dataset.testid = `snap-pitch-${String(value).replace(".", "-")}`;
+    label.append(
+      radio,
+      document.createTextNode(` ${value.toFixed(value < 1 ? 2 : 1)} m`),
+    );
     pitchGroup.appendChild(label);
   }
   snapPopover.appendChild(pitchGroup);
 
-  const masterLabel = document.createElement('label');
-  masterLabel.className = 'snap-master';
-  const masterCheckbox = document.createElement('input');
-  masterCheckbox.type = 'checkbox';
-  masterCheckbox.dataset.testid = 'snap-master';
-  masterLabel.append(masterCheckbox, document.createTextNode(' Enable snapping'));
+  const masterLabel = document.createElement("label");
+  masterLabel.className = "snap-master";
+  const masterCheckbox = document.createElement("input");
+  masterCheckbox.type = "checkbox";
+  masterCheckbox.dataset.testid = "snap-master";
+  masterLabel.append(
+    masterCheckbox,
+    document.createTextNode(" Enable snapping"),
+  );
   snapPopover.appendChild(masterLabel);
 
   toolbar.appendChild(snapPopover);
@@ -317,39 +342,39 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // pkg 7.2 (issue #75): floor rename/delete popover — #68 snapPopover
   // precedent (visibility-toggled div, role=dialog, Escape/outside
   // close wired in glue.ts). Holds the rename form + delete button.
-  const floorPopover = document.createElement('div');
-  floorPopover.className = 'snap-popover floor-popover';
-  floorPopover.setAttribute('role', 'dialog');
-  floorPopover.setAttribute('aria-label', 'Floor settings');
-  floorPopover.setAttribute('data-testid', 'floor-popover');
+  const floorPopover = document.createElement("div");
+  floorPopover.className = "snap-popover floor-popover";
+  floorPopover.setAttribute("role", "dialog");
+  floorPopover.setAttribute("aria-label", "Floor settings");
+  floorPopover.setAttribute("data-testid", "floor-popover");
   floorPopover.hidden = true;
 
-  const floorTitle = document.createElement('div');
-  floorTitle.className = 'snap-popover-title';
-  floorTitle.textContent = 'Floor';
+  const floorTitle = document.createElement("div");
+  floorTitle.className = "snap-popover-title";
+  floorTitle.textContent = "Floor";
   floorPopover.appendChild(floorTitle);
 
-  const floorRenameForm = document.createElement('form');
-  floorRenameForm.className = 'floor-rename-form';
-  const floorRenameInput = document.createElement('input');
-  floorRenameInput.type = 'text';
-  floorRenameInput.name = 'floor-name';
-  floorRenameInput.dataset.testid = 'floor-rename-input';
-  floorRenameInput.setAttribute('aria-label', 'Floor name');
-  const renameSubmit = document.createElement('button');
-  renameSubmit.type = 'submit';
-  renameSubmit.className = 'editor-btn';
-  renameSubmit.textContent = 'Rename';
-  renameSubmit.setAttribute('data-testid', 'btn-rename-floor');
+  const floorRenameForm = document.createElement("form");
+  floorRenameForm.className = "floor-rename-form";
+  const floorRenameInput = document.createElement("input");
+  floorRenameInput.type = "text";
+  floorRenameInput.name = "floor-name";
+  floorRenameInput.dataset.testid = "floor-rename-input";
+  floorRenameInput.setAttribute("aria-label", "Floor name");
+  const renameSubmit = document.createElement("button");
+  renameSubmit.type = "submit";
+  renameSubmit.className = "editor-btn";
+  renameSubmit.textContent = "Rename";
+  renameSubmit.setAttribute("data-testid", "btn-rename-floor");
   floorRenameForm.append(floorRenameInput, renameSubmit);
   floorPopover.appendChild(floorRenameForm);
 
-  const btnDeleteFloor = document.createElement('button');
-  btnDeleteFloor.type = 'button';
-  btnDeleteFloor.className = 'editor-btn editor-delete-floor';
-  btnDeleteFloor.textContent = 'Delete floor';
-  btnDeleteFloor.title = 'Delete the active floor and its contents.';
-  btnDeleteFloor.setAttribute('data-testid', 'btn-delete-floor');
+  const btnDeleteFloor = document.createElement("button");
+  btnDeleteFloor.type = "button";
+  btnDeleteFloor.className = "editor-btn editor-delete-floor";
+  btnDeleteFloor.textContent = "Delete floor";
+  btnDeleteFloor.title = "Delete the active floor and its contents.";
+  btnDeleteFloor.setAttribute("data-testid", "btn-delete-floor");
   floorPopover.appendChild(btnDeleteFloor);
 
   toolbar.appendChild(floorPopover);
@@ -358,60 +383,60 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // toggled div, role=dialog, Escape/outside close in glue.ts). Populated
   // per selected room by glue.ts (one radio per wall segment + a degree
   // slider); fully keyboard-operable (radios + range input + form submit).
-  const leanPopover = document.createElement('div');
-  leanPopover.className = 'snap-popover lean-popover';
-  leanPopover.setAttribute('role', 'dialog');
-  leanPopover.setAttribute('aria-label', 'Wall lean (roof)');
-  leanPopover.setAttribute('data-testid', 'lean-popover');
+  const leanPopover = document.createElement("div");
+  leanPopover.className = "snap-popover lean-popover";
+  leanPopover.setAttribute("role", "dialog");
+  leanPopover.setAttribute("aria-label", "Wall lean (roof)");
+  leanPopover.setAttribute("data-testid", "lean-popover");
   leanPopover.hidden = true;
 
-  const leanTitle = document.createElement('div');
-  leanTitle.className = 'snap-popover-title';
-  leanTitle.textContent = 'Wall lean (roof)';
+  const leanTitle = document.createElement("div");
+  leanTitle.className = "snap-popover-title";
+  leanTitle.textContent = "Wall lean (roof)";
   leanPopover.appendChild(leanTitle);
 
-  const leanForm = document.createElement('form');
-  leanForm.className = 'lean-form';
+  const leanForm = document.createElement("form");
+  leanForm.className = "lean-form";
 
-  const leanSegFieldset = document.createElement('fieldset');
-  leanSegFieldset.className = 'snap-fieldset';
-  const leanLegend = document.createElement('legend');
-  leanLegend.textContent = 'Wall';
+  const leanSegFieldset = document.createElement("fieldset");
+  leanSegFieldset.className = "snap-fieldset";
+  const leanLegend = document.createElement("legend");
+  leanLegend.textContent = "Wall";
   leanSegFieldset.appendChild(leanLegend);
   leanForm.appendChild(leanSegFieldset);
 
-  const leanSliderLabel = document.createElement('label');
-  leanSliderLabel.className = 'snap-master';
-  const leanSlider = document.createElement('input');
-  leanSlider.type = 'range';
-  leanSlider.name = 'lean-deg';
-  leanSlider.min = '0';
-  leanSlider.max = '75';
-  leanSlider.step = '1';
-  leanSlider.value = '0';
-  leanSlider.dataset.testid = 'lean-slider';
-  leanSlider.setAttribute('aria-label', 'Lean degrees');
-  const leanValue = document.createElement('span');
-  leanValue.dataset.testid = 'lean-value';
-  leanValue.textContent = '0°';
+  const leanSliderLabel = document.createElement("label");
+  leanSliderLabel.className = "snap-master";
+  const leanSlider = document.createElement("input");
+  leanSlider.type = "range";
+  leanSlider.name = "lean-deg";
+  leanSlider.min = "0";
+  leanSlider.max = "75";
+  leanSlider.step = "1";
+  leanSlider.value = "0";
+  leanSlider.dataset.testid = "lean-slider";
+  leanSlider.setAttribute("aria-label", "Lean degrees");
+  const leanValue = document.createElement("span");
+  leanValue.dataset.testid = "lean-value";
+  leanValue.textContent = "0°";
   leanSliderLabel.append(leanSlider, leanValue);
   leanForm.appendChild(leanSliderLabel);
 
-  const leanApply = document.createElement('button');
-  leanApply.type = 'submit';
-  leanApply.className = 'editor-btn';
-  leanApply.textContent = 'Apply';
-  leanApply.setAttribute('data-testid', 'btn-apply-lean');
+  const leanApply = document.createElement("button");
+  leanApply.type = "submit";
+  leanApply.className = "editor-btn";
+  leanApply.textContent = "Apply";
+  leanApply.setAttribute("data-testid", "btn-apply-lean");
   leanForm.appendChild(leanApply);
 
   leanPopover.appendChild(leanForm);
 
-  const btnClearLean = document.createElement('button');
-  btnClearLean.type = 'button';
-  btnClearLean.className = 'editor-btn editor-clear-lean';
-  btnClearLean.textContent = 'Clear lean';
-  btnClearLean.title = 'Remove the lean from the selected wall.';
-  btnClearLean.setAttribute('data-testid', 'btn-clear-lean');
+  const btnClearLean = document.createElement("button");
+  btnClearLean.type = "button";
+  btnClearLean.className = "editor-btn editor-clear-lean";
+  btnClearLean.textContent = "Clear lean";
+  btnClearLean.title = "Remove the lean from the selected wall.";
+  btnClearLean.setAttribute("data-testid", "btn-clear-lean");
   leanPopover.appendChild(btnClearLean);
 
   toolbar.appendChild(leanPopover);
@@ -494,46 +519,54 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   toolbar.appendChild(underlayPopover);
 
   // Furniture palette (visible only while the Furnish tool is armed).
-  const palette = document.createElement('div');
-  palette.className = 'editor-palette';
+  const palette = document.createElement("div");
+  palette.className = "editor-palette";
   palette.hidden = true;
   for (const [type, def] of Object.entries(FURNITURE_DEFAULTS)) {
-    const chip = mkBtn(def.label, 'palette-chip');
+    const chip = mkBtn(def.label, "palette-chip");
     chip.dataset.stampType = type;
     palette.appendChild(chip);
   }
 
-  const canvasWrap = document.createElement('div');
-  canvasWrap.className = 'editor-canvas-wrap';
+  const canvasWrap = document.createElement("div");
+  canvasWrap.className = "editor-canvas-wrap";
 
-  const canvas = document.createElement('canvas');
-  canvas.className = 'editor-canvas';
+  const canvas = document.createElement("canvas");
+  canvas.className = "editor-canvas";
   canvas.tabIndex = 0;
-  canvas.setAttribute('aria-label', 'Floorplan canvas');
+  canvas.setAttribute("aria-label", "Floorplan canvas");
 
-  const badge = document.createElement('div');
-  badge.className = 'overlap-badge';
+  const badge = document.createElement("div");
+  badge.className = "overlap-badge";
   badge.hidden = true;
-  badge.textContent = '\u26a0\uFE0F Rooms overlap';
+  badge.textContent = "\u26a0\uFE0F Rooms overlap";
 
-  const msg = document.createElement('div');
-  msg.className = 'inline-msg';
+  const msg = document.createElement("div");
+  msg.className = "inline-msg";
   msg.hidden = true;
 
-  const statusBar = document.createElement('div');
-  statusBar.className = 'editor-statusbar';
-  const status = document.createElement('span');
-  status.className = 'editor-status';
-  const statusTotal = document.createElement('span');
-  statusTotal.className = 'editor-status-total';
-  statusTotal.setAttribute('data-testid', 'status-total');
-  statusTotal.textContent = 'Total: 0.0 m\u00B2';
+  const statusBar = document.createElement("div");
+  statusBar.className = "editor-statusbar";
+  const status = document.createElement("span");
+  status.className = "editor-status";
+  const statusTotal = document.createElement("span");
+  statusTotal.className = "editor-status-total";
+  statusTotal.setAttribute("data-testid", "status-total");
+  statusTotal.textContent = "Total: 0.0 m\u00B2";
   statusBar.append(status, statusTotal);
 
+  // Pkg 12.3 (issue #101): inspector dock — a flex ROW wrapping the
+  // canvas wrapper with the panel mount as a SIBLING. The canvas sizes
+  // from its wrapper's box (ResizeObserver in glue.ts), so docking the
+  // panel narrows the wrapper AUTOMATICALLY: zero sizing-math edits.
+  const inspectorDock = document.createElement("div");
+  inspectorDock.className = "editor-main-area";
+
   canvasWrap.append(canvas, badge, msg);
+  inspectorDock.append(canvasWrap);
   // The hidden import input must live IN the document for .click() to
   // summon the file picker; `hidden` keeps it out of layout + a11y tree.
-  pane.append(toolbar, palette, canvasWrap, statusBar, importFileInput, underlayFileInput);
+  pane.append(toolbar, palette, inspectorDock, statusBar, importFileInput, underlayFileInput);
   parent.appendChild(pane);
 
   return {
@@ -550,11 +583,16 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnPrevFloor, btnNextFloor, btnAddFloor, floorBadge,
     floorPopover, floorRenameForm, floorRenameInput, btnDeleteFloor,
     leanPopover, leanForm, leanSegFieldset, leanSlider, leanValue, btnClearLean,
+    btnInspector, inspectorDock,
   };
 }
 
 /** Show an ephemeral inline message (auto-clears after ms). */
-export function flashMessage(refs: EditorDomRefs, text: string, ttlMs = 3200): void {
+export function flashMessage(
+  refs: EditorDomRefs,
+  text: string,
+  ttlMs = 3200,
+): void {
   refs.msg.textContent = text;
   refs.msg.hidden = false;
   window.setTimeout(() => {

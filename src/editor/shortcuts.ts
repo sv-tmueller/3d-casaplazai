@@ -23,12 +23,41 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'Ctrl+Shift+Z', action: 'Redo', surface: 'editor' },
   { keys: 'Ctrl+Y', action: 'Redo', surface: 'editor' },
   { keys: 'R', action: 'Rotate selected furniture 90°', surface: 'editor' },
-  { keys: 'S', action: 'Toggle the Snapping settings popover', surface: 'editor' },
-  { keys: 'L', action: 'Set the selected room\u2019s wall lean (roof)', surface: 'editor' },
-  { keys: 'PageUp / [', action: 'Switch to the floor below', surface: 'editor' },
-  { keys: 'PageDown / ]', action: 'Switch to the floor above', surface: 'editor' },
-  { keys: 'Del / Backspace', action: 'Delete selected room, opening, or furniture', surface: 'editor' },
-  { keys: 'Alt+Drag / Middle-Drag', action: 'Pan the canvas', surface: 'editor' },
+  {
+    keys: 'S',
+    action: 'Toggle the Snapping settings popover',
+    surface: 'editor',
+  },
+  {
+    keys: 'L',
+    action: 'Set the selected room\u2019s wall lean (roof)',
+    surface: 'editor',
+  },
+  {
+    keys: 'I',
+    action: 'Toggle the selection inspector panel',
+    surface: 'editor',
+  },
+  {
+    keys: 'PageUp / [',
+    action: 'Switch to the floor below',
+    surface: 'editor',
+  },
+  {
+    keys: 'PageDown / ]',
+    action: 'Switch to the floor above',
+    surface: 'editor',
+  },
+  {
+    keys: 'Del / Backspace',
+    action: 'Delete selected room, opening, or furniture',
+    surface: 'editor',
+  },
+  {
+    keys: 'Alt+Drag / Middle-Drag',
+    action: 'Pan the canvas',
+    surface: 'editor',
+  },
   { keys: 'Wheel', action: 'Zoom at cursor', surface: 'editor' },
 ];
 
