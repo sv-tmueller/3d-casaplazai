@@ -2476,9 +2476,14 @@ export function initEditorInteraction(
       marquee = null;
       if (band.engaged) {
         multiSelected = marqueeMembers(band.start, band.cur);
+      } else {
+        // Plain empty-space click: today's deselect, extended — an
+        // armed multi-set dissolves too (clicking blank canvas is the
+        // conventional dismissal; Escape is the keyboard equivalent).
+        multiSelected.clear();
         refreshInspector();
-        repaint();
       }
+      repaint();
       return;
     }
     // pkg 12.1 (issue #99): release an in-flight underlay corner
