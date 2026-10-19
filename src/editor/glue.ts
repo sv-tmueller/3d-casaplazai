@@ -55,6 +55,7 @@ import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measur
 import { paintAngleReadouts } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
+import { encodeShare } from '../shared/shareLink';
 import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
@@ -743,6 +744,140 @@ export function initEditorInteraction(
   }
   refs.btnExport.addEventListener('click', () => {
     void runExportFlow();
+  });
+
+  /* ---------- pkg 10.1 (issue #91): share link + JSON transfer ---------- */
+
+  /**
+   * Copy text with a graceful degradation ladder: async Clipboard API
+   * first, then the legacy textarea/select/execCommand path (deprecated
+   * but the accepted fallback for non-secure/insecure contexts).
+   * Returns false when BOTH rungs fail — callers flash, never throw.
+   */
+  async function copyToClipboard(text: string): Promise<boolean> {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        /* fall through to the legacy rung */
+      }
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      // Position off-screen but NOT display:none — detached/hidden
+      // editors are excluded from some browsers' copy paths.
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  refs.btnShare.addEventListener('click', () => {
+    void (async () => {
+      // Feature-detect AT THE BUTTON (codec stays native-only by
+      // design): browsers lacking CompressionStream get a clear
+      // message instead of a half-encoded link.
+      if (typeof CompressionStream === 'undefined') {
+        flashMessage(refs, 'Sharing is unavailable in this browser.');
+        return;
+      }
+      let out: Awaited<ReturnType<typeof encodeShare>>;
+      try {
+        out = await encodeShare(store.getState().data);
+      } catch (err) {
+        flashMessage(refs, (err as Error).message);
+        return;
+      }
+      // Fragments never hit servers: the plan rides in location.hash.
+      const url = `${location.origin}${location.pathname}#plan=${out.fragment}`;
+      const copied = await copyToClipboard(url);
+      if (!copied) {
+        flashMessage(refs, 'Could not copy — clipboard unavailable.');
+        return;
+      }
+      if (out.warning) {
+        flashMessage(
+          refs,
+          `Link copied (${out.warning.length.toLocaleString()} chars — some chats may truncate it).`,
+          5000,
+        );
+      } else {
+        flashMessage(refs, 'Share link copied to clipboard.');
+      }
+    })();
+  });
+
+  refs.btnExportJson.addEventListener('click', () => {
+    // Symmetric counterpart to Import: pretty-printed JSON of the live
+    // store, downloaded through the same Blob dance as export.ts.
+    const blob = new Blob(
+      [JSON.stringify(store.getState().data, null, 2)],
+      { type: 'application/json' },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `floorplan-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
+    flashMessage(refs, 'Plan exported as JSON.');
+  });
+
+  const importFileInputEl = refs.importFileInput;
+  refs.btnImport.addEventListener('click', () => {
+    importFileInputEl.value = ''; // re-picking the same file must re-fire change
+    importFileInputEl.click();
+  });
+
+  importFileInputEl.addEventListener('change', () => {
+    const file = importFileInputEl.files?.[0];
+    if (!file) return;
+    void (async () => {
+      let text: string;
+      try {
+        text = await file.text();
+      } catch {
+        flashMessage(refs, 'Could not read the selected file.');
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        flashMessage(refs, 'Not a valid JSON file.');
+        return;
+      }
+      // migrate + validate DIRECTLY (NOT normalizeIncoming — it silently
+      // falls back to emptyPlan, which would wipe the user's work on a
+      // typo'd import). Failure leaves the store untouched.
+      const migrated = migrate(parsed);
+      if (!migrated.ok || !migrated.data) {
+        flashMessage(refs, 'Import failed: unsupported schema version.');
+        return;
+      }
+      const validated = validateFloorplan(migrated.data);
+      if (!validated.ok) {
+        flashMessage(refs, `Import failed: ${validated.errors[0].message}`);
+        return;
+      }
+      // Success: the loadPlan sequence from editor/main.ts — swap the
+      // plan, then persist synchronously so a reload keeps it.
+      store.replaceAll(validated.value);
+      autosave.stop();
+      autosave.persistSync(validated.value);
+      flashMessage(refs, `Imported “${file.name}”.`);
+    })();
   });
 
   refs.btnHelp.addEventListener('click', () => toggleHelpModal());
