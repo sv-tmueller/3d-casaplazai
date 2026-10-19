@@ -169,3 +169,47 @@ describe('loader path 1 — editor autosave hydration (glue.hydrateFromAutosave)
     expect(storage.getItem(AUTOSAVE_KEY)).toBeNull();
   });
 });
+
+describe('validateFloorplan — plan-wide entity id namespace (issue #74)', () => {
+  const twoFloorBase = () => ({
+    schemaVersion: 2,
+    units: 'meters',
+    wallHeight: 2.7,
+    wallThickness: 0.24,
+    floors: [
+      {
+        id: 'floor-0', name: 'Ground', elevation: 0,
+        rooms: [{
+          id: 'room-x', name: 'A', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]],
+          floorTexture: null,
+        }],
+        openings: [],
+        furniture: [],
+      },
+      {
+        id: 'floor-1', name: 'Upper', elevation: 3,
+        rooms: [{
+          id: 'room-y', name: 'B', polygon: [[0, 0], [4, 0], [4, 3], [0, 3]],
+          floorTexture: null,
+        }],
+        openings: [],
+        furniture: [],
+      },
+    ],
+    stairs: [],
+  });
+
+  it('rejects the same room id appearing on two different floors', () => {
+    const plan = twoFloorBase() as unknown as Record<string, unknown>;
+    const floors = plan.floors as Array<{ rooms: Array<{ id: string }> }>;
+    floors[1].rooms[0].id = 'room-x'; // duplicate across floors
+    const result = validateFloorplan(plan);
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.errors.some((e) =>
+      e.code === 'duplicate-id')).toBe(true);
+  });
+
+  it('accepts distinct ids across floors', () => {
+    expect(validateFloorplan(twoFloorBase()).ok).toBe(true);
+  });
+});

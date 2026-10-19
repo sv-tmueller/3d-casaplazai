@@ -142,8 +142,11 @@ function parseRooms(
   raw: unknown,
   basePath: string,
   c: Collector,
+  /** Shared plan-wide id namespace (issue #74): entity ids are unique
+   * across the WHOLE plan, so callers pass one Set walked floor by floor. */
+  roomIds: Set<string>,
 ): ParsedEntities {
-  const entities: ParsedEntities = { roomIds: new Set(), segLens: new Map() };
+  const entities: ParsedEntities = { roomIds, segLens: new Map() };
   if (!Array.isArray(raw)) {
     c.add(basePath, 'missing-array', `"${basePath}" must be an array`);
     return entities;
@@ -335,7 +338,7 @@ export function validateFloorplan(json: unknown): ValidationResult<FloorplanData
       }
       if (isNum(fl?.elevation)) prevElevation = fl.elevation;
 
-      const ents = parseRooms(fl?.rooms, `${bp}.rooms`, c);
+      const ents = parseRooms(fl?.rooms, `${bp}.rooms`, c, idNamespace);
       parseOpenings(fl?.openings, `${bp}.openings`, ents, c);
       parseFurniture(fl?.furniture, `${bp}.furniture`, ents, c);
     });
