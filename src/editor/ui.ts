@@ -29,6 +29,8 @@ export interface EditorDomRefs {
   btnZoomIn: HTMLButtonElement;
   btnZoomOut: HTMLButtonElement;
   btnDimensions: HTMLButtonElement;
+  btnSnap: HTMLButtonElement;
+  snapPopover: HTMLDivElement;
   btnAddMeasure: HTMLButtonElement;
   btnClearMeasure: HTMLButtonElement;
 }
@@ -140,6 +142,14 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnDimensions.title = 'Show or hide wall lengths and room areas.';
   btnDimensions.setAttribute('aria-pressed', 'true');
   btnDimensions.setAttribute('data-testid', 'btn-dimensions');
+  // Issue #68: snap settings (grid pitch + master switch).
+  const sep6 = document.createElement('span');
+  sep6.className = 'toolbar-sep';
+  const btnSnap = mkBtn('Snap', 'editor-snap', 'snap');
+  btnSnap.title = 'Grid pitch and snapping on/off.';
+  btnSnap.setAttribute('aria-expanded', 'false');
+  btnSnap.setAttribute('aria-haspopup', 'dialog');
+  btnSnap.setAttribute('data-testid', 'btn-snap');
   // Issue #66: wipe-all for measure annotations, next to the toggle.
   const btnClearMeasure = mkBtn('Clear measurements', 'editor-clear-measure');
   btnClearMeasure.title = 'Remove every dimension annotation.';
@@ -149,10 +159,55 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnMeasure, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
-    btnClearMeasure,
+    btnClearMeasure, sep6, btnSnap,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
+
+  // Issue #68: snap-settings popover — the first popover in the
+  // codebase, kept deliberately dumb: a visibility-toggled div
+  // absolutely positioned relative to the toolbar, closed on outside
+  // click / Escape (listeners wired in glue.ts). Radio group for the
+  // pitch + a master checkbox; #54 token palette styling.
+  const snapPopover = document.createElement('div');
+  snapPopover.className = 'snap-popover';
+  snapPopover.setAttribute('role', 'dialog');
+  snapPopover.setAttribute('aria-label', 'Snapping settings');
+  snapPopover.setAttribute('data-testid', 'snap-popover');
+  snapPopover.hidden = true;
+
+  const snapTitle = document.createElement('div');
+  snapTitle.className = 'snap-popover-title';
+  snapTitle.textContent = 'Snapping';
+  snapPopover.appendChild(snapTitle);
+
+  const pitchGroup = document.createElement('fieldset');
+  pitchGroup.className = 'snap-fieldset';
+  const pitchLegend = document.createElement('legend');
+  pitchLegend.textContent = 'Grid pitch (m)';
+  pitchGroup.appendChild(pitchLegend);
+  for (const value of [0.1, 0.25, 0.5, 1] as const) {
+    const label = document.createElement('label');
+    label.className = 'snap-radio';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'snap-pitch';
+    radio.value = String(value);
+    radio.dataset.testid = `snap-pitch-${String(value).replace('.', '-')}`;
+    label.append(radio, document.createTextNode(` ${value.toFixed(value < 1 ? 2 : 1)} m`));
+    pitchGroup.appendChild(label);
+  }
+  snapPopover.appendChild(pitchGroup);
+
+  const masterLabel = document.createElement('label');
+  masterLabel.className = 'snap-master';
+  const masterCheckbox = document.createElement('input');
+  masterCheckbox.type = 'checkbox';
+  masterCheckbox.dataset.testid = 'snap-master';
+  masterLabel.append(masterCheckbox, document.createTextNode(' Enable snapping'));
+  snapPopover.appendChild(masterLabel);
+
+  toolbar.appendChild(snapPopover);
 
   // Furniture palette (visible only while the Furnish tool is armed).
   const palette = document.createElement('div');
@@ -199,7 +254,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     toolbar, canvas, badge, msg, status, statusTotal,
     btnExport, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
-    btnDimensions, btnAddMeasure: btnMeasure, btnClearMeasure,
+    btnDimensions, btnSnap, snapPopover,
+    btnAddMeasure: btnMeasure, btnClearMeasure,
     btnUndo, btnRedo, btnDelete,
     btnCenter, btnZoomIn, btnZoomOut,
   };

@@ -24,6 +24,7 @@ export type IconKey =
   | 'zoom-in'
   | 'zoom-out'
   | 'dimensions'
+  | 'snap'
   | 'measure';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
@@ -60,6 +61,8 @@ export const ICONS: Record<IconKey, string> = {
   'zoom-out': `<circle ${S} cx="11" cy="11" r="6"/><path ${S} d="M15.5 15.5L20 20"/><path ${S} d="M8.5 11h5"/>`,
   // Dimensions: ruler with tick marks (issue #60).
   dimensions: `<rect ${S} x="3" y="8" width="18" height="8" rx="1"/><path ${S} d="M7 8v3M11 8v4M15 8v3M19 8v4"/>`,
+  // Snap: magnet over a dotted lattice (issue #68).
+  snap: `<path ${S} d="M6 4v5a6 6 0 0 0 12 0V4"/><path ${S} d="M6 4h4M14 4h4"/><path ${S} d="M3 20h2M9 20h2M15 20h2M21 20h2M6 20h.01M12 20h.01M18 20h.01" stroke-width="1.3"/>`,
   // Measure: diagonal dimension with endpoint dots + tick marks (#66).
   measure: `<path ${S} d="M5 19L19 5"/><circle cx="5" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="5" r="1.5" fill="currentColor" stroke="none"/><path ${S} d="M9.5 12l2.5 2.5M12.5 9l2.5 2.5"/>`,
 };

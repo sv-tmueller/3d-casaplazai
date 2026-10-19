@@ -28,7 +28,6 @@ import {
   validateOpeningCandidate,
   type SegmentInfo,
 } from './model/openings';
-export const GRID_M = 0.5; // meter grid pitch
 export const SNAP_TOL_PX = 8;
 /**
  * Issue #53: grab tolerance for a resize handle, in SCREEN pixels.
