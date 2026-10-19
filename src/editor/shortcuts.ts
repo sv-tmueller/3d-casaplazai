@@ -39,6 +39,11 @@ export const SHORTCUTS: ShortcutEntry[] = [
     surface: 'editor',
   },
   {
+    keys: '3',
+    action: 'Toggle the 3D inset preview',
+    surface: 'editor',
+  },
+  {
     keys: 'PageUp / [',
     action: 'Switch to the floor below',
     surface: 'editor',

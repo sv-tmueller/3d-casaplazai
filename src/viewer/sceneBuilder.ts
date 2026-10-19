@@ -241,10 +241,17 @@ void main() {
  * Assemble the full static scene from an adapted scene. Every populated
  * slot becomes ONE merged mesh; lights ride in their own group so a
  * rebuild disposes geometry/materials/light targets atomically.
+ *
+ * Pkg 13.1 (issue #109) ADDITIVE param: `forceLowMaterials` overrides
+ * the URL-derived material tier DOWN to LOW (flattened colors) without
+ * touching the caller's quality level — the editor's mini-3D inset pays
+ * texture-setup costs neither in CPU nor VRAM. Absent/default false ⇒
+ * the viewer's behavior is BYTE-IDENTICAL (tier still isHighQuality()).
  */
 export function buildViewerScene(
   adapted: AdaptedScene,
   quality: QualityLevel = 'high',
+  forceLowMaterials = false,
 ): BuiltScene {
   const tStart = performance.now();
 
@@ -280,7 +287,8 @@ export function buildViewerScene(
 
   // Quality knob (#87): read ONCE per build — every bucket shares the
   // same tier so a scene never mixes textured and flattened slots.
-  const hiQuality = isHighQuality();
+  // #109: the inset's force-low override wins over the URL tier.
+  const hiQuality = forceLowMaterials ? false : isHighQuality();
 
   for (const bucket of adapted.buckets) {
     const geo = bucketGeometry(bucket.positions, bucket.indices);
