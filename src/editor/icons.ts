@@ -22,7 +22,8 @@ export type IconKey =
   | 'help'
   | 'center'
   | 'zoom-in'
-  | 'zoom-out';
+  | 'zoom-out'
+  | 'dimensions';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
 
@@ -56,6 +57,8 @@ export const ICONS: Record<IconKey, string> = {
   'zoom-in': `<circle ${S} cx="11" cy="11" r="6"/><path ${S} d="M15.5 15.5L20 20"/><path ${S} d="M8.5 11h5M11 8.5v5"/>`,
   // Zoom out: magnifier + minus.
   'zoom-out': `<circle ${S} cx="11" cy="11" r="6"/><path ${S} d="M15.5 15.5L20 20"/><path ${S} d="M8.5 11h5"/>`,
+  // Dimensions: ruler with tick marks (issue #60).
+  dimensions: `<rect ${S} x="3" y="8" width="18" height="8" rx="1"/><path ${S} d="M7 8v3M11 8v4M15 8v3M19 8v4"/>`,
 };
 
 /** Full `<svg>` markup for an icon; `aria-hidden` keeps names text-only. */

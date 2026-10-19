@@ -28,6 +28,7 @@ export interface EditorDomRefs {
   btnCenter: HTMLButtonElement;
   btnZoomIn: HTMLButtonElement;
   btnZoomOut: HTMLButtonElement;
+  btnDimensions: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -126,10 +127,18 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnDelete.disabled = true;
   btnUndo.disabled = true;
   btnRedo.disabled = true;
+  // Issue #60: one "Dimensions" toggle gates wall length labels AND
+  // room-area badges together (heartbeat of the measurement overlay).
+  const sep5 = document.createElement('span');
+  sep5.className = 'toolbar-sep';
+  const btnDimensions = mkBtn('Dimensions', 'editor-dimensions', 'dimensions');
+  btnDimensions.title = 'Show or hide wall lengths and room areas.';
+  btnDimensions.setAttribute('aria-pressed', 'true');
+  btnDimensions.setAttribute('data-testid', 'btn-dimensions');
   [
     btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
-    sep4, btnCenter, btnZoomIn, btnZoomOut,
+    sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -179,6 +188,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     toolbar, canvas, badge, msg, status, statusTotal,
     btnExport, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
+    btnDimensions,
     btnUndo, btnRedo, btnDelete,
     btnCenter, btnZoomIn, btnZoomOut,
   };
