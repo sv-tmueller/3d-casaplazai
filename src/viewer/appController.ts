@@ -9,7 +9,15 @@
  * dispose chain (renderer → scene graph → HUD → listeners → timers).
  */
 
-import { PerspectiveCamera, Vector3, WebGLRenderer, type Camera } from 'three';
+import {
+  PerspectiveCamera,
+  Raycaster,
+  Vector3,
+  WebGLRenderer,
+  type Camera,
+  type Mesh,
+  type MeshStandardMaterial,
+} from 'three';
 
 import { compilePlan, parseValidatedPlan } from '../geom';
 import type { FloorplanData, Room } from '../shared/schema';
@@ -18,10 +26,12 @@ import { adaptScene, sceneHasNaN } from './adapter';
 import {
   buildHud,
   destroyHud,
+  onBindRoofToggle,
   onBindToggle,
   PerfOverlay,
   playFade,
   reflectMode,
+  reflectRoofVisibility,
   setWalkAffordances,
   showHint,
   toast,
@@ -30,6 +40,12 @@ import {
 import { OrbitRig } from './orbitMode';
 import { setMaxAnisotropy } from './materials';
 import { isHighQuality } from './quality';
+import {
+  ROOFS_FADE_MIN_OPACITY,
+  ROOFS_FADE_RATE_PER_S,
+  ROOFS_RAYCAST_FAR_M,
+  ROOFS_RAYCAST_INTERVAL_TICKS,
+} from './renderConstants';
 import { solveSpawn, SpawnFailureError } from './spawn';
 import {
   buildViewerScene,
@@ -43,7 +59,7 @@ import {
   type CameraRig,
   type ViewMode,
 } from './types';
-import { WalkRig } from './walkMode';
+import { fadeStepOpacity, isIndoorFromRay, WalkRig } from './walkMode';
 
 /** Shape of the pkg-2 bridge hung off window.__casaplaza. */
 export interface DataBridge {
@@ -107,8 +123,30 @@ export class ViewerApp {
   private hud!: HudHandles;
   private perf: PerfOverlay;
   private unbindToggle: (() => void) | null = null;
-  /** Quality tier resolved at boot (#87) — surfaces in __viewerStats. */
+
+  /**
+   * Quality tier resolved at boot (#87's quality.ts — absorbed #86's
+   * inline parse per the batch-#85 arbitration); surfaces in
+   * __viewerStats. HIGH default, hostile values fail open to HIGH.
+   */
   private readonly hiQuality: boolean;
+  private unbindRoofToggle: (() => void) | null = null;
+
+  /** Manual roof-visibility state (HUD toggle, issue #86). */
+  private roofsShown = true;
+
+  /**
+   * Autofade machinery (issue #86): upward-eye-ray raycaster against
+   * roof-slot meshes only, throttled to every Nth tick. Opacity tweens
+   * on the roof material; `transparent` is flipped on ONLY while an
+   * actual fade is in flight (restored to false at the extremes so the
+   * opaque fast path keeps its draw order).
+   */
+  private readonly roofRaycaster = new Raycaster();
+  private roofFadeState: 'shown' | 'fading' | 'hidden' = 'shown';
+  private tickCounter = 0;
+  /** Cached indoor verdict between throttled raycasts. */
+  private indoor = false;
 
   private phase: Phase = 'overview';
   private rig: CameraRig | null = null;
@@ -139,10 +177,9 @@ export class ViewerApp {
     this.bridgeSupplier = opts.bridge;
     this.scheduleTick = opts.scheduleTick ?? defaultSchedule;
     this.setTimeoutFn = opts.setTimeoutFn ?? window.setTimeout.bind(window);
+    // Absorb #86's inline parse into #87's shared resolver (batch-#85
+    // arbitration): one owner of the ?quality param. Boot-time state.
     this.perf = new PerfOverlay(isPerfEnabled());
-    // Resolve the quality tier ONCE at construction (#87) — the URL
-    // param is boot-time state; sceneBuilder independently re-reads it
-    // per build, but the STATS probe reports this boot-time value.
     this.hiQuality = isHighQuality();
   }
 
@@ -163,6 +200,14 @@ export class ViewerApp {
       () => (this.phase === 'walk' ? 'walk' : 'overview'),
       (next) => this.requestMode(next),
     );
+    // Roof visibility toggle (issue #86): flips every roof-slot mesh;
+    // reflection keeps the button label/aria in step with reality.
+    this.unbindRoofToggle = onBindRoofToggle(
+      this.hud,
+      () => this.roofsShown,
+      (visible) => this.setRoofsVisible(visible),
+    );
+    reflectRoofVisibility(this.hud, this.roofsShown);
 
     // Tab toggles overview ⇄ walk (README-promised; formerly unwired —
     // the e2e descended vacuously). Skipped while typing in form fields.
@@ -269,6 +314,15 @@ export class ViewerApp {
       this.orbitCam = this.makeOrbitRig(adapted);
       this.rig = this.orbitCam;
       this.phase = 'overview';
+      // Exiting walk lifts any autofade: overview spectators always see
+      // the roofs at full opacity (manual-hide via the HUD still works).
+      for (const mesh of this.roofMeshes()) {
+        const mat = mesh.material as MeshStandardMaterial;
+        mat.opacity = 1;
+        mat.transparent = false;
+      }
+      this.roofFadeState = 'shown';
+      this.indoor = false;
       showHint(this.hud, '');
       // Leaving walk clears both affordances (toggling out is not an
       // unlock event, so the pointerlockchange path cannot cover it).
@@ -403,7 +457,9 @@ export class ViewerApp {
       this.preservedAzimuth = this.orbitCam.azimuthDegrees;
     }
 
-    const rebuilt = buildViewerScene(adapted);
+    // Quality as #87's boolean resolver → the builder's level union
+    // (absorbed inline parse, batch-#85 arbitration).
+    const rebuilt = buildViewerScene(adapted, this.hiQuality ? 'high' : 'low');
     paintSky(rebuilt.scene);
 
     if (this.sceneRoot) {
@@ -449,6 +505,97 @@ export class ViewerApp {
     this.rig = rig;
   }
 
+  /* --------------------- roof affordances (issue #86) ---------------------- */
+
+  /** Roof-slot meshes of the live scene (usually 0–1 merged meshes). */
+  private roofMeshes(): Mesh[] {
+    const roots = this.sceneRoot?.meshes ?? [];
+    return roots.filter((m) => m.userData.slot === 'roof');
+  }
+
+  /**
+   * HUD toggle handler: flip visibility on every roof-slot mesh. While
+   * HIDDEN the autofade driver stays parked (manual intent wins until
+   * reversed); re-showing restores full opacity immediately.
+   */
+  private setRoofsVisible(visible: boolean): void {
+    this.roofsShown = visible;
+    reflectRoofVisibility(this.hud, visible);
+    for (const mesh of this.roofMeshes()) {
+      mesh.visible = visible;
+      const mat = mesh.material as MeshStandardMaterial;
+      if (visible) {
+        mat.opacity = 1;
+        mat.transparent = false;
+      }
+    }
+    if (!visible) this.roofFadeState = 'shown'; // park the driver
+  }
+
+  /**
+   * Autofade driver (issue #86), pumped once per animation frame while
+   * in WALK mode. Every Nth tick an upward ray from the walker's eye
+   * tests ONLY the roof-slot meshes (~free: one merged mesh typical).
+   * Hit ⇒ tween opacity down to the fade floor; miss ⇒ tween back to 1.
+   * LOW quality skips the tween and SNAPS instead. The fade runs only
+   * while the roofs are manually shown; a manually hidden roof stays
+   * hidden.
+   */
+  private updateRoofAutofade(dt: number): void {
+    if (this.phase !== 'walk' || !this.roofsShown) return;
+    const roofs = this.roofMeshes();
+    if (roofs.length === 0) return;
+    const walk = this.walkCam;
+    if (!walk) return;
+
+    this.tickCounter += 1;
+    if (this.tickCounter % ROOFS_RAYCAST_INTERVAL_TICKS === 0) {
+      const eye = walk.eyePosition;
+      const dir = new Vector3(0, 0, 1);
+      const orig = new Vector3(eye.x, eye.y, eye.z);
+      this.roofRaycaster.set(orig, dir);
+      this.roofRaycaster.far = ROOFS_RAYCAST_FAR_M;
+      const hits = this.roofRaycaster.intersectObjects(roofs, false);
+      this.indoor = isIndoorFromRay(hits.length > 0 ? hits[0]!.distance : null);
+    }
+
+    const indoor = this.indoor;
+    for (const mesh of roofs) {
+      const mat = mesh.material as MeshStandardMaterial;
+      const target = indoor ? ROOFS_FADE_MIN_OPACITY : 1;
+      if (
+        this.hiQuality === false ||
+        this.roofFadeState === (indoor ? 'hidden' : 'shown')
+      ) {
+        // Snap: LOW quality, or the tween already finished — avoid
+        // per-frame material writes at the extremes.
+        if (mat.opacity !== target) {
+          mat.opacity = target;
+          mat.transparent = target < 1;
+        }
+        this.roofFadeState = indoor ? 'hidden' : 'shown';
+        continue;
+      }
+      this.roofFadeState = 'fading';
+      mat.transparent = true;
+      mat.opacity = fadeStepOpacity(mat.opacity, indoor, {
+        minOpacity: ROOFS_FADE_MIN_OPACITY,
+        ratePerSecond: ROOFS_FADE_RATE_PER_S,
+        dt,
+      });
+      // Tween reached its extreme: settle it (drops `transparent`
+      // again on the outdoor side so opaque roofs keep draw order).
+      if (indoor && mat.opacity <= ROOFS_FADE_MIN_OPACITY + 0.005) {
+        mat.opacity = ROOFS_FADE_MIN_OPACITY;
+        this.roofFadeState = 'hidden';
+      } else if (!indoor && mat.opacity >= 0.995) {
+        mat.opacity = 1;
+        mat.transparent = false;
+        this.roofFadeState = 'shown';
+      }
+    }
+  }
+
   /* --------------------------------- seats ---------------------------------- */
 
   private seatRig(mode: ViewMode): void {
@@ -470,7 +617,7 @@ export class ViewerApp {
     // it synced on resize. Without this the drawing buffer stays at the
     // canvas default (300x150) and the picture stretches/blanks.
     if (this.renderer) {
-      configureRenderer(this.renderer);
+      configureRenderer(this.renderer, this.hiQuality ? 'high' : 'low');
       this.resizeRenderer();
     }
     const ro = new ResizeObserver(() => this.resizeRenderer());
@@ -489,6 +636,7 @@ export class ViewerApp {
       const dt = Math.min(Math.max(dtMs, 0) / 1000, 0.1);
 
       this.rig?.update(dt);
+      this.updateRoofAutofade(dt);
       if (this.perf.panel && dtMs > 0) this.perf.record(dtMs);
 
       const camera = this.liveCamera();
@@ -744,6 +892,7 @@ export class ViewerApp {
       this.sceneRoot = null;
     }
     this.unbindToggle?.();
+    this.unbindRoofToggle?.();
     this.perf.destroy();
     destroyHud(this.hud);
     this.renderer?.dispose();

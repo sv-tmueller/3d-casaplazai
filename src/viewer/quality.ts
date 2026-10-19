@@ -19,8 +19,11 @@ export function isHighQuality(
   search: string = window.location.search,
 ): boolean {
   // Mirror of isPerfEnabled's regex tolerance (appController.ts): match
-  // "?quality=" and "&quality=" alike, trailing params included.
-  const m = /[?&]quality=(low|high)/.exec(search);
+  // "?quality=" and "&quality=" alike, trailing params included. The
+  // lookahead END-ANCHORS the value (#86's stricter parse, adopted
+  // during the batch-#85 parser absorption): "?quality=lowest" no
+  // longer degrades to LOW — unrecognized ⇒ HIGH, per the doc comment.
+  const m = /[?&]quality=(low|high)(?=&|$)/.exec(search);
   // Absent/unrecognized ⇒ HIGH (ratified default); only an explicit
   // "low" opts OUT of the textured pass.
   return !(m && m[1] === 'low');

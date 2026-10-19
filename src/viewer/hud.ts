@@ -29,6 +29,8 @@ const HUD_ROOT_CLASS = 'viewer-hud-root';
 export interface HudHandles {
   root: HTMLDivElement;
   toggleBtn: HTMLButtonElement;
+  /** Roof visibility toggle (issue #86); reflects the live state. */
+  roofBtn: HTMLButtonElement;
   fade: HTMLDivElement;
   toasts: HTMLDivElement;
   perfPanel: HTMLPreElement | null;
@@ -40,6 +42,9 @@ export interface HudHandles {
 
 /** Callback invoked when the user toggles Walk/Overview. */
 export type ToggleListener = (next: ViewMode) => void;
+
+/** Callback invoked when the user toggles roof visibility (issue #86). */
+export type RoofToggleListener = (visible: boolean) => void;
 
 /** Construct the HUD overlay inside the given viewer pane. */
 export function buildHud(hostPane: HTMLElement): HudHandles {
@@ -56,12 +61,23 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   toggleBtn.textContent = 'Walk';
   toggleBtn.setAttribute('aria-label', 'Toggle walk mode');
 
+  // Roof visibility toggle (issue #86): keyboard-focusable like its
+  // sibling (plain buttons tab naturally — the mouseless mandate), and
+  // aria-pressed mirrors the live state for screen readers.
+  const roofBtn = document.createElement('button');
+  roofBtn.type = 'button';
+  roofBtn.className = 'hud-toggle';
+  roofBtn.dataset.testid = 'hud-roof-toggle';
+  roofBtn.textContent = 'Hide roofs';
+  roofBtn.setAttribute('aria-label', 'Toggle roof visibility');
+  roofBtn.setAttribute('aria-pressed', 'false');
+
   const hint = document.createElement('span');
   hint.className = 'hud-hint';
   hint.dataset.testid = 'hud-hint';
   hint.textContent = '';
 
-  bar.append(toggleBtn, hint);
+  bar.append(toggleBtn, roofBtn, hint);
 
   const fade = document.createElement('div');
   fade.className = 'hud-fade';
@@ -92,6 +108,7 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   return {
     root,
     toggleBtn,
+    roofBtn,
     fade,
     toasts,
     perfPanel: null,
@@ -145,6 +162,34 @@ export function onBindToggle(
   };
   handles.toggleBtn.addEventListener('click', onClick);
   return () => handles.toggleBtn.removeEventListener('click', onClick);
+}
+
+/**
+ * Attach the roof-visibility click handler (issue #86). The button is a
+ * momentary toggle: each click flips the state the listener receives.
+ */
+export function onBindRoofToggle(
+  handles: HudHandles,
+  isVisible: () => boolean,
+  listener: RoofToggleListener,
+): () => void {
+  const onClick = (): void => {
+    listener(!isVisible());
+  };
+  handles.roofBtn.addEventListener('click', onClick);
+  return () => handles.roofBtn.removeEventListener('click', onClick);
+}
+
+/**
+ * Reflect the roof-visibility state on the HUD button (issue #86):
+ * label announces the ACTION, aria-pressed announces the STATE.
+ */
+export function reflectRoofVisibility(
+  handles: HudHandles,
+  visible: boolean,
+): void {
+  handles.roofBtn.textContent = visible ? 'Hide roofs' : 'Show roofs';
+  handles.roofBtn.setAttribute('aria-pressed', String(visible));
 }
 
 /**
