@@ -31,6 +31,10 @@ export interface HudHandles {
   toggleBtn: HTMLButtonElement;
   /** Roof visibility toggle (issue #86); reflects the live state. */
   roofBtn: HTMLButtonElement;
+  /** Walls-transparency slider (issue #120); 0..100 position. */
+  wallsAlpha: HTMLInputElement;
+  /** Live % readout beside the walls slider. */
+  wallsAlphaLabel: HTMLSpanElement;
   fade: HTMLDivElement;
   toasts: HTMLDivElement;
   perfPanel: HTMLPreElement | null;
@@ -45,6 +49,9 @@ export type ToggleListener = (next: ViewMode) => void;
 
 /** Callback invoked when the user toggles roof visibility (issue #86). */
 export type RoofToggleListener = (visible: boolean) => void;
+
+/** Callback invoked with the NORMALIZED (0..1) wallsAlpha (#120). */
+export type WallsAlphaListener = (alpha: number) => void;
 
 /** Construct the HUD overlay inside the given viewer pane. */
 export function buildHud(hostPane: HTMLElement): HudHandles {
@@ -77,7 +84,26 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   hint.dataset.testid = 'hud-hint';
   hint.textContent = '';
 
-  bar.append(toggleBtn, roofBtn, hint);
+  // Walls-transparency slider (issue #120): a NATIVE range input — the
+  // arrow keys operate it for free (mouseless mandate; no custom key
+  // handling). Position is the 0..100 percent; STATE is normalized 0..1
+  // (SH3D wallsAlpha convention) and lives in the controller.
+  const wallsAlpha = document.createElement('input');
+  wallsAlpha.type = 'range';
+  wallsAlpha.min = '0';
+  wallsAlpha.max = '100';
+  wallsAlpha.step = '1';
+  wallsAlpha.value = '0';
+  wallsAlpha.className = 'hud-slider';
+  wallsAlpha.dataset.testid = 'hud-walls-alpha';
+  wallsAlpha.setAttribute('aria-label', 'Wall transparency');
+
+  const wallsAlphaLabel = document.createElement('span');
+  wallsAlphaLabel.className = 'hud-slider-value';
+  wallsAlphaLabel.dataset.testid = 'hud-walls-alpha-label';
+  wallsAlphaLabel.textContent = '0%';
+
+  bar.append(toggleBtn, roofBtn, wallsAlpha, wallsAlphaLabel, hint);
 
   const fade = document.createElement('div');
   fade.className = 'hud-fade';
@@ -109,6 +135,8 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
     root,
     toggleBtn,
     roofBtn,
+    wallsAlpha,
+    wallsAlphaLabel,
     fade,
     toasts,
     perfPanel: null,
@@ -190,6 +218,42 @@ export function reflectRoofVisibility(
 ): void {
   handles.roofBtn.textContent = visible ? 'Hide roofs' : 'Show roofs';
   handles.roofBtn.setAttribute('aria-pressed', String(visible));
+}
+
+/**
+ * Normalize a slider position (0..100) into SH3D's wallsAlpha (0..1).
+ * The slider is the UI; the controller stores the normalized value —
+ * ONE mapping, pinned by the unit spec. Hostile values clamp.
+ */
+export function wallsAlphaFromSlider(sliderValue: number): number {
+  if (!Number.isFinite(sliderValue)) return 0;
+  return Math.min(1, Math.max(0, sliderValue / 100));
+}
+
+/**
+ * Attach the walls-transparency slider input handler (issue #120,
+ * single-owner wiring). Fires with the NORMALIZED 0..1 alpha.
+ */
+export function onBindWallsAlpha(
+  handles: HudHandles,
+  listener: WallsAlphaListener,
+): () => void {
+  const onInput = (): void => {
+    listener(wallsAlphaFromSlider(Number(handles.wallsAlpha.value)));
+  };
+  handles.wallsAlpha.addEventListener('input', onInput);
+  return () => handles.wallsAlpha.removeEventListener('input', onInput);
+}
+
+/**
+ * Reflect the (normalized) wallsAlpha state onto the slider position and
+ * % readout — the init/reset sync point (a plan rebuild resets alpha).
+ */
+export function reflectWallsAlpha(handles: HudHandles, alpha: number): void {
+  const a = Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 0;
+  const percent = Math.round(a * 100);
+  handles.wallsAlpha.value = String(percent);
+  handles.wallsAlphaLabel.textContent = `${percent}%`;
 }
 
 /**
