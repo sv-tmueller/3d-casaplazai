@@ -555,6 +555,7 @@ export function initEditorInteraction(
       refs.leanSegFieldset.querySelector('legend')!,
     );
     const rows = room.roofs ?? [];
+    let anyChecked = false;
     for (let i = 0; i < room.polygon.length; i += 1) {
       const label = document.createElement('label');
       label.className = 'snap-radio';
@@ -564,9 +565,18 @@ export function initEditorInteraction(
       radio.value = String(i);
       radio.dataset.testid = `lean-seg-${i}`;
       const row = rows.find((r) => r.segmentIndex === i);
-      if (row) radio.checked = true;
+      if (row) {
+        radio.checked = true;
+        anyChecked = true;
+      }
       label.append(radio, document.createTextNode(` Wall ${i + 1}`));
       refs.leanSegFieldset.appendChild(label);
+    }
+    // Nothing leaned yet: preselect Wall 1 so keyboard flow starts sane.
+    if (!anyChecked) {
+      refs.leanSegFieldset.querySelector<HTMLInputElement>(
+        'input[name="lean-seg"]',
+      )?.setAttribute('checked', 'checked');
     }
     // Checked segment drives the slider seed (stored lean, else 0).
     syncLeanSlider();
