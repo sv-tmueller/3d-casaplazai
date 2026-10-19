@@ -12,57 +12,53 @@ export interface ShortcutEntry {
   /** What the binding does. */
   action: string;
   /** Surface the binding lives on: canvas or viewer HUD. */
-  surface: "editor" | "viewer";
+  surface: 'editor' | 'viewer';
 }
 
 export const SHORTCUTS: ShortcutEntry[] = [
-  { keys: "?", action: "Show keyboard shortcuts", surface: "editor" },
+  { keys: '?', action: 'Show keyboard shortcuts', surface: 'editor' },
+  { keys: 'Esc', action: 'Cancel current gesture / deselect', surface: 'editor' },
+  { keys: 'Enter', action: 'Close polygon while drawing', surface: 'editor' },
+  { keys: 'Ctrl+Z', action: 'Undo', surface: 'editor' },
+  { keys: 'Ctrl+Shift+Z', action: 'Redo', surface: 'editor' },
+  { keys: 'Ctrl+Y', action: 'Redo', surface: 'editor' },
+  { keys: 'R', action: 'Rotate selected furniture 90°', surface: 'editor' },
   {
-    keys: "Esc",
-    action: "Cancel current gesture / deselect",
-    surface: "editor",
-  },
-  { keys: "Enter", action: "Close polygon while drawing", surface: "editor" },
-  { keys: "Ctrl+Z", action: "Undo", surface: "editor" },
-  { keys: "Ctrl+Shift+Z", action: "Redo", surface: "editor" },
-  { keys: "Ctrl+Y", action: "Redo", surface: "editor" },
-  { keys: "R", action: "Rotate selected furniture 90°", surface: "editor" },
-  {
-    keys: "S",
-    action: "Toggle the Snapping settings popover",
-    surface: "editor",
+    keys: 'S',
+    action: 'Toggle the Snapping settings popover',
+    surface: 'editor',
   },
   {
-    keys: "L",
-    action: "Set the selected room\u2019s wall lean (roof)",
-    surface: "editor",
+    keys: 'L',
+    action: 'Set the selected room\u2019s wall lean (roof)',
+    surface: 'editor',
   },
   {
-    keys: "I",
-    action: "Toggle the selection inspector panel",
-    surface: "editor",
+    keys: 'I',
+    action: 'Toggle the selection inspector panel',
+    surface: 'editor',
   },
   {
-    keys: "PageUp / [",
-    action: "Switch to the floor below",
-    surface: "editor",
+    keys: 'PageUp / [',
+    action: 'Switch to the floor below',
+    surface: 'editor',
   },
   {
-    keys: "PageDown / ]",
-    action: "Switch to the floor above",
-    surface: "editor",
+    keys: 'PageDown / ]',
+    action: 'Switch to the floor above',
+    surface: 'editor',
   },
   {
-    keys: "Del / Backspace",
-    action: "Delete selected room, opening, or furniture",
-    surface: "editor",
+    keys: 'Del / Backspace',
+    action: 'Delete selected room, opening, or furniture',
+    surface: 'editor',
   },
   {
-    keys: "Alt+Drag / Middle-Drag",
-    action: "Pan the canvas",
-    surface: "editor",
+    keys: 'Alt+Drag / Middle-Drag',
+    action: 'Pan the canvas',
+    surface: 'editor',
   },
-  { keys: "Wheel", action: "Zoom at cursor", surface: "editor" },
+  { keys: 'Wheel', action: 'Zoom at cursor', surface: 'editor' },
 ];
 
 /** Table rows for README + modal (same source of truth). */
