@@ -37,7 +37,10 @@ function rowFor(a: Pt, b: Pt): AngleReadoutRow | null {
   // angle from screen deltas would invert north/south.
   const deg = segmentAngleDegrees(a[0], a[1], b[0], b[1]);
   const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-  return { mid, text: `${deg.toFixed(1)}°` };
+  // Clamp after rounding: raw angles in [~359.95, 360) would otherwise format
+  // as "360.0°", violating the [0, 360) invariant (tester finding 1).
+  const shown = Number(deg.toFixed(1)) % 360;
+  return { mid, text: `${shown.toFixed(1)}°` };
 }
 
 /**
