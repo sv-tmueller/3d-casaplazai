@@ -15,7 +15,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { BTN_ZOOM, CAM_SCALE, FIT_MARGIN } from './fixtures/camConstants';
 
-const SCALE = 80; // INITIAL_SCALE in glue.ts
+const SCALE = CAM_SCALE; // INITIAL_SCALE in glue.ts (via camConstants; glued by tests/unit/glue.spec.ts)
 
 type Plan = {
   rooms: Array<{ id: string; name: string; polygon: number[][] }>;

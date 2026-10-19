@@ -10,8 +10,7 @@
  * y = -1.5 gives living t ≈ 2/3 and kitchen t ≈ 1/3 (complementary).
  */
 import { expect, test, type Page } from '@playwright/test';
-
-const SCALE = 80; // INITIAL_SCALE in glue.ts
+import { CAM_SCALE as SCALE } from './fixtures/camConstants';
 
 const ROOM_A = {
   id: 'living',

@@ -10,8 +10,7 @@
  * (on-screen) quadrant to keep aims off the canvas borders.
  */
 import { expect, test, type Page } from '@playwright/test';
-
-const SCALE = 80;
+import { CAM_SCALE as SCALE } from './fixtures/camConstants';
 
 type Pt = [number, number];
 

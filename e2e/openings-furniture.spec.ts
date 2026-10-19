@@ -13,8 +13,7 @@
  * the EDGE_MARGIN_M = 0.05 corner exclusion on both sides.
  */
 import { expect, test, type Page } from '@playwright/test';
-
-const SCALE = 80; // INITIAL_SCALE in glue.ts
+import { CAM_SCALE as SCALE } from './fixtures/camConstants';
 
 type Plan = {
   rooms: Array<{

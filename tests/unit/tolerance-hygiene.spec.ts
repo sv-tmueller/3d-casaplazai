@@ -65,8 +65,13 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
       fields: { width: 2.6 },
       syncPair: true,
     });
-    const [, b2] = store.getState().data.floors[0].openings;
-    expect(a.width).toBeCloseTo(2.6);
+    // getState() returns the LIVE store state (store.ts reduceMutateOpening
+    // mutates in place): pre-dispatch refs happen to work today only by
+    // accident of that in-place mutation. Re-fetch AFTER the dispatch so
+    // these assertions survive a future snapshot/immutable-store refactor
+    // (reviewer #95: the old "snapshots" wording was false).
+    const [a2, b2] = store.getState().data.floors[0].openings;
+    expect(a2.width).toBeCloseTo(2.6);
     expect(b2.width).toBeCloseTo(0.9); // frozen: nothing copied to the twin
   });
 
@@ -106,8 +111,11 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
       tCenter: 0.6,
       syncPair: true,
     });
-    const [, b] = store.getState().data.floors[0].openings;
-    expect(a.tCenter).toBeCloseTo(0.6);
+    // Same live-state hazard as above (reviewer #95): re-fetch AFTER the
+    // dispatches so the assertions survive a snapshot/immutable-store
+    // refactor instead of riding on in-place-mutation luck.
+    const [a2, b] = store.getState().data.floors[0].openings;
+    expect(a2.tCenter).toBeCloseTo(0.6);
     expect(b.tCenter).toBeCloseTo(twinT); // implicit unlink: no cascade
   });
 });
