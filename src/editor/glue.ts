@@ -45,6 +45,7 @@ import type { Pt } from './geom';
 import { flashMessage, type EditorDomRefs } from './ui';
 import { paintScene } from './render';
 import { paintMeasurementBadges } from './render/measurementBadges';
+import { paintAngleReadouts } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { openExportDialog } from './exportDialog';
@@ -223,6 +224,12 @@ export function initEditorInteraction(
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
     paintMeasurementBadges(ctx, cam, store.getState().data, dimensionsVisible);
+    // pkg 2 (issue #67): live angle readouts during gestures.
+    // Deliberately ABSENT from the export path below — these are
+    // gesture-live affordances, not plan content.
+    paintAngleReadouts(
+      ctx, cam, store.getState().data, phase, hoverSeg, dimensionsVisible,
+    );
   }
 
   function snapToleranceWorld(): number {
