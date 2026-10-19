@@ -370,6 +370,152 @@ function vertexAverage(poly: Vec2[]): Vec2 {
 }
 
 /**
+ * Overlap-guard epsilon: a distance (or orientation determinant)
+ * below this scale counts as ON the line — boundary CONTACT, not
+ * interior overlap. Same 1e-12 order as denominatorZero; deliberately
+ * NOT PAIR_TOLERANCE_M (a centimetre-scale guard would make boundary
+ * contact indistinguishable from a wall genuinely drawn into the
+ * neighbouring room).
+ */
+const OVERLAP_EPS = 1e-12;
+
+/** Distance from p to the segment a→b. */
+function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = denominatorZero(l2)
+    ? 0
+    : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/**
+ * Point strictly inside: ray-cast inside AND clear of the boundary by
+ * more than OVERLAP_EPS (a vertex sitting on — or grazing — the
+ * boundary is contact, not overlap; ray-casting alone is
+ * ill-conditioned exactly there).
+ */
+function pointStrictlyInside(p: Vec2, poly: Vec2[]): boolean {
+  if (!pointInPolygon(p, poly)) return false;
+  for (let i = 0; i < poly.length; i += 1) {
+    if (distanceToSegment(p, poly[i], poly[(i + 1) % poly.length]) <= OVERLAP_EPS) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Strict proper crossing: each segment's INTERIOR pierced by the
+ *  other. Shared endpoints, T-junctions and collinear overlaps are
+ *  boundary contact and do not count. */
+function segmentsProperlyCross(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2): boolean {
+  const sideOf = (p: Vec2, q: Vec2, r: Vec2): number => {
+    const cr = (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    return cr > OVERLAP_EPS ? 1 : cr < -OVERLAP_EPS ? -1 : 0;
+  };
+  return (
+    sideOf(a1, a2, b1) * sideOf(a1, a2, b2) < 0 &&
+    sideOf(b1, b2, a1) * sideOf(b1, b2, a2) < 0
+  );
+}
+
+/**
+ * True when an interior stretch of segment p→q lies strictly inside
+ * `poly`. Split the segment at every boundary contact (crossings and
+ * T-junctions alike, so a wall lying ALONG the inside of another
+ * room's wall is still split) and probe each gap's midpoint.
+ */
+function segmentProbesInterior(p: Vec2, q: Vec2, poly: Vec2[]): boolean {
+  const ex = q[0] - p[0];
+  const ey = q[1] - p[1];
+  const ts: number[] = [0, 1];
+  for (let i = 0; i < poly.length; i += 1) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const denom = ex * dy - ey * dx;
+    if (denominatorZero(denom)) continue; // parallel/collinear: no param break
+    const wx = a[0] - p[0];
+    const wy = a[1] - p[1];
+    const t = (wx * dy - wy * dx) / denom;
+    const u = (wx * ey - wy * ex) / denom;
+    if (u >= -1e-9 && u <= 1 + 1e-9) ts.push(Math.max(0, Math.min(1, t)));
+  }
+  ts.sort((x, y) => x - y);
+  for (let i = 1; i < ts.length; i += 1) {
+    if (ts[i] - ts[i - 1] <= 1e-9) continue;
+    const mid = (ts[i - 1] + ts[i]) / 2;
+    const probe: Vec2 = [p[0] + ex * mid, p[1] + ey * mid];
+    if (pointStrictlyInside(probe, poly)) return true;
+  }
+  return false;
+}
+
+/**
+ * True interior overlap between two room polygons (issue #112): the
+ * impostor purge's honest probe, replacing the vertex-AVERAGE
+ * containment proxy, which misses overlaps whose centroids happen to
+ * fall outside each other (the mutually-exterior-centroid slab
+ * repro). Boundary CONTACT does not count — genuine multi-neighbour
+ * rooms share an edge and must keep their rows. Overlap is reported
+ * when
+ *   (a) two edges properly cross (interior pierced), or
+ *   (b) a vertex of one lies strictly inside the other (covers full
+ *       containment), or
+ *   (c) an interior stretch of one's edge lies strictly inside the
+ *       other — the T-junction impostor signature (a wall floating
+ *       just inside a neighbour's footprint, both endpoints on the
+ *       neighbour's boundary), which produces NO proper crossings
+ *       and NO interior vertices (the 8 mm-east cross-pair repro).
+ * A cheap AABB pre-filter rejects disjoint pairs first (rectilinear
+ * plans resolve instantly).
+ */
+function roomsOverlap(polyA: Vec2[], polyB: Vec2[]): boolean {
+  const bounds = (poly: Vec2[]): [number, number, number, number] => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of poly) {
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    return [minX, minY, maxX, maxY];
+  };
+  const [ax0, ay0, ax1, ay1] = bounds(polyA);
+  const [bx0, by0, bx1, by1] = bounds(polyB);
+  if (ax1 <= bx0 || bx1 <= ax0 || ay1 <= by0 || by1 <= ay0) return false;
+
+  for (let i = 0; i < polyA.length; i += 1) {
+    for (let j = 0; j < polyB.length; j += 1) {
+      if (
+        segmentsProperlyCross(
+          polyA[i],
+          polyA[(i + 1) % polyA.length],
+          polyB[j],
+          polyB[(j + 1) % polyB.length],
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  for (const v of polyA) if (pointStrictlyInside(v, polyB)) return true;
+  for (const v of polyB) if (pointStrictlyInside(v, polyA)) return true;
+  for (let i = 0; i < polyA.length; i += 1) {
+    if (segmentProbesInterior(polyA[i], polyA[(i + 1) % polyA.length], polyB)) return true;
+  }
+  for (let i = 0; i < polyB.length; i += 1) {
+    if (segmentProbesInterior(polyB[i], polyB[(i + 1) % polyB.length], polyA)) return true;
+  }
+  return false;
+}
+
+/**
  * Candidate-segment qualification for mirror emission (issue #40):
  * the candidate must represent the FAR face of a genuine shared-edge
  * relationship, not merely a wall that happens to sit within
@@ -480,17 +626,16 @@ export function mirrorCounterparts(
 
   // Impostor purge: overlapping candidate rooms cannot both be genuine
   // neighbours of the host wall — keep the nearer to the host line.
+  // Overlap is TRUE INTERIOR intersection (issue #112): genuine
+  // neighbours merely sharing a boundary edge do not register.
   const drop = new Set<string>();
   for (const [idA, a] of perRoom) {
     if (drop.has(idA)) continue;
     const roomA = flatRooms(plan).find((r) => r.id === idA)!;
-    const avgA = vertexAverage(roomA.polygon);
     for (const [idB, b] of perRoom) {
       if (idB === idA || drop.has(idB)) continue;
       const roomB = flatRooms(plan).find((r) => r.id === idB)!;
-      const overlap = pointInPolygon(avgA, roomB.polygon) ||
-        pointInPolygon(vertexAverage(roomB.polygon), roomA.polygon);
-      if (!overlap) continue;
+      if (!roomsOverlap(roomA.polygon, roomB.polygon)) continue;
       // Farther from the host line is the impostor; ties drop the
       // higher id for determinism.
       if (a.perp < b.perp) drop.add(idB);
