@@ -125,7 +125,6 @@ export type Command =
    * refuses without snapshotting.
    */
   | { type: 'deleteEntities'; ids: string[] }
-<<<<<<< HEAD
 
   /* ---- pkg 13.4 additions (issue #118): stairs editor ---- */
   /**
@@ -154,8 +153,7 @@ export type Command =
   /** Flip the flight end-for-end (rotationDeg + 180 mod 360); centre stays. */
   | { type: 'flipStair'; stairId: string }
   /** Delete one staircase (stairs are leaves — nothing cascades off them). */
-  | { type: 'deleteStair'; stairId: string };
-=======
+  | { type: 'deleteStair'; stairId: string }
   /* ---- pkg 14.4 addition (issue #119): floor-material picker ---- */
   /**
    * Set a room's floor material (null clears it). ORDINARY mutating
@@ -164,7 +162,6 @@ export type Command =
    * Room.floorTexture field (drawRoom has hardcoded null since pkg 2).
    */
   | { type: 'setRoomFloorTexture'; roomId: string; texture: FloorTexture };
->>>>>>> 57f5626 (Pkg 14.4: Floor texture picker — reducer, 2D patterns, inspector chooser (#119))
 
 export type DispatchResult =
   | { ok: true }
