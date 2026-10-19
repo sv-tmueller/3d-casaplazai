@@ -6,11 +6,16 @@
  * ARCHITECTURE (per the binding SUB_PLAN):
  * - PURE RENDERER: consume a resolved selection descriptor + store
  *   snapshot, rebuild the DOM. Owns NO state beyond the collapsed flag.
- * - NO new store commands: every field commits through the EXISTING
- *   reducers (setWallLean/clearWallLean, updateOpening, rotate /
- *   resizeFurniture) via the dispatch callback glue hands in — the
- *   popover paths keep their monopoly on validation, the panel merely
- *   reuses them.
+ * - NO command DUPLICATION: every field commits through a store reducer
+ *   via the dispatch callback glue hands in — the popover paths keep
+ *   their monopoly on validation, the panel merely reuses them
+ *   (setWallLean/clearWallLean, updateOpening, rotate/resizeFurniture).
+ *   AMENDED by pkg 14.4 (issue #119, ratified batch #116): the floor-
+ *   material chooser needed a writer for the dormant Room.floorTexture
+ *   field and NO existing reducer covered it, so setRoomFloorTexture
+ *   (store.ts) is authorized as the panel's single NEW command — same
+ *   dispatch seam, same validation-first contract. The original "NO new
+ *   store commands" wording is hereby narrowed, not revoked.
  * - Walls are NOT entities: a wall segment is addressed
  *   {roomId, segmentIndex} and tracked UI-LOCALLY in glue (no store
  *   state, no schema churn). The descriptor is the seam #100 plugs
@@ -19,12 +24,14 @@
 
 import type {
   FloorplanData,
+  FloorTexture,
   FurnitureItem,
   Opening,
   Room,
   Staircase,
 } from '../shared/schema';
 import { validateGeometry } from '../geom';
+import { FLOOR_TEXTURES } from '../shared/schema';
 import { roomAreaM2 } from './measures';
 import { compassAngleBetween, polarEndpoint } from './model/angles';
 import { mountDimFields } from './typeInDims';
@@ -255,7 +262,7 @@ export function mountInspectorPanel(
       } else if (desc.kind === 'opening') {
         renderOpening(body, desc.opening, desc.room, dispatch, flash);
       } else if (desc.kind === 'room') {
-        renderRoom(body, desc.room);
+        renderRoom(body, desc.room, dispatch, flash);
       } else if (desc.kind === 'stair') {
         renderStair(body, desc.stair, plan, dispatch, flash);
       } else if (desc.kind === 'multi') {
@@ -567,7 +574,12 @@ function renderOpening(
 
 /* --------------------------------- room ---------------------------------- */
 
-function renderRoom(body: HTMLElement, room: Room): void {
+function renderRoom(
+  body: HTMLElement,
+  room: Room,
+  dispatch: PanelDispatch,
+  flash: (msg: string) => void,
+): void {
   sectionTitle(body, room.name);
   const dl = document.createElement('dl');
   dl.className = 'inspector-summary';
@@ -578,6 +590,63 @@ function renderRoom(body: HTMLElement, room: Room): void {
   const leaned = (room.roofs ?? []).length;
   if (leaned > 0) kvRow(dl, 'Leaned walls', String(leaned));
   body.appendChild(dl);
+
+  // Pkg 14.4 (issue #119): floor-material chooser — the dormant
+  // Room.floorTexture field, surfaced. Native radios: the whole group
+  // is ONE tab stop and ArrowLeft/ArrowRight move within it, so the
+  // pick is fully mouseless; every change commits one atomic store
+  // command (= one undo step). Options derive from the schema barrel's
+  // FLOOR_TEXTURES — the picker never duplicates the literal list.
+  sectionTitle(body, 'Floor material');
+  const group = document.createElement('div');
+  group.className = 'inspector-radio-group';
+  group.dataset.testid = 'insp-floor-material';
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', 'Floor material');
+  const options: { value: FloorTexture; label: string; testid: string }[] = [
+    { value: null, label: 'None', testid: 'insp-tex-none' },
+    ...FLOOR_TEXTURES.map((kind) => ({
+      value: kind as FloorTexture,
+      label: kind.charAt(0).toUpperCase() + kind.slice(1),
+      testid: `insp-tex-${kind}`,
+    })),
+  ];
+  for (const opt of options) {
+    const wrap = document.createElement('label');
+    wrap.className = 'inspector-radio';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'insp-floor-material';
+    input.value = opt.value ?? 'none';
+    input.checked = room.floorTexture === opt.value;
+    input.dataset.testid = opt.testid;
+    input.addEventListener('change', () => {
+      const res = dispatch({
+        type: 'setRoomFloorTexture',
+        roomId: room.id,
+        texture: opt.value,
+      });
+      if (!res.ok) {
+        // Refused (the room vanished mid-flight, say): the store is the
+        // truth — snap the check back to the stored value and keep the
+        // panel usable.
+        flash(res.error);
+        const revert = group.querySelector<HTMLInputElement>(
+          `input[data-testid="insp-tex-${room.floorTexture ?? 'none'}"]`,
+        );
+        if (revert) {
+          revert.checked = true;
+          revert.focus();
+        }
+      }
+    });
+    const span = document.createElement('span');
+    span.textContent = opt.label;
+    wrap.append(input, span);
+    group.appendChild(wrap);
+  }
+  body.appendChild(group);
+
   const hint = document.createElement('p');
   hint.className = 'inspector-hint';
   hint.textContent = 'Click near a wall to inspect that wall segment.';

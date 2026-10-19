@@ -7,8 +7,8 @@
  * same reducer/undo/autosave stream. Gesture-streamable commands carry
  * STREAMABLE_CMD payloads; everything else commits atomically.
  */
-import type { FloorplanData, Floor, Opening, Room, Staircase, Vec2 } from '../shared/schema';
-import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
+import type { FloorplanData, Floor, FloorTexture, Opening, Room, Staircase, Vec2 } from '../shared/schema';
+import { FLOOR_TEXTURES, flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
 import type { UnderlayState } from './model/underlay';
 import { PLAN_EXTENT_LIMIT_M } from './model/constants';
@@ -125,6 +125,7 @@ export type Command =
    * refuses without snapshotting.
    */
   | { type: 'deleteEntities'; ids: string[] }
+<<<<<<< HEAD
 
   /* ---- pkg 13.4 additions (issue #118): stairs editor ---- */
   /**
@@ -154,6 +155,16 @@ export type Command =
   | { type: 'flipStair'; stairId: string }
   /** Delete one staircase (stairs are leaves — nothing cascades off them). */
   | { type: 'deleteStair'; stairId: string };
+=======
+  /* ---- pkg 14.4 addition (issue #119): floor-material picker ---- */
+  /**
+   * Set a room's floor material (null clears it). ORDINARY mutating
+   * command — dispatch() snapshots like any other mutation, so each
+   * pick is exactly one undo step. First writer of the dormant
+   * Room.floorTexture field (drawRoom has hardcoded null since pkg 2).
+   */
+  | { type: 'setRoomFloorTexture'; roomId: string; texture: FloorTexture };
+>>>>>>> 57f5626 (Pkg 14.4: Floor texture picker — reducer, 2D patterns, inspector chooser (#119))
 
 export type DispatchResult =
   | { ok: true }
@@ -717,6 +728,28 @@ function stairStrandedByFloor(
   return Math.abs(departure + stair.rise - doomedElevation) <= 1e-3;
 }
 
+/* ------------- pkg 14.4 floor-material picker (issue #119) ----------------- */
+
+/**
+ * Assign a room's floor material. Dispatch is the only caller path; the
+ * enum is mirrored from the schema barrel so the store never emits a
+ * plan its own validator would reject at the door (belt + suspenders).
+ */
+function reduceSetRoomFloorTexture(
+  st: EditorState,
+  cmd: { roomId: string; texture: FloorTexture },
+): DispatchResult {
+  const room = activeFloor(st).rooms.find((r) => r.id === cmd.roomId);
+  if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
+  // Runtime guard for non-TS callers (bridge/console): FLOOR_TEXTURES is
+  // the single source of truth for what a texture value may be.
+  if (cmd.texture !== null && !FLOOR_TEXTURES.includes(cmd.texture)) {
+    return { ok: false, error: `unknown floor texture "${String(cmd.texture)}"` };
+  }
+  room.floorTexture = cmd.texture;
+  return { ok: true };
+}
+
 /* ------------------- pkg 8.1 roof reducers (issue #83) -------------------- */
 
 /** Maximum lean from horizontal the editor will express, degrees. */
@@ -1162,6 +1195,9 @@ export class EditorStore {
         return reduceFlipStair(this._state, cmd);
       case 'deleteStair':
         return reduceDeleteStair(this._state, cmd);
+      /* ---- pkg 14.4 addition (issue #119) ---- */
+      case 'setRoomFloorTexture':
+        return reduceSetRoomFloorTexture(this._state, cmd);
     }
   }
 

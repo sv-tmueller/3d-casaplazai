@@ -22,7 +22,15 @@ export type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; errors: ValidationError[] };
 
-const TEXTURES = ['wood', 'tile', 'carpet', 'concrete'] as const;
+/**
+ * Canonical floor-material list (pkg 14.4, issue #119). Exported through
+ * the barrel so the inspector picker and the 2D pattern module derive
+ * from ONE source — no duplicated literals. `null` (untextured) is a
+ * valid field value but not a member of this list.
+ */
+export const FLOOR_TEXTURES = ['wood', 'tile', 'carpet', 'concrete'] as const;
+/** Internal alias (pre-#119 spelling) — validator call sites unchanged. */
+const TEXTURES = FLOOR_TEXTURES;
 const OPENING_KINDS = ['door', 'window'] as const;
 const FURNITURE_TYPES = ['bed', 'sofa', 'table', 'chair', 'counter', 'bathtub', 'toilet'] as const;
 
