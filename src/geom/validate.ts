@@ -24,8 +24,13 @@ import {
   MissingRoomReferenceError,
   OpeningOverflowError,
   OverlappingOpeningsError,
+  OverlappingStairHolesError,
+  StairGapMismatchError,
+  StairOutOfBoundsException,
+  UnknownStairRoomError,
 } from './errors';
 import { EPSILON, makeSegments, signArea } from './mathutil';
+import { stairFootprint, stairHoleRect } from './stairs';
 
 /** Lift pkg 1\'s validation into the compile-error taxonomy. */
 export function parseValidatedPlan(raw: unknown): FloorplanData {
@@ -143,4 +148,114 @@ export function validateGeometry(plan: FloorplanData): void {
       throw new FurnitureOutOfBoundsError(item.id, item.roomId);
     }
   }
+
+  validateStairs(plan, roomsById);
 }
+
+/**
+ * Stair geometric checks (pkg 7.4, #80): each stair must depart from a
+ * KNOWN room on a KNOWN floor, sit fully inside that room, and climb
+ * exactly onto a HIGHER floor's elevation (tolerance 1 mm). Landing
+ * holes derived from two stairs may not overlap (no unions in v2).
+ * Empty stairs[] skips everything — mirrors the skip-when-0 guard in
+ * compile.ts, keeping stair-free plans (apartment goldens) untouched.
+ */
+export function validateStairs(
+  plan: FloorplanData,
+  roomsById: ReadonlyMap<string, Room>,
+): void {
+  if (plan.stairs.length === 0) return;
+
+  // roomId -> owning floor's elevation (stairs depart from the LOWER
+  // floor; the walk resolver + compile use the same lookup).
+  const elevationByRoom = new Map<string, number>();
+  for (const floor of plan.floors) {
+    for (const room of floor.rooms) {
+      elevationByRoom.set(room.id, floor.elevation);
+    }
+  }
+
+  for (const stair of plan.stairs) {
+    const room = roomsById.get(stair.roomId);
+    if (!room) {
+      throw new UnknownStairRoomError(stair.id, stair.roomId);
+    }
+    const departure = elevationByRoom.get(stair.roomId)!;
+    const higherFloors = plan.floors
+      .map((f) => f.elevation)
+      .filter((e) => e > departure + EPSILON);
+    const arrivalOk = higherFloors.some(
+      (e) => Math.abs(e - (departure + stair.rise)) <= 1e-3,
+    );
+    if (!arrivalOk) {
+      throw new StairGapMismatchError(stair.id, departure, stair.rise, higherFloors);
+    }
+
+    // Footprint containment: all four corners inside the host room
+    // (convex-room assumption, same as the furniture check). The HOST
+    // room check uses the raw footprint; the landing hole MAY cross
+    // into neighbouring rooms on the arrival floor (holes are punched
+    // per-room by overlap, not by ownership).
+    const segs = makeSegments(room.polygon);
+    const fp = stairFootprint(stair);
+    const escaped = (
+      [
+        [-fp.halfRun, -fp.halfWidth],
+        [fp.halfRun, -fp.halfWidth],
+        [fp.halfRun, fp.halfWidth],
+        [-fp.halfRun, fp.halfWidth],
+      ] as Array<[number, number]>
+    ).some(([l, w]) => {
+      const cx = fp.cx + fp.ux * l + fp.vx * w;
+      const cy = fp.cy + fp.uy * l + fp.vy * w;
+      return segs.some((s) => {
+        const cross =
+          (s.bx - s.ax) * (cy - s.ay) - (s.by - s.ay) * (cx - s.ax);
+        return cross < -EPSILON;
+      });
+    });
+    if (escaped) {
+      throw new StairOutOfBoundsException(stair.id, stair.roomId);
+    }
+  }
+
+  // Pairwise hole-overlap rejection (deterministic order: plan order).
+  const holes = plan.stairs.map((s) => ({ id: s.id, rect: stairHoleRect(s) }));
+  for (let i = 0; i < holes.length; i += 1) {
+    for (let j = i + 1; j < holes.length; j += 1) {
+      if (rectsOverlap(holes[i]!.rect, holes[j]!.rect)) {
+        throw new OverlappingStairHolesError(holes[i]!.id, holes[j]!.id);
+      }
+    }
+  }
+}
+
+/** SAT overlap of two convex quads (conservative: separating-axis test). */
+function rectsOverlap(a: QuadCornersLike, b: QuadCornersLike): boolean {
+  const axesOf = (q: QuadCornersLike): Array<[number, number]> =>
+    [0, 1].map((i) => {
+      const p = q[i]!;
+      const n = q[(i + 1) % 4]!;
+      return [-(n[1] - p[1]), n[0] - p[0]] as [number, number];
+    });
+  const proj = (q: QuadCornersLike, ax: [number, number]): [number, number] => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of q) {
+      const d = p[0] * ax[0] + p[1] * ax[1];
+      lo = Math.min(lo, d);
+      hi = Math.max(hi, d);
+    }
+    return [lo, hi];
+  };
+  for (const q of [a, b]) {
+    for (const ax of axesOf(q)) {
+      const [alo, ahi] = proj(a, ax);
+      const [blo, bhi] = proj(b, ax);
+      if (ahi <= blo + 1e-9 || bhi <= alo + 1e-9) return false;
+    }
+  }
+  return true;
+}
+
+type QuadCornersLike = ReadonlyArray<readonly [number, number]>;
