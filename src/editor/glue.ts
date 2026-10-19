@@ -264,7 +264,15 @@ export function initEditorInteraction(
     // so they ride pan/zoom and appear in exports.
     paintMeasurementBadges(ctx, cam, view, dimensionsVisible);
     // Issue #66: measure annotations ride the same Dimensions toggle.
-    paintMeasureAnnotations(ctx, cam, measurements, dimensionsVisible);
+    // pkg 7.2 (reviewer #75): live canvas shows only the ACTIVE floor's
+    // annotations (legacy untagged ones read as ground); the export
+    // painter below keeps whole-plan scope.
+    const activeFloorIdx = store.getState().activeFloorIdx;
+    paintMeasureAnnotations(
+      ctx, cam,
+      measurements.filter((m) => (m.floorIdx ?? 0) === activeFloorIdx),
+      dimensionsVisible,
+    );
     // pkg 2 (issue #67): live angle readouts during gestures.
     // Deliberately ABSENT from the export path below — these are
     // gesture-live affordances, not plan content.
@@ -827,7 +835,10 @@ export function initEditorInteraction(
       } else {
         measurements = [
           ...measurements,
-          { id: makeMeasureId(), a: measureDraft.a, b: snapped },
+          // Tag with the floor it was drawn on (reviewer #75): the live
+          // canvas filters to the active floor; the export painter keeps
+          // whole-plan scope.
+          { id: makeMeasureId(), a: measureDraft.a, b: snapped, floorIdx: store.getState().activeFloorIdx },
         ];
         measureDraft = null;
         saveMeasurements(window.localStorage, measurements);

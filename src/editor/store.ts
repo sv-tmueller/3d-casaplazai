@@ -133,6 +133,19 @@ function clampActiveFloorIdx(st: EditorState): void {
   if (st.activeFloorIdx >= st.data.floors.length) {
     st.activeFloorIdx = st.data.floors.length - 1;
   }
+  // Selection reconciliation (reviewer #75): a selected entity that does
+  // not live on the (new) active floor is a phantom — the UI would show
+  // "selected: 1" with an enabled Delete that error-flashes on use.
+  // Drop it, mirroring the dangling-selection drop undo already performs.
+  if (st.selectedId !== null) {
+    const fl = st.data.floors[st.activeFloorIdx];
+    const onFloor =
+      fl !== undefined &&
+      (fl.rooms.some((r) => r.id === st.selectedId) ||
+        fl.openings.some((o) => o.id === st.selectedId) ||
+        fl.furniture.some((f) => f.id === st.selectedId));
+    if (!onFloor) st.selectedId = null;
+  }
 }
 
 /**

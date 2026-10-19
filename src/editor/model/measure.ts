@@ -18,6 +18,11 @@ export interface Measurement {
   id: string;
   a: Pt;
   b: Pt;
+  /**
+   * Floor the measurement was drawn on (pkg 7.2, issue #75). Absent on
+   * legacy persisted annotations — treated as ground (index 0).
+   */
+  floorIdx?: number;
 }
 
 export const MEASURE_STORAGE_KEY = 'casaplaza.measurements.v1';
