@@ -24,6 +24,8 @@ import type {
   Room,
 } from '../shared/schema';
 import { roomAreaM2 } from './measures';
+import { compassAngleBetween, polarEndpoint } from './model/angles';
+import { mountDimFields } from './typeInDims';
 import { ROOF_MAX_LEAN_EDITOR_DEG } from './store';
 
 /** UI-local address of a wall segment (walls are not entities). */
@@ -66,7 +68,7 @@ export function sameSegmentAddress(
   return a.roomId === b.roomId && a.segIndex === b.segIndex;
 }
 
-/** Segment length + compass-ish bearing of a room's polygon segment. */
+/** Segment length + compass bearing of a room's polygon segment. */
 function segmentMetrics(
   room: Room,
   segIndex: number,
@@ -74,9 +76,11 @@ function segmentMetrics(
   const a = room.polygon[segIndex];
   const b = room.polygon[(segIndex + 1) % room.polygon.length];
   const lengthM = Math.hypot(b[0] - a[0], b[1] - a[1]);
-  // atan2(dx, dy): 0° = north (+y), CW-positive — the heading a reader
-  // expects from a floorplan (up = 0°, right = 90°).
-  const angleDeg = (Math.atan2(b[0] - a[0], b[1] - a[1]) * 180) / Math.PI;
+  // Issue #100: the bearing now derives from the SHARED compass helper
+  // (angles.ts) — the same source the angle pills and the type-in
+  // fields use, so all three surfaces can never diverge. Formula is
+  // unchanged (atan2(dx, dy): 0° = north (+y), CW-positive).
+  const angleDeg = compassAngleBetween(a, b);
   return { lengthM, angleDeg };
 }
 
@@ -200,6 +204,16 @@ export function mountInspectorPanel(
   root.appendChild(body);
 
   let open = false;
+  // Issue #100 (Pkg 12.2): autofocus the wall dim pair when the wall
+  // case ACTIVATES (descriptor transition into it). Steady-state
+  // re-renders (store notifies while typing) must NOT steal focus —
+  // hence the key comparison, not a blanket focus() in renderWall.
+  let lastDescKey: string | null = null;
+  // The OPEN transition keeps the #101 contract (panel ROOT focused
+  // so Tab lands on Close first — pinned by inspector-panel.spec);
+  // the first render after setOpen(true) therefore suppresses the
+  // wall-case autofocus.
+  let suppressAutofocus = false;
 
   const api: InspectorPanel = {
     root,
@@ -210,6 +224,7 @@ export function mountInspectorPanel(
       // hidden attr (not display:none) keeps the [hidden] UA rule as the
       // single source of hiding truth — same discipline as the palettes.
       root.hidden = !open;
+      if (next) suppressAutofocus = true;
     },
     render(desc, plan): void {
       // Preserve focus identity across re-renders: typing in a field
@@ -235,6 +250,27 @@ export function mountInspectorPanel(
       } else {
         renderFurniture(body, desc.item, dispatch, flash);
       }
+
+      // Issue #100: on TRANSITION into the wall case, autofocus the
+      // length field (mouseless activation; Tab then hops to angle).
+      // Deferred a microtask: the OPEN transition's root.focus()
+      // (setInspectorOpen) runs AFTER this render synchronously — the
+      // queue hop lets the #101 root-focus win when the panel just
+      // opened, while a LATER wall-case transition takes the field.
+      const descKey =
+        desc.kind === 'wall'
+          ? `wall:${desc.room.id}:${desc.segIndex}`
+          : desc.kind;
+      const wallActivated = descKey.startsWith('wall:') && descKey !== lastDescKey;
+      lastDescKey = descKey;
+      if (wallActivated && !suppressAutofocus) {
+        queueMicrotask(() => {
+          body
+            .querySelector<HTMLInputElement>("[data-testid='insp-wall-length']")
+            ?.focus();
+        });
+      }
+      if (suppressAutofocus) suppressAutofocus = false;
 
       if (focusedTestid !== null) {
         const again = body.querySelector<HTMLInputElement>(
@@ -294,15 +330,16 @@ function renderWall(
 ): void {
   const { lengthM, angleDeg } = segmentMetrics(room, segIndex);
   sectionTitle(body, `Wall ${segIndex + 1} \u00B7 ${room.name}`);
-  const dl = document.createElement('dl');
-  dl.className = 'inspector-summary';
-  kvRow(dl, 'Length', `${lengthM.toFixed(2)} m`);
-  kvRow(dl, 'Angle', fmtDeg(Math.round(angleDeg)));
-  body.appendChild(dl);
 
   // Lean degrees: the L-popover functionality promoted to a visible
   // control. Reuses the IDENTICAL commit path (incl. the clear-on-empty
   // convention: 0 routes through clearWallLean).
+  //
+  // NOTE (issue #100): the lean section renders BEFORE the dim pair so
+  // the pinned #101 Tab walk (root → Close → lean field) survives the
+  // added fields unchanged; the dim pair joins the Tab order right
+  // after it, and activation AUTOFOCUS lands directly on the length
+  // field anyway (mouseless path needs no Tabbing to arrive).
   const leanRow = (room.roofs ?? []).find((r) => r.segmentIndex === segIndex);
   sectionTitle(body, 'Roof lean');
   const input = numberField(
@@ -344,6 +381,45 @@ function renderWall(
   );
   input.min = '0';
   input.max = String(ROOF_MAX_LEAN_EDITOR_DEG);
+
+  // Issue #100 (Pkg 12.2): the read-only Length/Angle kv rows are now
+  // the EDITABLE shared dim pair. Commit computes the segment's far
+  // endpoint via the shared polar helper and moves it with the SAME
+  // resizeRoom command the vertex-drag path streams (glue.ts ~:2135)
+  // — clamping/validation identical by construction. Errors surface
+  // through the existing flash plumbing.
+  //
+  // ACCEPTED SIDE-EFFECT (non-goal: constraint solving): moving the
+  // shared vertex also bends the FOLLOWING wall (k+1) — the price of
+  // reusing the vertex-move command instead of inventing a new one.
+  sectionTitle(body, 'Dimensions');
+  const a = room.polygon[segIndex];
+  const fields = mountDimFields({
+    lengthM,
+    angleDeg,
+    onLive: () => {
+      /* selection case: no live preview, commit-only (see below) */
+    },
+    onCommit: (dims) => {
+      const n = room.polygon.length;
+      const newPos = polarEndpoint(a, dims.lengthM, dims.angleDeg);
+      const res = dispatch({
+        type: 'resizeRoom',
+        roomId: room.id,
+        vertexIndex: (segIndex + 1) % n,
+        newPos,
+      });
+      if (!res.ok) flash(res.error);
+    },
+    onInvalid: () => {
+      flash('Length must be a positive number.');
+    },
+    commitOnBlur: true,
+    testidPrefix: 'insp-wall',
+    lengthLabel: 'Wall length (m)',
+    angleLabel: 'Wall angle (\u00B0)',
+  });
+  body.appendChild(fields.root);
 }
 
 /* ------------------------------- opening --------------------------------- */

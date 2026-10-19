@@ -13,7 +13,7 @@ import { flatRooms } from '../../shared/schema';
 import type { Pt } from '../geom';
 import { worldToScreen, type Camera, type InteractionPhase } from '../controller';
 import { roomSegments } from '../model/openings';
-import { segmentAngleDegrees } from '../model/angles';
+import { compassAngleBetween } from '../model/angles';
 import { clampAngleLabel } from '../model/measure';
 import { drawPill } from './measurementBadges';
 
@@ -34,10 +34,12 @@ export interface HoverSegRef {
 }
 
 function rowFor(a: Pt, b: Pt): AngleReadoutRow | null {
-  // WORLD-frame angle: computed from world deltas BEFORE any
-  // worldToScreen conversion — canvas Y is flipped, so deriving the
-  // angle from screen deltas would invert north/south.
-  const deg = segmentAngleDegrees(a[0], a[1], b[0], b[1]);
+  // WORLD-frame COMPASS bearing (issue #100, Interpretation A): the
+  // pills speak the same 0°=north CW-positive dialect as the inspector
+  // wall row and the type-in fields — derived from the same helper so
+  // pill and field can never diverge. Still computed from world
+  // deltas BEFORE any worldToScreen conversion (canvas Y is flipped).
+  const deg = compassAngleBetween(a, b);
   const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
   // Shared clamp/format helper (issue #94): rounding then wrapping to
   // [0, 360) lives in ONE place now — measure.ts's clampAngleLabel,
@@ -59,6 +61,19 @@ export function angleReadoutLabels(
   if (phase.tag === 'drawingRect') {
     const row = rowFor(phase.corner1, phase.cursor);
     if (row) rows.push(row);
+  } else if (phase.tag === 'drawingPoly') {
+    // Issue #100 (Pkg 12.2): one pill on the PENDING segment (last
+    // committed point → cursor) — the typed-bearing confirmation for
+    // the floating dim fields. Hidden while the cursor sits exactly
+    // on the last point (degenerate, nothing pending).
+    const last = phase.points[phase.points.length - 1];
+    if (
+      phase.cursor[0] !== last[0] ||
+      phase.cursor[1] !== last[1]
+    ) {
+      const row = rowFor(last, phase.cursor);
+      if (row) rows.push(row);
+    }
   } else if (phase.tag === 'resizing') {
     const room = flatRooms(plan).find((r) => r.id === phase.selectedRoomId);
     if (room) {
