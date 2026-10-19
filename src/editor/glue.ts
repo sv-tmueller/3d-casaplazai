@@ -763,8 +763,8 @@ export function initEditorInteraction(
         /* fall through to the legacy rung */
       }
     }
+    const ta = document.createElement('textarea');
     try {
-      const ta = document.createElement('textarea');
       ta.value = text;
       // Position off-screen but NOT display:none — detached/hidden
       // editors are excluded from some browsers' copy paths.
@@ -773,11 +773,14 @@ export function initEditorInteraction(
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
+      return document.execCommand('copy');
     } catch {
       return false;
+    } finally {
+      // Reviewer #91 should-fix: ALWAYS detach — a thrown select()/
+      // execCommand previously leaked the (invisible, focusable,
+      // plan-carrying) textarea into the DOM.
+      ta.remove();
     }
   }
 
