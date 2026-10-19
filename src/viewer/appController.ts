@@ -947,11 +947,6 @@ function makeRenderer(canvas: HTMLCanvasElement): WebGLRenderer | null {
       canvas,
       antialias: true,
       powerPreference: 'high-performance',
-      // Framebuffer preservation is gated on the diagnostic flag: the
-      // e2e luminance probes read the canvas via toDataURL (which needs
-      // the buffer alive past the compositor handoff); production keeps
-      // the cheaper default teardown.
-      preserveDrawingBuffer: isPerfEnabled(),
     });
   } catch {
     return null;
