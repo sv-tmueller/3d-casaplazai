@@ -1,10 +1,10 @@
-# 🏠 CasaPlazaIA — 2D/3D floorplanner
+# 🏠 CasaPlazAI — 2D/3D floorplanner
 
 Draw an apartment in 2D, furnish it, then **walk through it in 3D** —
 and export the plan as a PNG/JPEG image. Single-page web app, no
 backend, no accounts; your plan autosaves to `localStorage`.
 
-![CasaPlazaIA](docs/img/readme-hero.png)
+![CasaPlazAI](docs/img/readme-hero.png)
 
 ## Quick start (cold install)
 
