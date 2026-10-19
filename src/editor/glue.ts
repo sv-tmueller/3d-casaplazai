@@ -157,6 +157,9 @@ export function initEditorInteraction(
   let ghost: GhostPreview | null = null;
   let hoverSeg: { roomId: string; segIndex: number } | null = null;
   let draggingFurnitureId: string | null = null;
+  // Issue #60: single "Dimensions" toggle — gates wall length labels AND
+  // room-area badges (one overlay, one switch).
+  let dimensionsVisible = true;
 
   /* ---------- sizing (devicePixelRatio aware) ---------- */
   function resizeCanvas(): void {
@@ -180,7 +183,7 @@ export function initEditorInteraction(
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
-    paintMeasurementBadges(ctx, cam, store.getState().data);
+    paintMeasurementBadges(ctx, cam, store.getState().data, dimensionsVisible);
   }
 
   function snapToleranceWorld(): number {
@@ -281,6 +284,13 @@ export function initEditorInteraction(
   }
 
   refs.btnSelect.addEventListener('click', () => setActiveTool('select'));
+  // Issue #60: "Dimensions" toggle — flips aria-pressed, repaints.
+  refs.btnDimensions.addEventListener('click', () => {
+    dimensionsVisible = !dimensionsVisible;
+    refs.btnDimensions.setAttribute('aria-pressed', String(dimensionsVisible));
+    refs.btnDimensions.classList.toggle('active', dimensionsVisible);
+    repaint();
+  });
   refs.btnRect.addEventListener('click', () => setActiveTool('rectangle'));
   refs.btnPoly.addEventListener('click', () => setActiveTool('polygon'));
   refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
@@ -317,7 +327,7 @@ export function initEditorInteraction(
     return (ctx: CanvasRenderingContext2D, w: number, h: number): void => {
       const scaledCam: Camera = { ...cam, scale: cam.scale * scale };
       paintScene(ctx, w, h, scaledCam, store.getState().data, { tag: 'idle' }, null);
-      paintMeasurementBadges(ctx, scaledCam, store.getState().data);
+      paintMeasurementBadges(ctx, scaledCam, store.getState().data, dimensionsVisible);
     };
   }
 
