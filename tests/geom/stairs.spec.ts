@@ -33,6 +33,7 @@ import {
 } from '../../src/geom';
 import type { FloorplanData, Room, Staircase } from '../../src/shared/schema';
 import { flatRooms, migrate } from '../../src/shared/schema';
+import { covers } from '../unit/helpers/meshCoverage';
 
 /** Load the committed townhouse fixture through the migration door. */
 function townhouse(): FloorplanData {
@@ -396,35 +397,3 @@ describe('compile integration — stair-free plans stay byte-identical', () => {
     expect(solid.rise).toBe(2.7);
   });
 });
-
-/** Point-in-triangle coverage probe over one mesh's xy projection. */
-function covers(
-  mesh: { positions: Float32Array; indices: Uint32Array },
-  px: number,
-  py: number,
-): boolean {
-  for (let i = 0; i < mesh.indices.length; i += 3) {
-    const a = mesh.indices[i]! * 3;
-    const b = mesh.indices[i + 1]! * 3;
-    const c = mesh.indices[i + 2]! * 3;
-    if (triContains(
-      mesh.positions[a]!, mesh.positions[a + 1]!,
-      mesh.positions[b]!, mesh.positions[b + 1]!,
-      mesh.positions[c]!, mesh.positions[c + 1]!,
-      px, py,
-    )) return true;
-  }
-  return false;
-}
-
-function triContains(
-  ax: number, ay: number, bx: number, by: number,
-  cx: number, cy: number, px: number, py: number,
-): boolean {
-  const d1 = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-  const d2 = (cx - bx) * (py - by) - (cy - by) * (px - bx);
-  const d3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
-  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
-  const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
-  return !(hasNeg && hasPos);
-}

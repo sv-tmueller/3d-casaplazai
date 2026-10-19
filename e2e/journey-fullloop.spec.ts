@@ -6,8 +6,7 @@
  */
 
 import { expect, test, type Page } from '@playwright/test';
-
-const SCALE = 80;
+import { CAM_SCALE as SCALE } from './fixtures/camConstants';
 
 
 /** Demo fixture + a 4th room, seeded through the editor bridge. */
