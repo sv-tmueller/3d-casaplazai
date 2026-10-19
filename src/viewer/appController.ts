@@ -28,10 +28,12 @@ import {
   destroyHud,
   onBindRoofToggle,
   onBindToggle,
+  onBindWallsAlpha,
   PerfOverlay,
   playFade,
   reflectMode,
   reflectRoofVisibility,
+  reflectWallsAlpha,
   setWalkAffordances,
   showHint,
   toast,
@@ -135,6 +137,10 @@ export class ViewerApp {
   /** Manual roof-visibility state (HUD toggle, issue #86). */
   private roofsShown = true;
 
+  /** Walls-transparency slider (issue #120): unbind + normalized state. */
+  private unbindWallsAlpha: (() => void) | null = null;
+  private wallsAlpha = 0;
+
   /**
    * Autofade machinery (issue #86): upward-eye-ray raycaster against
    * roof-slot meshes only, throttled to every Nth tick. Opacity tweens
@@ -208,6 +214,12 @@ export class ViewerApp {
       (visible) => this.setRoofsVisible(visible),
     );
     reflectRoofVisibility(this.hud, this.roofsShown);
+    // Walls-transparency slider (issue #120): normalized alpha →
+    // wall-material applier; reflect the boot state like the roof pair.
+    this.unbindWallsAlpha = onBindWallsAlpha(this.hud, (alpha) =>
+      this.setWallsAlpha(alpha),
+    );
+    reflectWallsAlpha(this.hud, this.wallsAlpha);
 
     // Tab toggles overview ⇄ walk (README-promised; formerly unwired —
     // the e2e descended vacuously). Skipped while typing in form fields.
@@ -468,6 +480,11 @@ export class ViewerApp {
     }
     this.sceneRoot = rebuilt;
 
+    // Walls transparency (#120): fresh materials arrive opaque, so the
+    // viewer-local slider state resets to 0 with them — keeps the UI
+    // and the scene honest after every rebuild (no schema coupling).
+    this.setWallsAlpha(0);
+
     // Reframe/refoot whatever rig is live against the new geometry.
     if (this.orbitCam) this.orbitCam.reframe(adapted);
     if (this.walkCam) this.respawnIfNeeded(adapted);
@@ -593,6 +610,33 @@ export class ViewerApp {
         mat.transparent = false;
         this.roofFadeState = 'shown';
       }
+    }
+  }
+
+  /* ------------------ walls transparency (issue #120) ---------------------- */
+
+  /** Wall-slot meshes of the live scene (ONE merged mesh typical). */
+  private wallMeshes(): Mesh[] {
+    const roots = this.sceneRoot?.meshes ?? [];
+    return roots.filter((m) => m.userData.slot === 'wall');
+  }
+
+  /**
+   * Apply the normalized wallsAlpha (SH3D convention: 0 = opaque,
+   * 1 = invisible) to every wall mesh; the threshold mapping lives in
+   * the pure wallAlphaSettings export (unit-pinned). Also reflects the
+   * state back onto the slider — one sync point for init/reset/drag.
+   */
+  private setWallsAlpha(alpha: number): void {
+    this.wallsAlpha = alpha;
+    reflectWallsAlpha(this.hud, alpha);
+    const settings = wallAlphaSettings(alpha);
+    for (const mesh of this.wallMeshes()) {
+      mesh.visible = settings.visible;
+      const mat = mesh.material as MeshStandardMaterial;
+      mat.transparent = settings.transparent;
+      mat.depthWrite = settings.depthWrite;
+      mat.opacity = settings.opacity;
     }
   }
 
@@ -740,7 +784,24 @@ export class ViewerApp {
       // the plan carries no roof slot at all.
       roofOpacity: this.roofProbe()?.opacity ?? null,
       roofVisible: this.roofProbe()?.visible ?? null,
+      // Walls transparency (issue #120): live opacity/visibility of the
+      // (merged) wall mesh — the e2e dollhouse-slider probes. Null when
+      // the plan carries no wall slot at all.
+      wallOpacity: this.wallProbe()?.opacity ?? null,
+      wallVisible: this.wallProbe()?.visible ?? null,
     });
+  }
+
+  /** First wall-slot mesh's observable state (e2e probe backing). */
+  private wallProbe(): { opacity: number; visible: boolean } | null {
+    const mesh = this.sceneRoot?.meshes.find(
+      (m) => m.userData.slot === 'wall',
+    );
+    if (!mesh) return null;
+    return {
+      opacity: (mesh.material as MeshStandardMaterial).opacity,
+      visible: mesh.visible,
+    };
   }
 
   /** First roof-slot mesh's observable state (e2e probe backing). */
@@ -910,6 +971,7 @@ export class ViewerApp {
     }
     this.unbindToggle?.();
     this.unbindRoofToggle?.();
+    this.unbindWallsAlpha?.();
     this.perf.destroy();
     destroyHud(this.hud);
     this.renderer?.dispose();
@@ -931,6 +993,42 @@ export function isStandingLegal(
     }
   }
   return true;
+}
+
+/** Material settings produced by the walls-transparency applier (#120). */
+export interface WallAlphaSettings {
+  visible: boolean;
+  transparent: boolean;
+  depthWrite: boolean;
+  opacity: number;
+}
+
+/**
+ * Map the normalized wallsAlpha (SH3D convention: 0 = opaque,
+ * 1 = invisible) onto merged-wall material settings (issue #120): pure
+ * and exported so the thresholds are unit-pinned.
+ *
+ *  - 0     : opaque fast path (transparent off, depth writes ON) — the
+ *            same settle the roof autofade uses (#86).
+ *  - (0,1) : glass-style transparent pass; opacity = 1 - alpha, depth
+ *            writes OFF (the transparent pass sorts after opaque
+ *            furniture/floors; coplanar wall overlaps are already
+ *            deduped in the adapter — no intra-mesh z-fight).
+ *  - >= 1  : fully invisible — the skipped draw removes the mesh's
+ *            shadow contribution for free; parked on the opaque
+ *            classification while skipped, opacity clamped to 0 so the
+ *            published probe stays monotone.
+ */
+export function wallAlphaSettings(alpha: number): WallAlphaSettings {
+  const a = Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : 0;
+  const opaque = a === 0;
+  const invisible = a >= 1;
+  return {
+    visible: !invisible,
+    transparent: !opaque && !invisible,
+    depthWrite: opaque || invisible,
+    opacity: 1 - a,
+  };
 }
 
 /** Default rAF scheduler returning a canceller. */

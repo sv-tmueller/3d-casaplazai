@@ -690,6 +690,25 @@ body {
   color: var(--accent-ink);
 }
 
+/* Walls-transparency slider (issue #120): native range restyled to the
+   HUD chrome; generous track height for trackpad use, accent-tinted
+   thumb/track where supported (no new dependency). */
+.hud-slider {
+  width: 110px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.hud-slider-value {
+  min-width: 34px;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .hud-hint {
   color: var(--text);
   font-size: 12px;

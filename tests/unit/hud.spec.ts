@@ -9,8 +9,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildHud,
   onBindRoofToggle,
+  onBindWallsAlpha,
   reflectRoofVisibility,
+  reflectWallsAlpha,
   setWalkAffordances,
+  wallsAlphaFromSlider,
   type HudHandles,
 } from '../../src/viewer/hud';
 
@@ -115,5 +118,68 @@ describe('roof visibility toggle (issue #86)', () => {
     );
     unbind();
     handles.roofBtn.click(); // must not throw
+  });
+});
+
+describe('walls-transparency slider (issue #120)', () => {
+  let handles: HudHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+  });
+
+  it('renders a NATIVE range input (mouseless: arrows work for free)', () => {
+    const input = document.querySelector<HTMLInputElement>(
+      '[data-testid="hud-walls-alpha"]',
+    );
+    expect(input).toBe(handles.wallsAlpha);
+    expect(input!.getAttribute('type')).toBe('range');
+    expect(input!.getAttribute('min')).toBe('0');
+    expect(input!.getAttribute('max')).toBe('100');
+    expect(input!.getAttribute('step')).toBe('1');
+    expect(input!.getAttribute('aria-label')).toBe('Wall transparency');
+    expect(input!.value).toBe('0');
+  });
+
+  it('ships the % readout beside the slider, reading 0%', () => {
+    expect(handles.wallsAlphaLabel.textContent).toBe('0%');
+  });
+
+  it('normalizes slider position → SH3D wallsAlpha (0..1)', () => {
+    expect(wallsAlphaFromSlider(0)).toBe(0);
+    expect(wallsAlphaFromSlider(40)).toBeCloseTo(0.4);
+    expect(wallsAlphaFromSlider(100)).toBe(1);
+    // Hostile / overshoot values clamp into the unit range.
+    expect(wallsAlphaFromSlider(140)).toBe(1);
+    expect(wallsAlphaFromSlider(-5)).toBe(0);
+    expect(wallsAlphaFromSlider(Number.NaN)).toBe(0);
+  });
+
+  it('fires the listener with the NORMALIZED value on input', () => {
+    const seen: number[] = [];
+    onBindWallsAlpha(handles, (alpha) => seen.push(alpha));
+    handles.wallsAlpha.value = '37';
+    handles.wallsAlpha.dispatchEvent(new Event('input'));
+    handles.wallsAlpha.value = '0';
+    handles.wallsAlpha.dispatchEvent(new Event('input'));
+    expect(seen).toEqual([0.37, 0]);
+  });
+
+  it('reflects state onto slider position and % label (init/reset sync)', () => {
+    reflectWallsAlpha(handles, 0.42);
+    expect(handles.wallsAlpha.value).toBe('42');
+    expect(handles.wallsAlphaLabel.textContent).toBe('42%');
+    reflectWallsAlpha(handles, 0);
+    expect(handles.wallsAlpha.value).toBe('0');
+    expect(handles.wallsAlphaLabel.textContent).toBe('0%');
+  });
+
+  it('unbinds cleanly (post-teardown input events are inert)', () => {
+    const unbind = onBindWallsAlpha(handles, () => {
+      throw new Error('listener fired after unbind');
+    });
+    unbind();
+    handles.wallsAlpha.dispatchEvent(new Event('input')); // must not throw
   });
 });
