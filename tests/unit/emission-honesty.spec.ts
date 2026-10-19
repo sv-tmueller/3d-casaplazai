@@ -13,16 +13,34 @@
  *      (was 4 rows). Fix: a room whose interior chord depth at the cut
  *      is below PAIR_TOLERANCE_M cannot host a doorway — the cut walks
  *      through to the real room across.
+ *   3. #112 SLAB IMPOSTOR: the impostor purge must not rely on the
+ *      vertex-AVERAGE centroid proxy — a slab whose centroid falls
+ *      outside the room it physically overlaps (and vice versa) still
+ *      evaded the purge (3 rows). Fix: true interior-overlap predicate.
+ *   4. #112 FIX ROUND — STACKED COINCIDENCE: room-master-bedroom
+ *      (floor-upper) reuses room-living's footprint exactly in the
+ *      shipped demo/demo-townhouse.json. Treating full coincidence as
+ *      mere boundary contact let the stacked twin leak a phantom
+ *      cross-storey row (3 rows) that carves real geometry through
+ *      compile.ts flatOpenings roomId resolution across floors.
+ *      Fix: exact footprint coincidence counts as overlap (clause (d)).
  *
  * Unregressed guarantees pinned here too: the legitimate 5 mm-offset
  * shared wall still pairs, and the inclusive-at-exactly-10 mm pairing
  * boundary holds at the EMISSION level.
  *
  * RED on main @52ab4e9: cases 1, 2 and the derivePairRows agreement
- * fail (3 rows / 4 rows emitted where 2 are honest).
+ * fail (3 rows / 4 rows emitted where 2 are honest). The round-4
+ * stacked pin is RED at the pre-fix tip of feat/112-adjacency-purge
+ * (3 rows) and GREEN at BASE (2 rows), matching the tester's
+ * BASE = 2 rows report.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Room, Vec2 } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
+import { parseValidatedPlan } from '../../src/geom';
 import { EditorStore, emptyPlan } from '../../src/editor/store';
 import { derivePairRows } from '../../src/editor/model/openings';
 
@@ -108,6 +126,38 @@ describe('#40 closet: sub-tolerance room cannot host (4 -> 2)', () => {
   });
 });
 
+describe('#112 mutually-exterior-centroid impostor: slab must still be purged', () => {
+  // Slab [5.008,0]-[6.008,9] straddles the shared wall and physically
+  // overlaps kitchen's footprint, but NEITHER room's vertex-average
+  // centroid is inside the other: slab centroid ≈ (5.508, 4.5) sits
+  // north of kitchen's y ≤ 4, kitchen centroid (6.5, 2) sits east of
+  // the slab's x ≤ 6.008. The vertex-average containment probe saw no
+  // overlap -> 3 rows emitted where 2 are honest.
+  const SLAB: FloorplanData = planWith([
+    mkRoom('living', LIVING),
+    mkRoom('kitchen', [[5, 0], [8, 0], [8, 4], [5, 4]]),
+    mkRoom('slab', [[5.008, 0], [6.008, 0], [6.008, 9], [5.008, 9]]),
+  ]);
+
+  it('one commit emits exactly 2 rows: living + kitchen, none for slab', () => {
+    const ops = commitEastDoor(new EditorStore(SLAB));
+    expect(ops).toHaveLength(2);
+    expect(ops.map((o) => o.roomId).sort()).toEqual(['kitchen', 'living']);
+    expect(ops.filter((o) => o.roomId === 'slab')).toHaveLength(0);
+  });
+
+  it('derivePairRows (model layer) agrees with the store emission', () => {
+    const rows = derivePairRows(SLAB, {
+      roomId: 'living',
+      segmentIndex: 1,
+      tCenter: 0.5,
+      width: 0.9,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[1].roomId).toBe('kitchen');
+  });
+});
+
 describe('#40 legit pairing unregressed + boundary pin', () => {
   it('a 5 mm-offset shared wall still pairs (core #38 guarantee)', () => {
     const p = planWith([
@@ -137,5 +187,56 @@ describe('#40 legit pairing unregressed + boundary pin', () => {
     ]);
     const ops = commitEastDoor(new EditorStore(p));
     expect(ops).toHaveLength(1); // honest single cut
+  });
+});
+
+describe('#112 fix round: stacked coincident footprints (townhouse)', () => {
+  // The shipped demo/demo-townhouse.json stacks room-master-bedroom
+  // (floor-upper) EXACTLY on room-living (floor-ground) — identical
+  // footprints on two storeys. A door committed on kitchen's west wall
+  // legitimately mirrors to the ground-floor neighbour; treating the
+  // exact coincidence as mere boundary CONTACT let the stacked upper
+  // room leak a phantom third row, which carves real geometry through
+  // compile.ts flatOpenings roomId resolution across floors.
+  // Pinned: exactly 2 fresh rows — kitchen + living, never the twin.
+  const townhouse = (): FloorplanData =>
+    parseValidatedPlan(
+      migrate(
+        JSON.parse(readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8')),
+      ).data!,
+    );
+
+  function freshRows(dispatch: (store: EditorStore) => void): Array<{ roomId: string }> {
+    const store = new EditorStore(townhouse());
+    const before = store.getState().data.floors.map((f) => f.openings.length);
+    dispatch(store);
+    return store.getState().data.floors.flatMap((f, i) => f.openings.slice(before[i]));
+  }
+
+  it('one commit emits exactly 2 rows: kitchen + living, no phantom upper row', () => {
+    const fresh = freshRows((store) => {
+      const res = store.dispatch({
+        type: 'addOpening',
+        roomId: 'room-kitchen',
+        segmentIndex: 3,
+        tCenter: 0.5,
+        ...DOOR,
+      });
+      expect(res.ok).toBe(true);
+    });
+    expect(fresh).toHaveLength(2);
+    expect(fresh.map((o) => o.roomId).sort()).toEqual(['room-kitchen', 'room-living']);
+    expect(fresh.filter((o) => o.roomId === 'room-master-bedroom')).toHaveLength(0);
+  });
+
+  it('derivePairRows (model layer) agrees: stacked twin stays purged', () => {
+    const rows = derivePairRows(townhouse(), {
+      roomId: 'room-kitchen',
+      segmentIndex: 3,
+      tCenter: 0.5,
+      width: 0.9,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.roomId).sort()).toEqual(['room-kitchen', 'room-living']);
   });
 });
