@@ -24,7 +24,8 @@ import type {
   Room,
 } from '../shared/schema';
 import { roomAreaM2 } from './measures';
-import { compassAngleBetween } from './model/angles';
+import { compassAngleBetween, polarEndpoint } from './model/angles';
+import { mountDimFields } from './typeInDims';
 import { ROOF_MAX_LEAN_EDITOR_DEG } from './store';
 
 /** UI-local address of a wall segment (walls are not entities). */
@@ -297,11 +298,43 @@ function renderWall(
 ): void {
   const { lengthM, angleDeg } = segmentMetrics(room, segIndex);
   sectionTitle(body, `Wall ${segIndex + 1} \u00B7 ${room.name}`);
-  const dl = document.createElement('dl');
-  dl.className = 'inspector-summary';
-  kvRow(dl, 'Length', `${lengthM.toFixed(2)} m`);
-  kvRow(dl, 'Angle', fmtDeg(Math.round(angleDeg)));
-  body.appendChild(dl);
+
+  // Issue #100 (Pkg 12.2): the read-only Length/Angle kv rows are now
+  // the EDITABLE shared dim pair. Commit computes the segment's far
+  // endpoint via the shared polar helper and moves it with the SAME
+  // resizeRoom command the vertex-drag path streams (glue.ts ~:2135)
+  // — clamping/validation identical by construction. Errors surface
+  // through the existing flash plumbing.
+  //
+  // ACCEPTED SIDE-EFFECT (non-goal: constraint solving): moving the
+  // shared vertex also bends the FOLLOWING wall (k+1) — the price of
+  // reusing the vertex-move command instead of inventing a new one.
+  const a = room.polygon[segIndex];
+  const fields = mountDimFields({
+    lengthM,
+    angleDeg,
+    onLive: () => {
+      /* selection case: no live preview, commit-only (see below) */
+    },
+    onCommit: (dims) => {
+      const n = room.polygon.length;
+      const newPos = polarEndpoint(a, dims.lengthM, dims.angleDeg);
+      const res = dispatch({
+        type: 'resizeRoom',
+        roomId: room.id,
+        vertexIndex: (segIndex + 1) % n,
+        newPos,
+      });
+      if (!res.ok) flash(res.error);
+    },
+    onInvalid: () => {
+      flash('Length must be a positive number.');
+    },
+    testidPrefix: 'insp-wall',
+    lengthLabel: 'Wall length (m)',
+    angleLabel: 'Wall angle (\u00B0)',
+  });
+  body.appendChild(fields.root);
 
   // Lean degrees: the L-popover functionality promoted to a visible
   // control. Reuses the IDENTICAL commit path (incl. the clear-on-empty
