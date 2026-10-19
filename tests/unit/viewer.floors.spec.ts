@@ -188,7 +188,7 @@ describe('walk grounding — active storey only', () => {
       // the companion assertion below inspects the box population.
       rig.setYaw(0); // +x heading
       for (let i = 0; i < 240; i += 1) {
-        simKeys(rig, true);
+        simKeys(rig);
         rig.update(1 / 60);
       }
       const { x } = rig.discPosition;
@@ -203,8 +203,8 @@ describe('walk grounding — active storey only', () => {
   });
 });
 
-/** Press/release W through the rig's private handler (test seam). */
-function simKeys(_rig: WalkRig, _down: boolean): void {
+/** Press W through the rig's private handler (test seam). */
+function simKeys(_rig: WalkRig): void {
   // Key events are bound to window; happy-dom lets us dispatch synthetics.
   window.dispatchEvent(
     new KeyboardEvent('keydown', { code: 'KeyW', bubbles: true }),
