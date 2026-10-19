@@ -13,6 +13,7 @@ import {
 } from './controller';
 import type { Pt } from './geom';
 import { itemCorners } from './model/furniture';
+import { DEFAULT_SNAP_PITCH_M } from './model/settings';
 import { groupedPairs, pointAtT, roomSegments, segmentNormal } from './model/openings';
 
 export interface SegHighlight {
@@ -48,12 +49,13 @@ export function paintScene(
   segHighlight: SegHighlight | null = null,
   hoverHandle: number | null = null,
   selectedId: string | null = null,
+  gridPitch: number = DEFAULT_SNAP_PITCH_M,
 ): void {
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = BG;
   ctx.fillRect(0, 0, cssW, cssH);
 
-  drawGrid(ctx, cssW, cssH, cam);
+  drawGrid(ctx, cssW, cssH, cam, gridPitch);
 
   for (const room of plan.rooms) {
     drawRoomShape(
@@ -119,9 +121,10 @@ function drawGrid(
   cssW: number,
   cssH: number,
   cam: Camera,
+  pitch: number,
 ): void {
   if (cam.scale < 6) return; // too zoomed out for meaningful grid
-  const stepMinor = 0.5 * cam.scale;
+  const stepMinor = pitch * cam.scale;
   const stepMajor = stepMinor * 10;
   const ox = modCss((-cam.originX * cam.scale) % stepMinor, stepMinor);
   const oy = modCss((cam.originY * cam.scale) % stepMinor, stepMinor);

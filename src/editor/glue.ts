@@ -12,7 +12,6 @@ import {
   computeOverlaps,
   evaluateSnapCandidates,
   finalizeRectangle,
-  GRID_M,
   HANDLE_HIT_PX,
   judgeMoveTarget,
   nextRotation,
@@ -30,6 +29,14 @@ import {
   type InteractionPhase,
 } from './controller';
 import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from './model/constants';
+import {
+  loadSnapSettings,
+  parsePitch,
+  resolveSnap,
+  safeLocalStorage,
+  saveSnapSettings,
+  type SnapSettings,
+} from './model/settings';
 import {
   clampTForDrag,
   nearestSegment,
@@ -51,7 +58,7 @@ import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
 import { EditorStore, emptyPlan } from './store';
-import { snapVec, vecAdd, vecSub } from './geom';
+import { vecAdd, vecSub } from './geom';
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -199,6 +206,17 @@ export function initEditorInteraction(
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
+  // Issue #68: snap settings (pitch + master). Editor preference, not
+  // plan data — hydrated from localStorage and persisted on change.
+  const snapStorage = safeLocalStorage();
+  let snapSettings: SnapSettings = loadSnapSettings(snapStorage);
+
+  /** Apply + persist a settings mutation, then repaint the grid. */
+  function updateSnapSettings(next: SnapSettings): void {
+    snapSettings = next;
+    saveSnapSettings(snapStorage, snapSettings);
+    repaint();
+  }
 
   /* ---------- sizing (devicePixelRatio aware) ---------- */
   function resizeCanvas(): void {
@@ -218,7 +236,7 @@ export function initEditorInteraction(
     const rect = canvas.getBoundingClientRect();
     paintScene(
       ctx, rect.width, rect.height, cam, store.getState().data, phase, hoverRoomId,
-      ghost, hoverSeg, hoverHandle, store.getState().selectedId,
+      ghost, hoverSeg, hoverHandle, store.getState().selectedId, snapSettings.pitch,
     );
     // pkg 6 (issue #7): measurement badges painted on TOP of the scene
     // so they ride pan/zoom and appear in exports.
@@ -239,8 +257,9 @@ export function initEditorInteraction(
   }
 
   /**
-   * Full snap policy: magnetize to foreign room geometry first; fall
-   * back to the 0.5 m grid when nothing attracts within tolerance.
+   * Full snap policy (issue #68): magnetize to foreign room geometry
+   * first; fall back to the pitch grid from snap settings when nothing
+   * attracts within tolerance. Master OFF disables both.
    */
   function snapPoint(worldPt: Pt, excludeIds: string[] = []): Pt {
     const geo = evaluateSnapCandidates(
@@ -249,7 +268,11 @@ export function initEditorInteraction(
       snapToleranceWorld(),
       excludeIds,
     );
-    return geo.snapped ? geo.point : snapVec(worldPt, GRID_M);
+    return resolveSnap(
+      worldPt,
+      geo.snapped ? geo.point : null,
+      snapSettings,
+    );
   }
 
   /* ---------- pointer helpers ---------- */
@@ -331,6 +354,59 @@ export function initEditorInteraction(
     refs.btnDimensions.classList.toggle('active', dimensionsVisible);
     repaint();
   });
+
+  /* ---------- Issue #68: snap settings popover ---------- */
+
+  /** Sync popover controls from the current settings. */
+  const syncSnapControls = (): void => {
+    refs.snapPopover.querySelectorAll<HTMLInputElement>(
+      'input[name="snap-pitch"]',
+    ).forEach((r) => {
+      r.checked = parsePitch(Number(r.value)) === snapSettings.pitch;
+    });
+    const masterCb = refs.snapPopover.querySelector<HTMLInputElement>(
+      '[data-testid="snap-master"]',
+    );
+    if (masterCb) masterCb.checked = snapSettings.master;
+  };
+
+  const setSnapPopoverOpen = (open: boolean): void => {
+    refs.snapPopover.hidden = !open;
+    refs.btnSnap.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+
+  refs.btnSnap.addEventListener('click', () => {
+    // hidden===true means the popover is closed, i.e. we are OPENING it.
+    const opening = refs.snapPopover.hidden === true;
+    if (opening) syncSnapControls();
+    setSnapPopoverOpen(opening);
+  });
+
+  refs.snapPopover.addEventListener('change', (ev) => {
+    const target = ev.target as HTMLInputElement;
+    if (target.name === 'snap-pitch') {
+      const pitch = parsePitch(Number(target.value));
+      if (pitch !== null) updateSnapSettings({ ...snapSettings, pitch });
+    } else if (target.dataset.testid === 'snap-master') {
+      updateSnapSettings({ ...snapSettings, master: target.checked });
+    }
+  });
+
+  // Outside click closes the popover (first-popover discipline: dumb
+  // listeners, no focus trap).
+  document.addEventListener('pointerdown', (ev) => {
+    if (refs.snapPopover.hidden) return;
+    if (refs.snapPopover.contains(ev.target as Node)) return;
+    if (refs.btnSnap.contains(ev.target as Node)) return;
+    setSnapPopoverOpen(false);
+  });
+  // Escape closes it too (capture phase so canvas key handling is moot).
+  document.addEventListener('keydown', (ev) => {
+    if (!refs.snapPopover.hidden && ev.key === 'Escape') {
+      ev.stopPropagation();
+      setSnapPopoverOpen(false);
+    }
+  }, true);
   refs.btnRect.addEventListener('click', () => setActiveTool('rectangle'));
   refs.btnPoly.addEventListener('click', () => setActiveTool('polygon'));
   refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
@@ -1078,6 +1154,15 @@ export function initEditorInteraction(
           rotationDeg: nextRotation(item.rotationDeg),
         });
       }
+      return;
+    }
+    // Issue #68: "S" toggles the snap-settings popover. Registered in
+    // shortcuts.ts (feeds the "?" help modal + README sync spec).
+    if ((ev.key === 's' || ev.key === 'S') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      const opening = refs.snapPopover.hidden === true;
+      if (opening) syncSnapControls();
+      setSnapPopoverOpen(opening);
+      ev.preventDefault();
       return;
     }
     if ((ev.key === 'Backspace' || ev.key === 'Delete') && !ev.ctrlKey && !ev.metaKey) {
