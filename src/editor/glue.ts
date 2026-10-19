@@ -14,10 +14,12 @@ import {
 import { AutosaveManager } from "./autosave";
 import {
   attemptDrop,
+  bandRect,
   classifyCorner,
   computeOverlaps,
   evaluateSnapCandidates,
   finalizeRectangle,
+  furnitureInBand,
   HANDLE_HIT_PX,
   judgeMoveTarget,
   nextRotation,
@@ -25,6 +27,7 @@ import {
   resizeHandleAt,
   resizeHandlesOf,
   roomAt,
+  roomInBand,
   screenToWorld,
   SNAP_TOL_PX,
   validateOpeningDraft,
@@ -281,6 +284,19 @@ export function initEditorInteraction(
   let draggingFurnitureId: string | null = null;
   // Issue #61: opening drag candidate (null = no opening drag in flight).
   let dragOpening: OpeningDragCandidate | null = null;
+  // pkg 13.2 (issue #110): multi-select marquee. GLUE-LOCAL state on the
+  // #61 candidate precedent — no InteractionPhase variant, no store
+  // slice. `multiSelected` mirrors underlaySelected: a plain Set the
+  // store knows nothing about (commands carry explicit id arrays), so
+  // membership changes never touch history. `marquee` is the armed
+  // band candidate (SCREEN px; it only engages past the click
+  // threshold, so a plain empty-space click keeps today's deselect).
+  let multiSelected = new Set<string>();
+  let marquee: { start: Pt; cur: Pt; engaged: boolean } | null = null;
+  /** Furniture ids participating in an in-flight bulk drag (null = single). */
+  let bulkDragIds: string[] | null = null;
+  /** Issue #110: pointer travel (screen px) before a marquee band engages. */
+  const MARQUEE_ENGAGE_PX = 3;
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
@@ -449,6 +465,9 @@ export function initEditorInteraction(
       activeUnderlay(),
       underlayImg,
       underlaySelected && underlayInteractable(activeUnderlay()),
+      // pkg 13.2 (issue #110): marquee band + multi-member highlight.
+      marquee !== null && marquee.engaged ? marquee : null,
+      [...multiSelected],
     );
     // Pkg 12.3 (issue #101, fix round): the WALL case paints WHICH
     // segment the inspector is addressing (yellow, same readout path as
@@ -578,6 +597,26 @@ export function initEditorInteraction(
    * a UI-local segment address is live (walls are not entities).
    */
   function resolveSelection(): SelectionDescriptor {
+    // pkg 13.2 (issue #110): an armed MULTI set outranks the single
+    // selection — the panel shows the aggregate counts instead.
+    if (multiSelected.size > 1) {
+      const view = activeFloorPlan(store.getState());
+      const counts: Record<string, number> = {};
+      let total = 0;
+      for (const id of multiSelected) {
+        const kind = flatRooms(view).some((r) => r.id === id)
+          ? 'rooms'
+          : flatOpenings(view).some((o) => o.id === id)
+            ? 'openings'
+            : flatFurniture(view).some((f) => f.id === id)
+              ? 'furniture'
+              : null;
+        if (kind === null) continue; // raced a delete; purge reaps it
+        counts[kind] = (counts[kind] ?? 0) + 1;
+        total += 1;
+      }
+      if (total > 1) return { kind: 'multi', counts };
+    }
     const st = store.getState();
     const sel = st.selectedId;
     if (sel === null) return { kind: "none" };
@@ -623,6 +662,58 @@ export function initEditorInteraction(
     repaint();
   }
 
+  /* ------- pkg 13.2 (issue #110): marquee multi-select helpers ------- */
+
+  /**
+   * Sweep the marquee band (SCREEN px) through the camera into a world
+   * rect and collect the member ids it covers on the ACTIVE floor:
+   * furniture by rotated-corner AABB ∩ band, rooms by bbox-overlap OR
+   * any-vertex-in-rect (controller.ts predicates — loose by design;
+   * exact SAT is a #110 non-goal).
+   */
+  function marqueeMembers(start: Pt, cur: Pt): Set<string> {
+    const rect = bandRect(screenToWorld(cam, start), screenToWorld(cam, cur));
+    const view = activeFloorPlan(store.getState());
+    const ids = new Set<string>();
+    for (const f of flatFurniture(view)) {
+      if (furnitureInBand(f, rect)) ids.add(f.id);
+    }
+    for (const r of flatRooms(view)) {
+      if (roomInBand(r, rect)) ids.add(r.id);
+    }
+    return ids;
+  }
+
+  /**
+   * Reap multi-set members the plan no longer has (bulk delete, undo,
+   * floor switch raced the glue-local set). Runs on every store notify,
+   * BEFORE the inspector re-renders, so the panel never counts ghosts.
+   */
+  function purgeStaleMulti(): void {
+    if (multiSelected.size === 0) return;
+    const view = activeFloorPlan(store.getState());
+    const alive = (id: string): boolean =>
+      flatRooms(view).some((r) => r.id === id) ||
+      flatOpenings(view).some((o) => o.id === id) ||
+      flatFurniture(view).some((f) => f.id === id);
+    let changed = false;
+    for (const id of [...multiSelected]) {
+      if (!alive(id)) {
+        multiSelected.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) refreshInspector();
+  }
+
+  /** Toggle one id's multi-set membership (shift-click, issue #110). */
+  function toggleMultiMember(id: string): void {
+    if (multiSelected.has(id)) multiSelected.delete(id);
+    else multiSelected.add(id);
+    refreshInspector();
+    repaint();
+  }
+
   store.subscribe((_s) => {
     if (_s === undefined) return;
     // Ratified decision (a) on issue #75: the autosave slot carries RAW
@@ -630,6 +721,9 @@ export function initEditorInteraction(
     // Renaming the KEY would orphan every existing save — key stays.
     // toLegacyWire remains ONLY for the __casaplaza bridge (wire.ts).
     if (store.dirty) autosave.scheduleSave(_s.data);
+    // Issue #110: reap multi-set members a command removed before the
+    // inspector re-renders (bulk delete, undo, floor switch).
+    purgeStaleMulti();
     refreshBadgeAndButtons();
     refreshFloorIndicator();
     refreshStatus();
@@ -1495,6 +1589,21 @@ export function initEditorInteraction(
    * opening → deleteOpening (+ its pair), room → deleteRoom.
    */
   function routeDelete(): void {
+    // Issue #110: an armed multi-set routes to the ATOMIC bulk command
+    // (ONE undo step). Issued OUTSIDE any open gesture — pointerup
+    // commits the marquee first; deleteEntities is non-streamable and
+    // would throw mid-drag (store gesture guard).
+    if (multiSelected.size > 0) {
+      const res = store.dispatch({
+        type: 'deleteEntities',
+        ids: [...multiSelected],
+      });
+      if (!res.ok) flashMessage(refs, res.error);
+      multiSelected.clear();
+      refreshInspector();
+      repaint();
+      return;
+    }
     const sel = store.getState().selectedId;
     if (sel === null) return;
     // pkg 7.2: selection is plan-wide (ids are plan-unique), but only
@@ -1933,8 +2042,20 @@ export function initEditorInteraction(
     // Furniture takes grab priority over rooms (smaller primitive).
     const grabbed = furnitureItemAt(worldPt, view);
     if (grabbed) {
+      // Issue #110: shift-click toggles multi-set membership instead of
+      // single-selecting (no modifier handling existed before — verified).
+      if (ev.shiftKey) {
+        toggleMultiMember(grabbed.id);
+        return;
+      }
       store.dispatch({ type: "setEntitySelection", entityId: grabbed.id });
       draggingFurnitureId = grabbed.id;
+      // Issue #110: a member of an armed multi-set drags the WHOLE set
+      // (bulk move rides the existing gesture collapse — one undo step).
+      bulkDragIds =
+        multiSelected.size > 1 && multiSelected.has(grabbed.id)
+          ? [...multiSelected]
+          : null;
       store.beginGesture();
       phase = { tag: "draggingFurniture", furnitureId: grabbed.id };
       canvas.setPointerCapture(ev.pointerId);
@@ -1947,6 +2068,12 @@ export function initEditorInteraction(
     // clears the click threshold, so a plain click stays a click.
     const openingHit = openingAt(worldPt, view);
     if (openingHit) {
+      // Issue #110: shift-click toggles membership; skips single-select.
+      if (ev.shiftKey) {
+        toggleMultiMember(openingHit.id);
+        phase = { tag: "idle" };
+        return;
+      }
       const hitRoom = flatRooms(view).find((r) => r.id === openingHit.roomId);
       const hitSeg = hitRoom
         ? roomSegments(hitRoom)[openingHit.segmentIndex]
@@ -1974,6 +2101,12 @@ export function initEditorInteraction(
 
     const clicked = roomAt(worldPt, view);
     if (clicked) {
+      // Issue #110: shift-click toggles membership; skips single-select.
+      if (ev.shiftKey) {
+        toggleMultiMember(clicked.id);
+        phase = { tag: "idle" };
+        return;
+      }
       // Priority: resize handle on ALREADY-selected room > begin drag > plain select.
       if (st.selectedId === clicked.id) {
         const handle = resizeHandleAt(worldPt, clicked, handleToleranceWorld());
@@ -2004,6 +2137,11 @@ export function initEditorInteraction(
       phase = { tag: "dragging", grabOffset, selectedRoomId: clicked.id };
       canvas.setPointerCapture(ev.pointerId);
     } else {
+      // Issue #110: empty space ARMS the marquee candidate (screen px).
+      // Engagement waits for the click threshold in pointermove — a
+      // plain click still deselects below (byte-identical #61 lesson),
+      // and only a crossed threshold arms the band.
+      marquee = { start: evPos(ev), cur: evPos(ev), engaged: false };
       store.dispatch({ type: "setSelection", roomId: null });
       setSelectedSegment(null);
       phase = { tag: "idle" };
@@ -2100,6 +2238,27 @@ export function initEditorInteraction(
       return;
     }
 
+    // Issue #110: an armed marquee candidate advances once the pointer
+    // crosses the engage threshold, then tracks the band every frame.
+    if (marquee !== null) {
+      // Reviewer #110 should-fix: a marquee candidate that missed its
+      // pointerup (released outside the window pre-engage — no capture
+      // is held yet) would turn the next hover-move into a buttonless
+      // band; disarm instead.
+      if ((ev.buttons & 1) === 0) {
+        marquee = null;
+        return;
+      }
+      marquee.cur = evPos(ev);
+      if (!marquee.engaged) {
+        if (dist(marquee.cur, marquee.start) < MARQUEE_ENGAGE_PX) return;
+        marquee.engaged = true;
+        canvas.setPointerCapture(ev.pointerId);
+      }
+      repaint();
+      return;
+    }
+
     // pkg 3: opening-tool ghost slide + wall highlight (any phase-less move).
     if (tool === "door" || tool === "window") {
       updateOpeningHover(worldPt);
@@ -2132,6 +2291,40 @@ export function initEditorInteraction(
     if (phase.tag === "draggingFurniture") {
       const fid = draggingFurnitureId;
       if (fid) {
+        // Issue #110: bulk drag — move every member by the SAME world
+        // delta the single-item path resolves for the grabbed piece.
+        // Streams moveFurniture ×N inside the one open gesture; the
+        // collapse at endGesture() yields ONE undo step (ratified
+        // deviation: no dedicated bulk-move command).
+        if (bulkDragIds !== null) {
+          const plan = activeFloorPlan(store.getState());
+          const grabbedItem = flatFurniture(plan).find((f) => f.id === fid);
+          if (grabbedItem) {
+            const verdict = judgeMoveTarget(plan, fid, worldPt);
+            if (verdict.verdict === "rejected") {
+              flashMessage(
+                refs,
+                "Bulk move stopped — the grabbed piece left its room.",
+              );
+            } else {
+              const dx = verdict.resolved[0] - grabbedItem.position[0];
+              const dy = verdict.resolved[1] - grabbedItem.position[1];
+              if (dx !== 0 || dy !== 0) {
+                for (const oid of bulkDragIds) {
+                  const other = flatFurniture(plan).find((f) => f.id === oid);
+                  if (!other) continue; // raced a delete mid-drag
+                  store.dispatch({
+                    type: "moveFurniture",
+                    furnitureId: oid,
+                    position: [other.position[0] + dx, other.position[1] + dy],
+                  });
+                }
+              }
+            }
+          }
+          repaint();
+          return;
+        }
         const verdict = judgeMoveTarget(
           activeFloorPlan(store.getState()),
           fid,
@@ -2274,12 +2467,33 @@ export function initEditorInteraction(
   function endDrag(): void {
     dragOpening = null;
     resizingUnderlay = null; // pkg 12.1: pointercancel safety net
+    marquee = null; // Issue #110: a cancelled pointer disarms the band.
+    bulkDragIds = null; // Issue #110: retire any bulk drag remainder.
     store.endGesture();
     phase = { tag: "idle" };
     repaint();
   }
 
   canvas.addEventListener('pointerup', (ev) => {
+    // Issue #110: release an armed marquee. Below the threshold this is
+    // the plain empty-space click — pointerdown already deselected, so
+    // disarm quietly (today's behavior byte-identical). Engaged: sweep
+    // the band, commit the member set, refresh the panel.
+    if (marquee !== null) {
+      const band = marquee;
+      marquee = null;
+      if (band.engaged) {
+        multiSelected = marqueeMembers(band.start, band.cur);
+      } else {
+        // Plain empty-space click: today's deselect, extended — an
+        // armed multi-set dissolves too (clicking blank canvas is the
+        // conventional dismissal; Escape is the keyboard equivalent).
+        multiSelected.clear();
+        refreshInspector();
+      }
+      repaint();
+      return;
+    }
     // pkg 12.1 (issue #99): release an in-flight underlay corner
     // resize (capture released implicitly with the pointer).
     if (resizingUnderlay !== null) {
@@ -2324,6 +2538,7 @@ export function initEditorInteraction(
     }
     if (phase.tag === "draggingFurniture") {
       draggingFurnitureId = null;
+      bulkDragIds = null; // Issue #110: bulk drag retired with the gesture.
       endDrag();
       return;
     }
@@ -2381,6 +2596,24 @@ export function initEditorInteraction(
       return;
     }
     if (ev.key === 'Escape') {
+      // pkg 13.2 (issue #110): marquee-clear PREPENDS the strand — an
+      // armed band dies first, before any rescue duty runs (prepend-
+      // only insertion; the #99/#101/#100 strand-then-rescue order
+      // below is untouched).
+      if (marquee !== null) {
+        marquee = null;
+        repaint();
+        return;
+      }
+      // Multi-set clear precedes the in-flight rescues: Escape with an
+      // armed set (but no band) drops the selection first; a SECOND
+      // Escape resumes the strand.
+      if (multiSelected.size > 0) {
+        multiSelected.clear();
+        refreshInspector();
+        repaint();
+        return;
+      }
       // pkg 12.1 (issue #99): abort an in-flight underlay resize (no
       // gesture to close — non-undoable editor state; the resize
       // simply freezes at the last streamed frame).
@@ -2586,7 +2819,9 @@ export function initEditorInteraction(
         return;
       }
       const sel = store.getState().selectedId;
-      if (sel !== null) {
+      // Issue #110: an armed multi-set also owns the Delete key (even
+      // with no single selection live).
+      if (sel !== null || multiSelected.size > 0) {
         ev.preventDefault();
         routeDelete();
       }
