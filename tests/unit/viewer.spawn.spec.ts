@@ -11,6 +11,7 @@ import {
   parseValidatedPlan,
 } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import {
   SpawnFailureError,
   isClear,
@@ -20,10 +21,13 @@ import {
 } from '../../src/viewer/spawn';
 
 const demoRaw: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 function boxesOf(plan: FloorplanData) {
   return compilePlan(plan).collisions;
@@ -32,8 +36,8 @@ function boxesOf(plan: FloorplanData) {
 describe('solveSpawn — demo apartment', () => {
   it('spawns inside the largest room (living room), clear of AABBs', () => {
     const boxes = boxesOf(demoRaw);
-    const pose = solveSpawn(demoRaw.rooms, boxes);
-    const living = demoRaw.rooms.find((r) => r.id === 'room-living-room');
+    const pose = solveSpawn(demoRaw.floors[0].rooms, boxes);
+    const living = demoRaw.floors[0].rooms.find((r) => r.id === 'room-living-room');
     expect(living).toBeDefined();
 
     // Pose lies within the living room's polygon bbox.
@@ -47,7 +51,7 @@ describe('solveSpawn — demo apartment', () => {
   });
 
   it('faces the widest extent (eastward for the rectangular living room)', () => {
-    const pose = solveSpawn(demoRaw.rooms, boxesOf(demoRaw));
+    const pose = solveSpawn(demoRaw.floors[0].rooms, boxesOf(demoRaw));
     expect(((pose.yaw - Math.PI / 2) ** 2) % (Math.PI ** 2)).toBeLessThan(1e-9);
   });
 });
@@ -69,7 +73,7 @@ describe('polygon math', () => {
 describe('solveSpawn — adversarial fixtures', () => {
   it('skinny room with furniture SEVERING the corridor fails honestly (SpawnFailureError)', () => {
     // Skinny corridor room with a fat obstacle squatting on its centroid.
-    const plan: FloorplanData = {
+    const plan: FloorplanData = migrate({
       schemaVersion: 1,
       units: 'meters',
       wallHeight: 2.7,
@@ -94,13 +98,13 @@ describe('solveSpawn — adversarial fixtures', () => {
           footprint: [2.5, 1.6],
         },
       ],
-    };
+    }).data!;
     const boxes = boxesOf(plan);
     // Issue #18: furniture now participates in collisions. The expanded
     // counter (3.1 x 2.2 at the centroid) fully SEVERS the 2 m corridor —
     // no legal cell is reachable from the centroid, so the honest outcome
     // is a typed failure, not a teleport through the obstacle.
-    expect(() => solveSpawn(plan.rooms, boxes)).toThrow(SpawnFailureError);
+    expect(() => solveSpawn(plan.floors[0].rooms, boxes)).toThrow(SpawnFailureError);
   });
 
   it('throws SpawnFailureError when saturation leaves nowhere legal', () => {

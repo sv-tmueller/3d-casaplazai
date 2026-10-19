@@ -71,11 +71,12 @@ const item = (
   footprint,
 });
 
-const planWith = (rooms: Room[], furniture: FurnitureItem[] = []): FloorplanData => ({
-  ...emptyPlan(),
-  rooms,
-  furniture,
-});
+const planWith = (rooms: Room[], furniture: FurnitureItem[] = []): FloorplanData => {
+  const p = emptyPlan();
+  p.floors[0].rooms = rooms;
+  p.floors[0].furniture = furniture;
+  return p;
+};
 
 describe('computeFitCamera (#46 center)', () => {
   it('fits the plan bbox with margin and centers the origins', () => {

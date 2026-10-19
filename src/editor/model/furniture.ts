@@ -5,6 +5,7 @@
  * Zero DOM.
  */
 import type { FloorplanData, FurnitureItem, Room, Vec2 } from '../../shared/schema';
+import { flatRooms } from '../../shared/schema';
 import { FURNITURE_DEFAULTS } from './constants';
 
 export { FURNITURE_DEFAULTS };
@@ -106,7 +107,7 @@ function pointInPolygonSlack(x: number, y: number, poly: Vec2[], slack: number):
 
 /** Resolve a room by id (undefined when dangling). */
 export function roomById(plan: FloorplanData, roomId: string): Room | undefined {
-  return plan.rooms.find((r) => r.id === roomId);
+  return flatRooms(plan).find((r) => r.id === roomId);
 }
 
 /**

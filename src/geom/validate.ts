@@ -17,7 +17,7 @@
  */
 
 import type { FloorplanData, Opening, Room } from '../shared/schema';
-import { openingFitsSegment, validateFloorplan } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms, openingFitsSegment, validateFloorplan } from '../shared/schema';
 import {
   FurnitureOutOfBoundsError,
   InvalidPolygonError,
@@ -55,9 +55,10 @@ export function maxOpeningWidth(tCenter: number, segLen: number): number {
 /** Cross-cutting geometric checks the schema cannot express. */
 export function validateGeometry(plan: FloorplanData): void {
   const roomsById = new Map<string, Room>();
-  for (const room of plan.rooms) roomsById.set(room.id, room);
+  const rooms = flatRooms(plan);
+  for (const room of rooms) roomsById.set(room.id, room);
 
-  for (const room of plan.rooms) {
+  for (const room of rooms) {
     if (!(signArea(room.polygon) > 0)) {
       throw new InvalidPolygonError(
         `room "${room.id}" polygon winds clockwise; rewind CCW`,
@@ -66,7 +67,7 @@ export function validateGeometry(plan: FloorplanData): void {
   }
 
   const perSegment = new Map<string, Opening[]>();
-  for (const opening of plan.openings) {
+  for (const opening of flatOpenings(plan)) {
     const room = roomsById.get(opening.roomId);
     if (!room) {
       throw new MissingRoomReferenceError('opening', opening.id, opening.roomId);
@@ -108,7 +109,7 @@ export function validateGeometry(plan: FloorplanData): void {
     }
   }
 
-  for (const item of plan.furniture) {
+  for (const item of flatFurniture(plan)) {
     const room = roomsById.get(item.roomId);
     if (!room) {
       throw new MissingRoomReferenceError('furniture', item.id, item.roomId);

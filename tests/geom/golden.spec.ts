@@ -20,11 +20,18 @@ import {
   sceneBounds,
 } from '../../src/geom';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 
+// The demo fixture STAYS v1 on disk (canonical migration regression
+// input, issue #69 fork-1 default). Migrate-then-compile mirrors the
+// loaders; the golden constants below MUST NOT move — byte-identity
+// after the v1->v2 wrap IS the migration-transparency test.
 const demoRaw: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ) as unknown,
+  migrate(
+    JSON.parse(
+      readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+    ),
+  ).data,
 );
 
 // MEASURED (real run, 2026-10-17): living/kitchen/bed-nook emit 13/11/7

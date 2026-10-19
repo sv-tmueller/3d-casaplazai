@@ -12,16 +12,20 @@ import {
   parseValidatedPlan,
 } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { adaptScene, sceneHasNaN } from '../../src/viewer/adapter';
 
 const demoRaw: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 describe('adaptScene — demo fixture parity', () => {
@@ -35,7 +39,7 @@ describe('adaptScene — demo fixture parity', () => {
     const withDressing = adaptScene(
       compiled,
       roomsById(demoRaw),
-      demoRaw.openings,
+      demoRaw.floors[0].openings,
     );
     const bucketTris = withDressing.buckets.reduce(
       (sum, b) => sum + b.indices.length / 3,
@@ -89,7 +93,7 @@ describe('adaptScene — demo fixture parity', () => {
 
 describe('adaptScene — synthetic fixtures', () => {
   it('null-floorTexture rooms fall back to concrete slot', () => {
-    const plan: FloorplanData = {
+    const plan: FloorplanData = migrate({
       schemaVersion: 1,
       units: 'meters',
       wallHeight: 2.7,
@@ -104,14 +108,14 @@ describe('adaptScene — synthetic fixtures', () => {
       ],
       openings: [],
       furniture: [],
-    };
+    }).data!;
     const adapted = adaptScene(compilePlan(plan), roomsById(plan));
     expect(adapted.buckets.find((b) => b.slot === 'concrete')).toBeDefined();
   });
 
   it('duplicate shared walls collapse (coincident centers dedupe)', () => {
     // Two rooms sharing the x=2 wall: pkg-4 emits that slab twice.
-    const plan: FloorplanData = {
+    const plan: FloorplanData = migrate({
       schemaVersion: 1,
       units: 'meters',
       wallHeight: 2.7,
@@ -132,7 +136,7 @@ describe('adaptScene — synthetic fixtures', () => {
       ],
       openings: [],
       furniture: [],
-    };
+    }).data!;
     const compiled = compilePlan(plan);
     const rawWallCount = compiled.rooms.reduce(
       (n, r) => n + r.walls.length,

@@ -6,6 +6,7 @@
  * and FSM transitions stay unit-testable without a real canvas.
  */
 import type { FloorplanData, Room } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import {
   convexHull,
   nearestVertexWithin,
@@ -102,7 +103,7 @@ export function evaluateSnapCandidates(
   tolM: number,
   excludeIds: string[],
 ): SnapOutcome {
-  const others = plan.rooms.filter((r) => !excludeIds.includes(r.id));
+  const others = flatRooms(plan).filter((r) => !excludeIds.includes(r.id));
 
   const vertexHit = nearestVertexWithin(candidate, others.flatMap((r) => r.polygon), tolM);
   if (vertexHit) {
@@ -133,8 +134,9 @@ export function evaluateSnapCandidates(
 /* ------------------------------ Hit testing ------------------------------- */
 
 export function roomAt(worldPt: Pt, plan: FloorplanData): Room | null {
-  for (let i = plan.rooms.length - 1; i >= 0; i -= 1) {
-    if (pointInPolygon(worldPt, plan.rooms[i].polygon)) return plan.rooms[i];
+  const rooms = flatRooms(plan);
+  for (let i = rooms.length - 1; i >= 0; i -= 1) {
+    if (pointInPolygon(worldPt, rooms[i].polygon)) return rooms[i];
   }
   return null;
 }
@@ -145,7 +147,7 @@ export function roomAt(worldPt: Pt, plan: FloorplanData): Room | null {
 export function computeOverlaps(plan: FloorplanData): [string, string][] {
   const pairs: [string, string][] = [];
   const hullCache = new Map<string, Pt[]>();
-  for (const r of plan.rooms) {
+  for (const r of flatRooms(plan)) {
     const hull = convexHull(r.polygon);
     if (hull.length >= 3) hullCache.set(r.id, hull);
   }
@@ -263,7 +265,7 @@ export function attemptDrop(
   pos: Pt,
   rotationDeg = 0,
 ): DropOutcome {
-  const host = plan.rooms.find((r) => pointInPolygon(pos, r.polygon));
+  const host = flatRooms(plan).find((r) => pointInPolygon(pos, r.polygon));
   if (!host) return { verdict: 'rejected', reason: 'NO_ROOM_AT_POINT' };
   const v = judgeContainment(pos, dims, rotationDeg, host);
   if (v === 'ok') return { verdict: 'ok' };
@@ -283,11 +285,11 @@ export function judgeMoveTarget(
   itemId: string,
   target: Pt,
 ): { verdict: 'ok' | 'warn' | 'rejected'; resolved: Pt } {
-  const item = plan.furniture.find((f) => f.id === itemId);
+  const item = flatFurniture(plan).find((f) => f.id === itemId);
   if (!item) return { verdict: 'rejected', resolved: target };
   const host =
-    plan.rooms.find((r) => r.id === item.roomId) ??
-    plan.rooms.find((r) => pointInPolygon(target, r.polygon));
+    flatRooms(plan).find((r) => r.id === item.roomId) ??
+    flatRooms(plan).find((r) => pointInPolygon(target, r.polygon));
   if (!host) return { verdict: 'rejected', resolved: item.position };
   const v = judgeContainment(target, item.footprint, item.rotationDeg, host);
   if (v === 'ok') return { verdict: 'ok', resolved: target };
@@ -316,7 +318,7 @@ export function validateOpeningDraft(
   sillHeight: number,
   headHeight: number,
 ): string | null {
-  const room = plan.rooms.find((r) => r.id === roomId);
+  const room = flatRooms(plan).find((r) => r.id === roomId);
   if (!room) return 'UNKNOWN_ROOM';
   const a = room.polygon[segmentIndex];
   const b = room.polygon[(segmentIndex + 1) % room.polygon.length];
@@ -331,7 +333,7 @@ export function validateOpeningDraft(
     headHeight,
   });
   if (err) return err;
-  const clashes = plan.openings.some(
+  const clashes = flatOpenings(plan).some(
     (o) =>
       o.roomId === roomId &&
       o.segmentIndex === segmentIndex &&
@@ -386,7 +388,7 @@ export function openingGhostFor(
   t: number,
   kind: 'door' | 'window',
 ): GhostPreview {
-  const room = plan.rooms.find((r) => r.id === roomId);
+  const room = flatRooms(plan).find((r) => r.id === roomId);
   const seg = room ? roomSegments(room)[segIndex] : undefined;
   if (!room || !seg) return { kind, valid: false };
   const defs = OPENING_DEFAULTS[kind];

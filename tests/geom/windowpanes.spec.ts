@@ -9,18 +9,22 @@ import { describe, expect, it } from 'vitest';
 import { parseValidatedPlan } from '../../src/geom';
 import { windowPaneRects } from '../../src/geom/windowpanes';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 
 const demo: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 describe('windowPaneRects — demo fixture', () => {
   const panes = windowPaneRects(demo);
 
   it('emits one pane per WINDOW opening (doors excluded)', () => {
-    const windowsInPlan = demo.openings.filter((o) => o.kind === 'window');
+    const windowsInPlan = demo.floors[0].openings.filter((o) => o.kind === 'window');
     expect(panes.length).toBe(windowsInPlan.length);
     expect(panes.map((p) => p.openingId).sort()).toEqual([
       'window-bed-skylight',
@@ -55,7 +59,7 @@ describe('windowPaneRects — demo fixture', () => {
       expect(tly).toBe(bly);
       // Span along the wall equals the opening width.
       expect(Math.hypot(brx - blx, bry - bly)).toBeCloseTo(
-        demo.openings.find((o) => o.id === p.openingId)!.width,
+        demo.floors[0].openings.find((o) => o.id === p.openingId)!.width,
         5,
       );
     }
@@ -72,7 +76,7 @@ describe('windowPaneRects — defensive edges', () => {
   it('returns [] for plans without windows', () => {
     const doorsOnly: FloorplanData = {
       ...demo,
-      openings: demo.openings.filter((o) => o.kind === 'door'),
+      floors: [{ ...demo.floors[0], openings: demo.floors[0].openings.filter((o) => o.kind === 'door') }],
     };
     expect(windowPaneRects(doorsOnly)).toEqual([]);
   });
@@ -80,7 +84,7 @@ describe('windowPaneRects — defensive edges', () => {
   it('skips openings referencing unknown rooms (no crash)', () => {
     const orphan: FloorplanData = {
       ...demo,
-      openings: [
+      floors: [{ ...demo.floors[0], openings: [
         {
           id: 'ghost-window',
           roomId: 'room-nonexistent',
@@ -91,7 +95,7 @@ describe('windowPaneRects — defensive edges', () => {
           sillHeight: 0.9,
           headHeight: 2.1,
         },
-      ],
+      ] }],
     };
     expect(windowPaneRects(orphan)).toEqual([]);
   });
@@ -99,7 +103,7 @@ describe('windowPaneRects — defensive edges', () => {
   it('skips out-of-range segmentIndex entries (no crash)', () => {
     const badIdx: FloorplanData = {
       ...demo,
-      openings: [
+      floors: [{ ...demo.floors[0], openings: [
         {
           id: 'bad-window',
           roomId: 'room-living-room',
@@ -110,7 +114,7 @@ describe('windowPaneRects — defensive edges', () => {
           sillHeight: 0.9,
           headHeight: 2.1,
         },
-      ],
+      ] }],
     };
     expect(windowPaneRects(badIdx)).toEqual([]);
   });

@@ -7,7 +7,8 @@
  * same reducer/undo/autosave stream. Gesture-streamable commands carry
  * STREAMABLE_CMD payloads; everything else commits atomically.
  */
-import type { FloorplanData, Opening, Room, Vec2 } from '../shared/schema';
+import type { FloorplanData, Floor, Opening, Room, Vec2 } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
 import {
   mirrorT,
@@ -94,15 +95,32 @@ export interface EditorState {
   selectedId: string | null;
 }
 
+/**
+ * The ACTIVE floor of a plan. Until the floor selector arrives (pkg 7.2),
+ * the editor edits the GROUND floor; reducers address it through this
+ * accessor so 7.2 only swaps the indexing strategy.
+ */
+function activeFloor(st: EditorState): Floor {
+  return st.data.floors[0];
+}
+
 export function emptyPlan(): FloorplanData {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     units: 'meters',
     wallHeight: 2.7,
     wallThickness: 0.24,
-    rooms: [],
-    openings: [],
-    furniture: [],
+    floors: [
+      {
+        id: 'floor-ground',
+        name: 'Ground',
+        elevation: 0,
+        rooms: [],
+        openings: [],
+        furniture: [],
+      },
+    ],
+    stairs: [],
   };
 }
 
@@ -137,16 +155,16 @@ function reduceDrawRoom(st: EditorState, cmd: { polygon: Pt[]; name?: string }):
     id: makeId('room'),
     // Pkg 1's validator requires non-empty names; unnamed drawn rooms get a
     // sequential default so autosave->reload hydration never discards them.
-    name: cmd.name != null && cmd.name.trim() !== '' ? cmd.name : `Room ${st.data.rooms.length + 1}`,
+    name: cmd.name != null && cmd.name.trim() !== '' ? cmd.name : `Room ${activeFloor(st).rooms.length + 1}`,
     polygon: ccw,
     floorTexture: null,
   };
-  st.data.rooms.push(room);
+  activeFloor(st).rooms.push(room);
   return { ok: true };
 }
 
 function reduceMoveRoom(st: EditorState, cmd: { roomId: string; delta: Pt }): DispatchResult {
-  const room = st.data.rooms.find((r) => r.id === cmd.roomId);
+  const room = flatRooms(st.data).find((r) => r.id === cmd.roomId);
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
   room.polygon = room.polygon.map((p) => vecAdd(p, cmd.delta));
   return { ok: true };
@@ -156,7 +174,7 @@ function reduceResizeRoom(
   st: EditorState,
   cmd: { roomId: string; vertexIndex: number; newPos: Pt },
 ): DispatchResult {
-  const room = st.data.rooms.find((r) => r.id === cmd.roomId);
+  const room = flatRooms(st.data).find((r) => r.id === cmd.roomId);
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
   if (cmd.vertexIndex < 0 || cmd.vertexIndex >= room.polygon.length) {
     return { ok: false, error: `vertexIndex ${cmd.vertexIndex} out of range` };
@@ -166,12 +184,13 @@ function reduceResizeRoom(
 }
 
 function reduceDeleteRoom(st: EditorState, cmd: { roomId: string }): DispatchResult {
-  const idx = st.data.rooms.findIndex((r) => r.id === cmd.roomId);
+  const floor = activeFloor(st);
+  const idx = floor.rooms.findIndex((r) => r.id === cmd.roomId);
   if (idx === -1) return { ok: false, error: `unknown room "${cmd.roomId}"` };
-  st.data.rooms.splice(idx, 1);
+  floor.rooms.splice(idx, 1);
   // Cascade-remove any openings/furniture anchored to the deleted room.
-  st.data.openings = st.data.openings.filter((o: Opening) => o.roomId !== cmd.roomId);
-  st.data.furniture = st.data.furniture.filter((f) => f.roomId !== cmd.roomId);
+  floor.openings = floor.openings.filter((o: Opening) => o.roomId !== cmd.roomId);
+  floor.furniture = floor.furniture.filter((f) => f.roomId !== cmd.roomId);
   return { ok: true };
 }
 
@@ -184,16 +203,16 @@ function reduceSetEntitySelection(
     return { ok: true };
   }
   const known =
-    st.data.rooms.some((r) => r.id === entityId) ||
-    st.data.openings.some((o) => o.id === entityId) ||
-    st.data.furniture.some((f) => f.id === entityId);
+    flatRooms(st.data).some((r) => r.id === entityId) ||
+    flatOpenings(st.data).some((o) => o.id === entityId) ||
+    flatFurniture(st.data).some((f) => f.id === entityId);
   if (!known) return { ok: false, error: `unknown entity "${entityId}"` };
   st.selectedId = entityId;
   return { ok: true };
 }
 
 function reduceSetSelection(st: EditorState, cmd: { roomId: string | null }): DispatchResult {
-  if (cmd.roomId !== null && !st.data.rooms.some((r) => r.id === cmd.roomId)) {
+  if (cmd.roomId !== null && !flatRooms(st.data).some((r) => r.id === cmd.roomId)) {
     return { ok: false, error: `unknown room "${cmd.roomId}"` };
   }
   st.selectedId = cmd.roomId;
@@ -240,12 +259,13 @@ function segInfo(room: Room, segmentIndex: number): SegmentInfo | undefined {
  * with the model layer's derivePairRows()/groupedPairs().
  */
 function findPartner(plan: FloorplanData, opening: Opening): Opening | undefined {
-  const room = plan.rooms.find((r) => r.id === opening.roomId);
+  const rooms = flatRooms(plan);
+  const room = rooms.find((r) => r.id === opening.roomId);
   const seg = room ? segInfo(room, opening.segmentIndex) : undefined;
   if (!room || !seg) return undefined;
-  return plan.openings.find((o) => {
+  return flatOpenings(plan).find((o) => {
     if (o.id === opening.id || o.kind !== opening.kind) return false;
-    const oroom = plan.rooms.find((r) => r.id === o.roomId);
+    const oroom = rooms.find((r) => r.id === o.roomId);
     if (!oroom) return false;
     const oseg = segInfo(oroom, o.segmentIndex);
     if (!oseg) return false;
@@ -257,7 +277,7 @@ function reduceAddOpening(
   st: EditorState,
   cmd: Extract<Command, { type: 'addOpening' }>,
 ): DispatchResult {
-  const room = st.data.rooms.find((r) => r.id === cmd.roomId);
+  const room = flatRooms(st.data).find((r) => r.id === cmd.roomId);
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
   const seg = segInfo(room, cmd.segmentIndex);
   if (!seg) return { ok: false, error: `segmentIndex ${cmd.segmentIndex} out of range` };
@@ -272,19 +292,19 @@ function reduceAddOpening(
     sillHeight: cmd.sillHeight,
     headHeight: cmd.headHeight,
   };
-  st.data.openings.push(base);
+  activeFloor(st).openings.push(base);
 
   // Two-row shared-door convention: emit the mirror row for every OTHER
   // room whose wall is collinear-overlapping with this one and can host
   // the cutout, atomically in the same transaction (issue #41: pairing is
   // overlap-based, the mirror tCenter comes from projecting the door's
   // world point onto that partner segment).
-  for (const other of st.data.rooms) {
+  for (const other of flatRooms(st.data)) {
     if (other.id === room.id) continue;
     for (const oseg of roomSegments(other)) {
       const t = pairMirrorT(seg, oseg, cmd.tCenter, cmd.width);
       if (t === null) continue;
-      st.data.openings.push({
+      activeFloor(st).openings.push({
         ...base,
         id: makeId(cmd.kind),
         roomId: other.id,
@@ -304,7 +324,7 @@ function reduceMutateOpening(
   fields: Partial<Pick<Opening, 'tCenter' | 'width' | 'sillHeight' | 'headHeight'>>,
   syncPair: boolean,
 ): DispatchResult {
-  const target = st.data.openings.find((o) => o.id === openingId);
+  const target = flatOpenings(st.data).find((o) => o.id === openingId);
   if (!target) return { ok: false, error: `unknown opening "${openingId}"` };
   // Width-path semantics (issue #47, ratified on #44): FREEZE. The
   // fields are assigned BEFORE findPartner runs, and the partner search
@@ -319,9 +339,9 @@ function reduceMutateOpening(
     const partner = findPartner(st.data, target);
     if (partner) {
       if ('tCenter' in fields) {
-        const room = st.data.rooms.find((r) => r.id === target.roomId);
+        const room = flatRooms(st.data).find((r) => r.id === target.roomId);
         const seg = room ? segInfo(room, target.segmentIndex) : undefined;
-        const proom = st.data.rooms.find((r) => r.id === partner.roomId);
+        const proom = flatRooms(st.data).find((r) => r.id === partner.roomId);
         const pseg = proom ? segInfo(proom, partner.segmentIndex) : undefined;
         const t =
           seg && pseg
@@ -344,14 +364,15 @@ function reduceDeleteOpening(
   openingId: string,
   syncPair: boolean,
 ): DispatchResult {
-  const target = st.data.openings.find((o) => o.id === openingId);
+  const target = flatOpenings(st.data).find((o) => o.id === openingId);
   if (!target) return { ok: false, error: `unknown opening "${openingId}"` };
   let ids = new Set([openingId]);
   if (syncPair) {
     const partner = findPartner(st.data, target);
     if (partner) ids = new Set([...ids, partner.id]);
   }
-  st.data.openings = st.data.openings.filter((o) => !ids.has(o.id));
+  const floor = activeFloor(st);
+  floor.openings = floor.openings.filter((o) => !ids.has(o.id));
   if (st.selectedId !== null && ids.has(st.selectedId)) st.selectedId = null;
   return { ok: true };
 }
@@ -360,10 +381,10 @@ function reduceAddFurniture(
   st: EditorState,
   cmd: Extract<Command, { type: 'addFurniture' }>,
 ): DispatchResult {
-  if (!st.data.rooms.some((r) => r.id === cmd.roomId)) {
+  if (!flatRooms(st.data).some((r) => r.id === cmd.roomId)) {
     return { ok: false, error: `unknown room "${cmd.roomId}"` };
   }
-  st.data.furniture.push({
+  activeFloor(st).furniture.push({
     id: makeId(cmd.itemType),
     type: cmd.itemType as never,
     roomId: cmd.roomId,
@@ -380,7 +401,7 @@ function findFurniture(
 ):
   | { ok: true; item: { position: Pt; rotationDeg: number; footprint: Pt } & { id: string } }
   | { ok: false; error: string } {
-  const item = st.data.furniture.find((f) => f.id === furnitureId);
+  const item = flatFurniture(st.data).find((f) => f.id === furnitureId);
   if (!item) return { ok: false, error: `unknown furniture "${furnitureId}"` };
   return { ok: true, item };
 }
@@ -419,9 +440,10 @@ function reduceResizeFurniture(
 }
 
 function reduceDeleteFurniture(st: EditorState, furnitureId: string): DispatchResult {
-  const idx = st.data.furniture.findIndex((f) => f.id === furnitureId);
+  const floor = activeFloor(st);
+  const idx = floor.furniture.findIndex((f) => f.id === furnitureId);
   if (idx === -1) return { ok: false, error: `unknown furniture "${furnitureId}"` };
-  st.data.furniture.splice(idx, 1);
+  floor.furniture.splice(idx, 1);
   if (st.selectedId === furnitureId) st.selectedId = null;
   return { ok: true };
 }
@@ -586,9 +608,9 @@ export class EditorStore {
     // Selection may reference a room undone away — drop it if dangling.
     if (
       this._state.selectedId !== null &&
-      !this._state.data.rooms.some((r) => r.id === this._state.selectedId) &&
-      !this._state.data.openings.some((o) => o.id === this._state.selectedId) &&
-      !this._state.data.furniture.some((f) => f.id === this._state.selectedId)
+      !flatRooms(this._state.data).some((r) => r.id === this._state.selectedId) &&
+      !flatOpenings(this._state.data).some((o) => o.id === this._state.selectedId) &&
+      !flatFurniture(this._state.data).some((f) => f.id === this._state.selectedId)
     ) {
       this._state = { ...this._state, selectedId: null };
     }

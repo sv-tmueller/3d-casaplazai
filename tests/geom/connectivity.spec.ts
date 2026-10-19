@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { buildCollisions, expandPlayerRadius, PLAYER_RADIUS, segmentHitsBoxes } from '../../src/geom/collision';
 
 function planOf(openings: Opening[]): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -23,7 +24,7 @@ function planOf(openings: Opening[]): FloorplanData {
     ],
     openings,
     furniture: [],
-  };
+  }).data!;
 }
 
 const FRONT_DOOR: Opening = {

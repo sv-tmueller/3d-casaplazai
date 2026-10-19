@@ -5,6 +5,7 @@
  * from the segment START along ITS OWN traversal direction.
  */
 import type { FloorplanData, Opening, Room, Vec2 } from '../../shared/schema';
+import { flatOpenings, flatRooms } from '../../shared/schema';
 import {
   EDGE_MARGIN_M,
   PAIR_TOLERANCE_M,
@@ -131,8 +132,8 @@ export function openingAt(
 ): Opening | null {
   let best: Opening | null = null;
   let bestSq = Infinity;
-  for (const op of plan.openings) {
-    const room = plan.rooms.find((r) => r.id === op.roomId);
+  for (const op of flatOpenings(plan)) {
+    const room = flatRooms(plan).find((r) => r.id === op.roomId);
     if (!room) continue;
     const seg = roomSegments(room)[op.segmentIndex];
     if (!seg || seg.length === 0) continue;
@@ -217,11 +218,11 @@ export function clashesWithExisting(
   roomId: string,
   candidate: Opening,
 ): boolean {
-  const room = plan.rooms.find((r) => r.id === roomId);
+  const room = flatRooms(plan).find((r) => r.id === roomId);
   if (!room) return false;
   const seg = roomSegments(room)[candidate.segmentIndex];
   if (!seg) return true;
-  return plan.openings.some(
+  return flatOpenings(plan).some(
     (o) =>
       o.roomId === roomId &&
       openingsOverlap(o, candidate, seg.length),
@@ -305,7 +306,7 @@ export function mirrorT(worldPoint: Vec2, cand: SegmentInfo): number {
  * (canonical shared-wall case) or identical t when co-directed.
  */
 export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRowSpec[] {
-  const originRoom = plan.rooms.find((r) => r.id === origin.roomId);
+  const originRoom = flatRooms(plan).find((r) => r.id === origin.roomId);
   if (!originRoom) return [origin];
   const seg = roomSegments(originRoom)[origin.segmentIndex];
   if (!seg) return [origin];
@@ -316,7 +317,7 @@ export function derivePairRows(plan: FloorplanData, origin: PairRowSpec): PairRo
   const world = pointAtT(seg, origin.tCenter);
 
   const rows: PairRowSpec[] = [origin];
-  for (const other of plan.rooms) {
+  for (const other of flatRooms(plan)) {
     if (other.id === origin.roomId) continue;
     for (const cand of roomSegments(other)) {
       const ov = sharedWallOverlap(seg, cand);
@@ -359,19 +360,20 @@ export function pairConsistencyErrors(rows: Opening[], tol = PAIR_TOLERANCE_M): 
 export function groupedPairs(plan: FloorplanData): Opening[][] {
   const groups: Opening[][] = [];
   const consumed = new Set<number>();
-  for (let i = 0; i < plan.openings.length; i += 1) {
+  const openings = flatOpenings(plan);
+  for (let i = 0; i < openings.length; i += 1) {
     if (consumed.has(i)) continue;
-    const seed = plan.openings[i];
+    const seed = openings[i];
     const group = [seed];
     consumed.add(i);
-    const seedRoom = plan.rooms.find((r) => r.id === seed.roomId);
+    const seedRoom = flatRooms(plan).find((r) => r.id === seed.roomId);
     if (seedRoom) {
       const seedSeg = roomSegments(seedRoom)[seed.segmentIndex];
       if (seedSeg) {
-        for (let j = i + 1; j < plan.openings.length; j += 1) {
+        for (let j = i + 1; j < openings.length; j += 1) {
           if (consumed.has(j)) continue;
-          const other = plan.openings[j];
-          const otherRoom = plan.rooms.find((r) => r.id === other.roomId);
+          const other = openings[j];
+          const otherRoom = flatRooms(plan).find((r) => r.id === other.roomId);
           if (!otherRoom) continue;
           const otherSeg = roomSegments(otherRoom)[other.segmentIndex];
           if (!otherSeg) continue;
@@ -448,15 +450,15 @@ export function openingDragClash(
   openingId: string,
   tCenter: number,
 ): boolean {
-  const dragged = plan.openings.find((o) => o.id === openingId);
+  const dragged = flatOpenings(plan).find((o) => o.id === openingId);
   if (!dragged) return false;
-  const room = plan.rooms.find((r) => r.id === dragged.roomId);
+  const room = flatRooms(plan).find((r) => r.id === dragged.roomId);
   if (!room) return false;
   const seg = roomSegments(room)[dragged.segmentIndex];
   if (!seg || seg.length === 0) return false;
   const excluded = openingTwinIds(plan, openingId);
   const cand: Opening = { ...dragged, tCenter };
-  return plan.openings.some(
+  return flatOpenings(plan).some(
     (o) =>
       !excluded.has(o.id) &&
       o.roomId === dragged.roomId &&

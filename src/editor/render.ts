@@ -2,7 +2,8 @@
  * Canvas painter: grid, rooms, selection affordances, in-progress shapes.
  * All drawing happens in CSS-pixel space; world→screen via the camera.
  */
-import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
+import type { FloorplanData, FurnitureItem, Opening, Room } from '../shared/schema';
+import { flatFurniture, flatRooms } from '../shared/schema';
 import {
   finalizeRectangle,
   resizeHandlesOf,
@@ -57,7 +58,7 @@ export function paintScene(
 
   drawGrid(ctx, cssW, cssH, cam, gridPitch);
 
-  for (const room of plan.rooms) {
+  for (const room of flatRooms(plan)) {
     drawRoomShape(
       ctx,
       cam,
@@ -79,7 +80,7 @@ export function paintScene(
   // and pair-delete still operate on individual rows.
   for (const group of groupedPairs(plan)) {
     const row = pickCanonRow(group);
-    const room = plan.rooms.find((r) => r.id === row.roomId);
+    const room = flatRooms(plan).find((r) => r.id === row.roomId);
     if (!room) continue;
     // Selection threads per GROUP: highlighted iff ANY member row is the
     // selected one, so selecting either side yields the same span highlight.
@@ -87,7 +88,7 @@ export function paintScene(
     drawOpening(ctx, cam, room, row, selected);
   }
 
-  for (const f of plan.furniture) {
+  for (const f of flatFurniture(plan)) {
     drawStamp(ctx, cam, f, phase.tag === 'idle' && false);
   }
 
@@ -109,8 +110,8 @@ function isSelected(phase: InteractionPhase, room: Room): boolean {
  * of a pair project to the same world span, so the choice is visually inert.
  */
 function pickCanonRow(
-  group: FloorplanData['openings'],
-): FloorplanData['openings'][number] {
+  group: Opening[],
+): Opening {
   return [...group].sort(
     (a, b) => a.roomId.localeCompare(b.roomId) || a.id.localeCompare(b.id),
   )[0];
@@ -263,7 +264,7 @@ function drawOpening(
   ctx: CanvasRenderingContext2D,
   cam: Camera,
   room: Room,
-  op: FloorplanData['openings'][number],
+  op: Opening,
   selected = false,
 ): void {
   const seg = roomSegments(room)[op.segmentIndex];
@@ -364,7 +365,7 @@ function drawSegHighlight(
   plan: FloorplanData,
   hl: SegHighlight,
 ): void {
-  const room = plan.rooms.find((r) => r.id === hl.roomId);
+  const room = flatRooms(plan).find((r) => r.id === hl.roomId);
   if (!room) return;
   const seg = roomSegments(room)[hl.segIndex];
   if (!seg) return;

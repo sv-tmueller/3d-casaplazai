@@ -14,16 +14,20 @@ import {
   parseValidatedPlan,
 } from '../../src/geom';
 import type { FloorplanData, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import { adaptScene, sceneHasNaN } from '../../src/viewer/adapter';
 
 const demo: FloorplanData = parseValidatedPlan(
-  JSON.parse(
-    readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
-  ),
-);
+  // Demo stays v1 on disk; migrate first (mirrors the loaders).
+  migrate(
+    JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-apartment.json'), 'utf8'),
+      ),
+  ).data,
+  )
 
 function roomsById(plan: FloorplanData): Map<string, Room> {
-  return new Map(plan.rooms.map((r) => [r.id, r]));
+  return new Map(plan.floors[0].rooms.map((r) => [r.id, r]));
 }
 
 /**
@@ -33,9 +37,9 @@ function roomsById(plan: FloorplanData): Map<string, Room> {
  * carves its living↔kitchen door from both rooms (2 openings, 1 hole).
  */
 function uniqueDoorwayCount(plan: FloorplanData): number {
-  const byId = new Map(plan.rooms.map((r) => [r.id, r] as const));
+  const byId = new Map(plan.floors[0].rooms.map((r) => [r.id, r] as const));
   const centers = new Set<string>();
-  for (const o of plan.openings) {
+  for (const o of plan.floors[0].openings) {
     if (o.kind !== 'door') continue;
     const room = byId.get(o.roomId);
     if (!room) continue;
@@ -56,7 +60,7 @@ function uniqueDoorwayCount(plan: FloorplanData): number {
 
 describe('adaptScene — window dressing buckets (demo)', () => {
   const compiled = compilePlan(demo);
-  const adapted = adaptScene(compiled, roomsById(demo), demo.openings);
+  const adapted = adaptScene(compiled, roomsById(demo), demo.floors[0].openings);
 
   it('emits exactly one glass bucket + one windowFrame bucket', () => {
     const glass = adapted.buckets.filter((b) => b.slot === 'glass');
@@ -74,7 +78,7 @@ describe('adaptScene — window dressing buckets (demo)', () => {
     const frames = adapted.buckets.find((b) => b.slot === 'windowFrame')!;
     // AMENDED (#37): runtime-derived, no pin. 4 slabs/window +
     // 4 slabs/unique doorway, each slab a 12-triangle prism.
-    const windows = demo.openings.filter((o) => o.kind === 'window').length;
+    const windows = demo.floors[0].openings.filter((o) => o.kind === 'window').length;
     const doorways = uniqueDoorwayCount(demo);
     expect(frames.indices.length / 3).toBe((4 * windows + 4 * doorways) * 12);
   });
@@ -129,14 +133,14 @@ describe('adaptScene — window dressing buckets (demo)', () => {
     // AMENDED (#37): runtime-derived delta, no pin.
     //   glass: 2 tris/pane
     //   frames: 12 tris/slab × (4 slabs/window + 4 slabs/unique doorway)
-    const windows = demo.openings.filter((o) => o.kind === 'window').length;
+    const windows = demo.floors[0].openings.filter((o) => o.kind === 'window').length;
     const doorways = uniqueDoorwayCount(demo);
     const expected = 2 * windows + (4 * windows + 4 * doorways) * 12;
     expect(adapted.triangleCount - baseline.triangleCount).toBe(expected);
   });
 
   it('counts match the plan-derived window count (runtime derivation)', () => {
-    const windowsInPlan = demo.openings.filter((o) => o.kind === 'window')
+    const windowsInPlan = demo.floors[0].openings.filter((o) => o.kind === 'window')
       .length;
     const glass = adapted.buckets.find((b) => b.slot === 'glass')!;
     expect(glass.indices.length / 6).toBe(windowsInPlan);
@@ -176,10 +180,10 @@ describe('adaptScene — backward compatibility', () => {
   it('doors-only plan emits door frames but no glass (issue #37)', () => {
     const doorsOnly: FloorplanData = {
       ...demo,
-      openings: demo.openings.filter((o) => o.kind === 'door'),
+      floors: [{ ...demo.floors[0], openings: demo.floors[0].openings.filter((o) => o.kind === 'door') }],
     };
     const compiled = compilePlan(doorsOnly);
-    const adapted = adaptScene(compiled, roomsById(doorsOnly), doorsOnly.openings);
+    const adapted = adaptScene(compiled, roomsById(doorsOnly), doorsOnly.floors[0].openings);
     // Doors draw no glass…
     expect(adapted.buckets.some((b) => b.slot === 'glass')).toBe(false);
     // …but they DO contribute frames (4 slabs per unique doorway) to the

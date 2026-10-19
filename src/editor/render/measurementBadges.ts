@@ -4,6 +4,7 @@
  * pan/zoom. Anchored at each room's polygon centroid.
  */
 import type { FloorplanData } from '../../shared/schema';
+import { flatRooms } from '../../shared/schema';
 import type { Pt } from '../geom';
 import { signedArea } from '../geom';
 import { worldToScreen, type Camera } from '../controller';
@@ -169,7 +170,7 @@ export function wallLengthLabels(
   tol: number = PAIR_TOLERANCE_M,
 ): WallLengthLabel[] {
   const entries: Array<{ seg: SegmentInfo; centroid: Pt }> = [];
-  for (const room of plan.rooms) {
+  for (const room of flatRooms(plan)) {
     if (room.polygon.length < 3) continue;
     const centroid = polygonCentroid(room.polygon);
     for (const seg of roomSegments(room)) {
@@ -248,7 +249,7 @@ export function paintMeasurementBadges(
     drawPill(ctx, x, y, lbl.text);
   }
 
-  for (const room of plan.rooms) {
+  for (const room of flatRooms(plan)) {
     const area = Math.abs(signedArea(room.polygon));
     if (!(area > 0)) continue;
     const label = formatRoomLabel({

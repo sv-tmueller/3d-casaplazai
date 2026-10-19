@@ -12,9 +12,10 @@ import {
 } from '../../src/geom/collision';
 import { compilePlan } from '../../src/geom/compile';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 
 function basePlan(): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.5,
@@ -33,10 +34,10 @@ function basePlan(): FloorplanData {
         ],
         floorFinish: 'laminate',
       },
-    ] as unknown as FloorplanData['rooms'],
+    ] as unknown as FloorplanData['floors'][number]['rooms'],
     openings: [],
     furniture: [],
-  };
+  }).data!;
 }
 
 describe('furnitureCollisionBoxes', () => {
@@ -46,7 +47,7 @@ describe('furnitureCollisionBoxes', () => {
 
   it('expands an axis-aligned footprint by PLAYER_RADIUS on every side', () => {
     const plan = basePlan();
-    plan.furniture = [
+    plan.floors[0].furniture = [
       {
         id: 'f1',
         type: 'table',
@@ -67,7 +68,7 @@ describe('furnitureCollisionBoxes', () => {
 
   it('computes the rotated-corner AABB for a diagonal footprint', () => {
     const plan = basePlan();
-    plan.furniture = [
+    plan.floors[0].furniture = [
       {
         id: 'f1',
         type: 'table',
@@ -87,8 +88,8 @@ describe('furnitureCollisionBoxes', () => {
 
   it('compilePlan pipes furniture boxes AFTER the wall boxes', () => {
     const plan = basePlan();
-    plan.openings = [];
-    plan.furniture = [
+    plan.floors[0].openings = [];
+    plan.floors[0].furniture = [
       {
         id: 'f1',
         type: 'sofa',

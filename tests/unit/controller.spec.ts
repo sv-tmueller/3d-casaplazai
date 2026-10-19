@@ -28,7 +28,7 @@ describe('finalizeRectangle', () => {
 describe('evaluateSnapCandidates', () => {
   const plan = (() => {
     const p = emptyPlan();
-    p.rooms.push({
+    p.floors[0].rooms.push({
       id: 'room-a',
       name: 'A',
       polygon: [[0, 0], [4, 0], [4, 3], [0, 3]],
@@ -65,7 +65,7 @@ describe('evaluateSnapCandidates', () => {
 describe('computeOverlaps', () => {
   it('flags two overlapping rooms, not disjoint ones', () => {
     const plan = emptyPlan();
-    plan.rooms.push(
+    plan.floors[0].rooms.push(
       { id: 'r1', name: '', polygon: [[0, 0], [2, 0], [2, 2], [0, 2]], floorTexture: null },
       { id: 'r2', name: '', polygon: [[1, 1], [3, 1], [3, 3], [1, 3]], floorTexture: null },
       { id: 'r3', name: '', polygon: [[10, 0], [12, 0], [12, 2], [10, 2]], floorTexture: null },
@@ -78,7 +78,7 @@ describe('computeOverlaps', () => {
 
   it('touching (shared-wall) rooms are NOT overlaps', () => {
     const plan = emptyPlan();
-    plan.rooms.push(
+    plan.floors[0].rooms.push(
       { id: 'r1', name: '', polygon: [[0, 0], [2, 0], [2, 2], [0, 2]], floorTexture: null },
       { id: 'r2', name: '', polygon: [[2, 0], [4, 0], [4, 2], [2, 2]], floorTexture: null },
     );

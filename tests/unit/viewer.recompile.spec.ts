@@ -8,9 +8,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { planSignature, ViewerApp, type DataBridge } from '../../src/viewer/appController';
 import type { FloorplanData } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 
 function basePlan(): FloorplanData {
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -25,7 +26,7 @@ function basePlan(): FloorplanData {
     ],
     openings: [],
     furniture: [],
-  };
+  }).data!;
 }
 
 /** Happy-dom has no WebGL: stub the renderer factory seam. */
@@ -124,7 +125,7 @@ describe('viewer recompile pipeline', () => {
 
     // Editor mutates (unsaved): swap the plan the bridge hands out.
     const edited = basePlan();
-    edited.rooms[0].polygon = [[0, 0], [8, 0], [8, 5], [0, 5]];
+    edited.floors[0].rooms[0].polygon = [[0, 0], [8, 0], [8, 5], [0, 5]];
     h.bridges.unshift({ getData: () => edited });
     h.advance(300); // > RECOMPILE_DEBOUNCE_MS
     h.pump();
@@ -140,7 +141,7 @@ describe('viewer recompile pipeline', () => {
 
     // Break the plan: negative width opening violates the schema.
     const bad = basePlan();
-    bad.openings.push({
+    bad.floors[0].openings.push({
       id: 'boom',
       kind: 'door',
       roomId: 'big',
@@ -166,7 +167,7 @@ describe('viewer recompile pipeline', () => {
     h.pump();
 
     const bad = basePlan();
-    bad.openings.push({
+    bad.floors[0].openings.push({
       id: 'boom',
       kind: 'door',
       roomId: 'big',
@@ -181,7 +182,7 @@ describe('viewer recompile pipeline', () => {
     h.pump();
 
     const good2 = basePlan();
-    good2.rooms[0].name = 'Renamed';
+    good2.floors[0].rooms[0].name = 'Renamed';
     h.bridges.unshift({ getData: () => good2 });
     h.advance(300);
     h.pump();

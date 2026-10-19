@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { FloorplanData, Opening, Room } from '../../src/shared/schema';
+import { migrate } from '../../src/shared/schema';
 import {
   WINDOW_SILL_EPSILON_M,
   clampTForDrag,
@@ -36,7 +37,7 @@ function squareRoom(id: string, x0 = 0, y0 = 0, w = 5, h = 4): Room {
 function twoRoomSharedWall(): FloorplanData {
   // Living room: (0,0)-(5,0)-(5,4)-(0,4). Kitchen: (5,0)-(8,0)-(8,4)-(5,4).
   // Shared wall x=5 traversed UP by living (seg 1) and DOWN by kitchen (seg 3).
-  return {
+  return migrate({
     schemaVersion: 1,
     units: 'meters',
     wallHeight: 2.7,
@@ -44,7 +45,7 @@ function twoRoomSharedWall(): FloorplanData {
     rooms: [squareRoom('living', 0, 0, 5, 4), squareRoom('kitchen', 5, 0, 3, 4)],
     openings: [],
     furniture: [],
-  };
+  }).data!;
 }
 
 describe('roomSegments basics', () => {
@@ -167,8 +168,8 @@ describe('two-row shared-door convention (AC1)', () => {
     const rows = derivePairRows(plan, { roomId: 'living', segmentIndex: 1, tCenter: 0.55 });
     const w = 0.85;
     // living seg 1 goes (5,0)->(5,4) upward; kitchen seg 3 goes (5,4)->(5,0) downward.
-    const livingSeg = roomSegments(plan.rooms[0])[1];
-    const kitchenSeg = roomSegments(plan.rooms[1])[3];
+    const livingSeg = roomSegments(plan.floors[0].rooms[0])[1];
+    const kitchenSeg = roomSegments(plan.floors[0].rooms[1])[3];
     const aLo = rows[0].tCenter * livingSeg.length - w / 2; // meters from (5,0)
     const aHi = rows[0].tCenter * livingSeg.length + w / 2;
     const bLo = rows[1].tCenter * kitchenSeg.length - w / 2; // meters from (5,4)
@@ -187,7 +188,7 @@ describe('two-row shared-door convention (AC1)', () => {
 
   it('tolerates a 5 mm-offset shared wall (#36)', () => {
     const plan = twoRoomSharedWall();
-    plan.rooms[1].polygon = [
+    plan.floors[0].rooms[1].polygon = [
       [5.005, 0],
       [8.005, 0],
       [8.005, 4],
@@ -206,7 +207,7 @@ describe('two-row shared-door convention (AC1)', () => {
 
   it('does not pair at a 2 cm offset (#36 boundary)', () => {
     const plan = twoRoomSharedWall();
-    plan.rooms[1].polygon = [
+    plan.floors[0].rooms[1].polygon = [
       [5.02, 0],
       [8.02, 0],
       [8.02, 4],
@@ -247,28 +248,28 @@ describe('openingAt hit-testing (issue #52)', () => {
 
   it('hits inside the cutout span', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [opening({})];
+    plan.floors[0].openings = [opening({})];
     // Living south wall y=0 from x=0..5; span 1 m ⇒ x ∈ [2.0, 3.0].
     expect(openingAt([2.6, 0.05], plan)?.id).toBe('op');
   });
 
   it('misses outside the span (same wall, within radius)', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [opening({})];
+    plan.floors[0].openings = [opening({})];
     // t=0.98 ⇒ 2.4 m from tCenter, far beyond width/2 = 0.5 m.
     expect(openingAt([4.9, 0], plan)).toBeNull();
   });
 
   it('misses when the click is off the wall (>0.3 m)', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [opening({})];
+    plan.floors[0].openings = [opening({})];
     expect(openingAt([2.5, 0.5], plan)).toBeNull(); // 0.5 m from wall
     expect(openingAt([2.5, 0.25], plan)?.id).toBe('op'); // inside radius
   });
 
   it('treats the clamped span edges inclusively and rejects just past', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [opening({})];
+    plan.floors[0].openings = [opening({})];
     expect(openingAt([2.0, 0], plan)?.id).toBe('op'); // exact lo edge
     expect(openingAt([3.0, 0], plan)?.id).toBe('op'); // exact hi edge
     expect(openingAt([1.95, 0], plan)).toBeNull(); // 5 cm past lo
@@ -277,7 +278,7 @@ describe('openingAt hit-testing (issue #52)', () => {
 
   it('picks the intended kind when door and window share the wall', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [
+    plan.floors[0].openings = [
       opening({ id: 'door1', kind: 'door', tCenter: 0.2, width: 1 }),
       opening({ id: 'win1', kind: 'window', tCenter: 0.8, width: 1 }),
     ];
@@ -287,7 +288,7 @@ describe('openingAt hit-testing (issue #52)', () => {
 
   it('returns null when the room/segment cannot be resolved', () => {
     const plan = twoRoomSharedWall();
-    plan.openings = [opening({ roomId: 'ghost' })];
+    plan.floors[0].openings = [opening({ roomId: 'ghost' })];
     expect(openingAt([2.5, 0], plan)).toBeNull();
   });
 });
@@ -305,7 +306,7 @@ function pairedDoorPlan(): FloorplanData {
     tCenter: 0.55,
     width: 1,
   });
-  plan.openings = rows.map((r, i) => ({
+  plan.floors[0].openings = rows.map((r, i) => ({
     id: i === 0 ? 'd-living' : `d-pair-${i}`,
     roomId: r.roomId,
     kind: 'door' as const,
@@ -320,7 +321,7 @@ function pairedDoorPlan(): FloorplanData {
 
 /** Minimal solo door row on the living room's south wall (seg 0). */
 function soloDoor(plan: FloorplanData, id: string): FloorplanData {
-  plan.openings = [
+  plan.floors[0].openings = [
     {
       id,
       roomId: 'living',
@@ -343,7 +344,7 @@ describe('openingTwinIds (issue #61)', () => {
 
   it('includes the collinear partner row of a paired door', () => {
     const plan = pairedDoorPlan();
-    expect(plan.openings).toHaveLength(2);
+    expect(plan.floors[0].openings).toHaveLength(2);
     expect(openingTwinIds(plan, 'd-living')).toEqual(
       new Set(['d-living', 'd-pair-1']),
     );
@@ -365,7 +366,7 @@ describe('openingDragClash — self/twin exclusion (issue #61)', () => {
 
   it('still flags a genuine overlap with ANOTHER opening on the segment', () => {
     const plan = pairedDoorPlan();
-    plan.openings.push({
+    plan.floors[0].openings.push({
       id: 'other',
       roomId: 'living',
       kind: 'door',

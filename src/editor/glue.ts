@@ -3,8 +3,8 @@
  * every state change. Lives here (not in controller.ts) so the gesture
  * math stays unit-testable without a real canvas/browser.
  */
-import type { FloorplanData } from '../shared/schema';
-import { validateFloorplan } from '../shared/schema';
+import type { FloorplanData, FurnitureItem } from '../shared/schema';
+import { flatFurniture, flatOpenings, flatRooms, migrate, validateFloorplan } from '../shared/schema';
 import { AutosaveManager } from './autosave';
 import {
   attemptDrop,
@@ -59,6 +59,7 @@ import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
 import { EditorStore, emptyPlan } from './store';
+import { toLegacyWire } from './wire';
 import { vecAdd, vecSub } from './geom';
 import {
   labelHitTest,
@@ -148,8 +149,8 @@ function planBounds(plan: FloorplanData): Bounds | null {
     if (p[1] < minY) minY = p[1];
     if (p[1] > maxY) maxY = p[1];
   };
-  for (const room of plan.rooms) for (const p of room.polygon) acc(p);
-  for (const f of plan.furniture) for (const p of itemCorners(f)) acc(p);
+  for (const room of flatRooms(plan)) for (const p of room.polygon) acc(p);
+  for (const f of flatFurniture(plan)) for (const p of itemCorners(f)) acc(p);
   return minX === Infinity ? null : { minX, minY, maxX, maxY };
 }
 
@@ -314,9 +315,9 @@ export function initEditorInteraction(
 
   function refreshStatus(): void {
     const st = store.getState();
-    const parts: string[] = [`rooms: ${st.data.rooms.length}`, `tool: ${tool}`];
-    if (st.data.openings.length > 0) parts.push(`openings: ${st.data.openings.length}`);
-    if (st.data.furniture.length > 0) parts.push(`furniture: ${st.data.furniture.length}`);
+    const parts: string[] = [`rooms: ${flatRooms(st.data).length}`, `tool: ${tool}`];
+    if (flatOpenings(st.data).length > 0) parts.push(`openings: ${flatOpenings(st.data).length}`);
+    if (flatFurniture(st.data).length > 0) parts.push(`furniture: ${flatFurniture(st.data).length}`);
     if (st.selectedId) parts.push('selected: 1');
     if (store.canUndo()) parts.push('undo ↺');
     if (store.canRedo()) parts.push('redo ↻');
@@ -338,7 +339,9 @@ export function initEditorInteraction(
 
   store.subscribe((_s) => {
     if (_s === undefined) return;
-    if (store.dirty) autosave.scheduleSave(_s.data);
+    // Slot speaks the frozen v1 wire (wire.ts contract): flatten through
+    // toLegacyWire so every writer agrees on the format (reviewer #74).
+    if (store.dirty) autosave.scheduleSave(toLegacyWire(_s.data));
     refreshBadgeAndButtons();
     refreshStatus();
     repaint();
@@ -517,11 +520,11 @@ export function initEditorInteraction(
     const sel = store.getState().selectedId;
     if (sel === null) return;
     const st = store.getState();
-    if (st.data.furniture.some((f) => f.id === sel)) {
+    if (flatFurniture(st.data).some((f) => f.id === sel)) {
       store.dispatch({ type: 'deleteFurniture', furnitureId: sel });
       return;
     }
-    if (st.data.openings.some((o) => o.id === sel)) {
+    if (flatOpenings(st.data).some((o) => o.id === sel)) {
       store.dispatch({ type: 'deleteOpening', openingId: sel, syncPair: true });
       return;
     }
@@ -567,7 +570,7 @@ export function initEditorInteraction(
   (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles = () => {
     const st = store.getState();
     if (st.selectedId === null) return [];
-    const room = st.data.rooms.find((r) => r.id === st.selectedId);
+    const room = flatRooms(st.data).find((r) => r.id === st.selectedId);
     if (!room) return [];
     return resizeHandlesOf(room).map((p) => worldToScreen(cam, p));
   };
@@ -589,10 +592,11 @@ export function initEditorInteraction(
   function furnitureItemAt(
     worldPt: Pt,
     plan: FloorplanData,
-  ): FloorplanData['furniture'][number] | null {
-    for (let i = plan.furniture.length - 1; i >= 0; i -= 1) {
-      const corners = itemCorners(plan.furniture[i]);
-      if (pointInPolygonGeom(worldPt, corners)) return plan.furniture[i];
+  ): FurnitureItem | null {
+    const items = flatFurniture(plan);
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const corners = itemCorners(items[i]);
+      if (pointInPolygonGeom(worldPt, corners)) return items[i];
     }
     return null;
   }
@@ -620,7 +624,7 @@ export function initEditorInteraction(
     let bestRoomId: string | null = null;
     let bestSeg: ReturnType<typeof nearestSegment> = null;
     let bestDist = Infinity;
-    for (const room of plan.rooms) {
+    for (const room of flatRooms(plan)) {
       const seg = nearestSegment(room, worldPt);
       if (!seg) continue;
       const a = seg.a;
@@ -667,7 +671,7 @@ export function initEditorInteraction(
       flashMessage(refs, openingErrorMessage(err, kind));
       return;
     }
-    const rowsBefore = store.getState().data.openings.length;
+    const rowsBefore = flatOpenings(store.getState().data).length;
     const res = store.dispatch({
       type: 'addOpening',
       roomId: hoverSeg.roomId,
@@ -684,7 +688,7 @@ export function initEditorInteraction(
     }
     const notice = openingCommitNotice(
       rowsBefore,
-      store.getState().data.openings.length,
+      flatOpenings(store.getState().data).length,
     );
     if (notice !== null) flashMessage(refs, notice);
   }
@@ -840,7 +844,7 @@ export function initEditorInteraction(
     // clears the click threshold, so a plain click stays a click.
     const openingHit = openingAt(worldPt, st.data);
     if (openingHit) {
-      const hitRoom = st.data.rooms.find((r) => r.id === openingHit.roomId);
+      const hitRoom = flatRooms(st.data).find((r) => r.id === openingHit.roomId);
       const hitSeg = hitRoom ? roomSegments(hitRoom)[openingHit.segmentIndex] : undefined;
       store.dispatch({ type: 'setEntitySelection', entityId: openingHit.id });
       dragOpening = hitSeg
@@ -921,7 +925,7 @@ export function initEditorInteraction(
       d.engaged = true;
     }
     const plan = store.getState().data;
-    const room = plan.rooms.find((r) => r.id === d.roomId);
+    const room = flatRooms(plan).find((r) => r.id === d.roomId);
     const seg = room ? roomSegments(room)[d.segIndex] : undefined;
     if (!seg || seg.length === 0) return;
     const rawT = projectOntoSegment(worldPt, seg);
@@ -996,7 +1000,7 @@ export function initEditorInteraction(
         const verdict = judgeMoveTarget(store.getState().data, fid, worldPt);
         if (verdict.verdict === 'rejected') {
           // Snap-back: revert to the item's last committed position.
-          const item = store.getState().data.furniture.find((f) => f.id === fid);
+          const item = flatFurniture(store.getState().data).find((f) => f.id === fid);
           if (item) {
             store.dispatch({ type: 'moveFurniture', furnitureId: fid, position: item.position });
             flashMessage(refs, 'Piece pulled outside the room — snapped back to its last valid spot.');
@@ -1040,7 +1044,7 @@ export function initEditorInteraction(
 
     if (phase.tag === 'dragging') {
       const rid = phase.selectedRoomId;
-      const room = store.getState().data.rooms.find((r) => r.id === rid);
+      const room = flatRooms(store.getState().data).find((r) => r.id === rid);
       if (!room) return;
       // Cursor's target for the anchor vertex = worldPt + grabOffset
       // (grabOffset = anchor - grabPoint at pickup).
@@ -1060,7 +1064,7 @@ export function initEditorInteraction(
     if (phase.tag === 'resizing') {
       const vid = phase.vertexIndex;
       const rid = phase.selectedRoomId;
-      const room = store.getState().data.rooms.find((r) => r.id === rid);
+      const room = flatRooms(store.getState().data).find((r) => r.id === rid);
       if (!room) return;
       // Issue #53: route the dragged vertex through the SAME snap policy
       // as draw-time (snapPoint = foreign geometry, else 0.5 m grid), so
@@ -1079,7 +1083,7 @@ export function initEditorInteraction(
     const prevHandle = hoverHandle;
     const st = store.getState();
     const selId = st.selectedId;
-    const selRoom = selId !== null ? st.data.rooms.find((r) => r.id === selId) : undefined;
+    const selRoom = selId !== null ? flatRooms(st.data).find((r) => r.id === selId) : undefined;
     if (tool === 'select' && selRoom) {
       const handleIdx = resizeHandleAt(worldPt, selRoom, handleToleranceWorld());
       if (handleIdx !== null) {
@@ -1223,7 +1227,7 @@ export function initEditorInteraction(
     if ((ev.key === 'r' || ev.key === 'R') && !ev.ctrlKey && !ev.metaKey) {
       const sel = store.getState().selectedId;
       if (sel === null) return;
-      const item = store.getState().data.furniture.find((f) => f.id === sel);
+      const item = flatFurniture(store.getState().data).find((f) => f.id === sel);
       if (item) {
         ev.preventDefault();
         store.dispatch({
@@ -1285,7 +1289,13 @@ export function initEditorInteraction(
 export function hydrateFromAutosave(store: EditorStore, autosave: AutosaveManager): void {
   let hydrated: FloorplanData | null = null;
   const restored = autosave.loadStoredPlan((raw) => {
-    const res = validateFloorplan(raw);
+    // Migrate-at-the-door: the slot may hold a LEGACY v1 payload (older
+    // browsers, pre-v2 exports). migrate() runs BEFORE validate() so the
+    // validator only ever sees current-shape data — raw v1 is still
+    // rejected by validateFloorplan itself (unsupported-version).
+    const mig = migrate(raw);
+    if (!mig.ok || !mig.data) return false;
+    const res = validateFloorplan(mig.data);
     if (!res.ok) return false;
     hydrated = res.value;
     return true;

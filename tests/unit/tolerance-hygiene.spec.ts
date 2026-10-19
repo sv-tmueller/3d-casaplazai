@@ -36,7 +36,9 @@ const LIVING: Vec2[] = [[0, 0], [5, 0], [5, 4], [0, 4]];
 const STAGGERED: Vec2[] = [[5, 1], [8, 1], [8, 3.5], [5, 3.5]];
 
 function plan(bed: Vec2[]): FloorplanData {
-  return { ...emptyPlan(), rooms: [mkRoom('living', LIVING), mkRoom('bed', bed)] };
+  const p = emptyPlan();
+  p.floors[0].rooms = [mkRoom('living', LIVING), mkRoom('bed', bed)];
+  return p;
 }
 
 describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)', () => {
@@ -54,7 +56,7 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
 
   it('widening beyond the partner overlap leaves the twin width frozen', () => {
     const store = paired();
-    const [a, b] = store.getState().data.openings;
+    const [a, b] = store.getState().data.floors[0].openings;
     expect(b.width).toBeCloseTo(0.9);
     // t 0.5 -> world y 2; new w 2.6 -> cut y [0.7, 3.3]; bed hosts y [1, 3.5].
     store.dispatch({
@@ -63,14 +65,14 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
       fields: { width: 2.6 },
       syncPair: true,
     });
-    const [, b2] = store.getState().data.openings;
+    const [, b2] = store.getState().data.floors[0].openings;
     expect(a.width).toBeCloseTo(2.6);
     expect(b2.width).toBeCloseTo(0.9); // frozen: nothing copied to the twin
   });
 
   it('narrowing back into the overlap re-syncs the twin', () => {
     const store = paired();
-    const [a] = store.getState().data.openings;
+    const [a] = store.getState().data.floors[0].openings;
     store.dispatch({
       type: 'updateOpening',
       openingId: a.id,
@@ -83,13 +85,13 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
       fields: { width: 0.7 },
       syncPair: true,
     });
-    const [, b] = store.getState().data.openings;
+    const [, b] = store.getState().data.floors[0].openings;
     expect(b.width).toBeCloseTo(0.7);
   });
 
   it('after the desync, moving the cut does NOT cascade to the twin', () => {
     const store = paired();
-    const [a, b0] = store.getState().data.openings;
+    const [a, b0] = store.getState().data.floors[0].openings;
     const twinT = b0.tCenter;
     store.dispatch({
       type: 'updateOpening',
@@ -104,7 +106,7 @@ describe('#47 width-path FREEZE (widening does not propagate; implicit unlink)',
       tCenter: 0.6,
       syncPair: true,
     });
-    const [, b] = store.getState().data.openings;
+    const [, b] = store.getState().data.floors[0].openings;
     expect(a.tCenter).toBeCloseTo(0.6);
     expect(b.tCenter).toBeCloseTo(twinT); // implicit unlink: no cascade
   });
@@ -127,15 +129,13 @@ describe('#47 #40a — 8 mm-east same-span impostor is ACCEPTED (pinned)', () =>
 
 describe('#47 #40b — 5 mm sliver is DEGENERATE-ACCEPTED (pinned)', () => {
   it('one commit yields rows on BOTH sliver faces (4 rows total)', () => {
-    const p: FloorplanData = {
-      ...emptyPlan(),
-      rooms: [
+    const p = emptyPlan();
+    p.floors[0].rooms = [
         mkRoom('living', LIVING),
         // 5 mm sliver wedged between living and kitchen.
         mkRoom('sliver', [[5.005, 0], [5.01, 0], [5.01, 4], [5.005, 4]]),
         mkRoom('kitchen', [[5.01, 0], [8.01, 0], [8.01, 4], [5.01, 4]]),
-      ],
-    };
+    ];
     const store = new EditorStore(p);
     store.dispatch({
       type: 'addOpening',
@@ -144,7 +144,7 @@ describe('#47 #40b — 5 mm sliver is DEGENERATE-ACCEPTED (pinned)', () => {
       tCenter: 0.5,
       ...DOOR,
     });
-    const ops = store.getState().data.openings;
+    const ops = store.getState().data.floors[0].openings;
     // Degenerate sub-tolerance rooms are out of modeling scope; both sliver
     // faces acquiring rows is accepted as-is (geometry redesign = non-goal).
     expect(ops).toHaveLength(4);
