@@ -227,7 +227,12 @@ export { snapVec };
  * furniture from the palette. Extends (not replaces) pkg 2's trio.
  */
 export type Pkg3ToolMode = 'door' | 'window' | 'stamp';
-export type AnyToolMode = ToolMode | Pkg3ToolMode;
+/**
+ * Issue #66 (Pkg 1): two-point measure tool. Added ADDITIVELY so Pkg 2
+ * can keep churning the phase wiring undisturbed.
+ */
+export type MeasureToolMode = 'measure';
+export type AnyToolMode = ToolMode | Pkg3ToolMode | MeasureToolMode;
 
 export interface GhostPreview {
   kind: 'door' | 'window' | 'stamp';
