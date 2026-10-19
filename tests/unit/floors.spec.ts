@@ -155,16 +155,15 @@ describe('addFloor elevation default (#69 §D)', () => {
     expect(f3.elevation).toBeCloseTo(3.0 + 2.7 + 0.3, 9);
   });
 
-  it('activates the new floor; validator accepts once a room is drawn', () => {
-    // Pre-existing validator rule: every floor needs >= 1 room — so the
-    // freshly-added EMPTY floor only validates after something is drawn.
+  it('activates the new floor; empty upper floors validate (7.2)', () => {
+    // pkg 7.2: an upper floor may sit empty right after "Add floor"
+    // (rejecting it discarded the whole autosaved plan on reload).
+    // The GROUND floor still demands >= 1 room.
     const store = seededStore();
     store.dispatch({ type: 'addFloor' });
     const st = store.getState();
     expect(st.activeFloorIdx).toBe(1);
-    expect(validateFloorplan(st.data).ok).toBe(false);
-    store.dispatch({ type: 'drawRoom', polygon: [[0, 0], [2, 0], [2, 2], [0, 2]] });
-    expect(validateFloorplan(store.getState().data).ok).toBe(true);
+    expect(validateFloorplan(st.data).ok).toBe(true);
   });
 
   it('sequential default names; explicit names win', () => {

@@ -151,7 +151,11 @@ function parseRooms(
     c.add(basePath, 'missing-array', `"${basePath}" must be an array`);
     return entities;
   }
-  if (raw.length === 0) {
+  // pkg 7.2 (issue #75): only the GROUND floor demands >= 1 room (an
+  // entirely empty plan stays invalid). Upper floors may legitimately
+  // sit empty right after "Add floor" — rejecting them turned a benign
+  // reload into wholesale autosave discard.
+  if (raw.length === 0 && basePath === 'floors[0].rooms') {
     c.add(basePath, 'empty-collection', `"${basePath}" must contain at least one room`);
   }
   raw.forEach((r: Record<string, unknown> | null, i: number) => {
