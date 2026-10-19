@@ -1,4 +1,4 @@
-# AGENTS.md — CasaPlazaIA
+# AGENTS.md — CasaPlazAI
 
 Guidance for humans and agents working in this repo.
 
