@@ -264,6 +264,19 @@ describe('buildFloorWithHoles — rect-hole subtraction', () => {
     expect(buildFloorWithHoles(SQUARE, [far], 0, false)).toBeNull();
   });
 
+  // Area conservation (reviewer #80): Σ piece areas must equal ring minus
+  // hole∩ring — freezes the guillotine peel against sliver-loss bugs the
+  // point probes cannot catch.
+  const shoelace = (pts: Array<[number, number]>): number => {
+    let s = 0;
+    for (let i = 0; i < pts.length; i += 1) {
+      const [x1, y1] = pts[i]!;
+      const [x2, y2] = pts[(i + 1) % pts.length]!;
+      s += x1 * y2 - x2 * y1;
+    }
+    return Math.abs(s) / 2;
+  };
+
   it('interior hole: mesh covers the ring but not the hole', () => {
     const hole: [[number, number], [number, number], [number, number], [number, number]] = [
       [1, 1],
@@ -276,6 +289,19 @@ describe('buildFloorWithHoles — rect-hole subtraction', () => {
     expect(covers(mesh!, 0.5, 0.5)).toBe(true);
     expect(covers(mesh!, 3.9, 3.9)).toBe(true);
     expect(covers(mesh!, 1.5, 1.5)).toBe(false);
+    // Conservation: 4×4 square − 1×1 hole = 15.
+    const triAreas: number[] = [];
+    for (let t = 0; t < mesh!.indices.length; t += 3) {
+      const i0 = mesh!.indices[t]! * 3;
+      const i1 = mesh!.indices[t + 1]! * 3;
+      const i2 = mesh!.indices[t + 2]! * 3;
+      triAreas.push(shoelace([
+        [mesh!.positions[i0]!, mesh!.positions[i0 + 1]!],
+        [mesh!.positions[i1]!, mesh!.positions[i1 + 1]!],
+        [mesh!.positions[i2]!, mesh!.positions[i2 + 1]!],
+      ]));
+    }
+    expect(triAreas.reduce((a, b) => a + b, 0)).toBeCloseTo(15, 6);
   });
 
   it('flush hole (sharing the ring\'s north edge) still punches', () => {
@@ -289,6 +315,19 @@ describe('buildFloorWithHoles — rect-hole subtraction', () => {
     expect(mesh).not.toBeNull();
     expect(covers(mesh!, 2, 3.5)).toBe(false);
     expect(covers(mesh!, 2, 2.9)).toBe(true);
+    // Conservation: hole shares the north edge — 2×1 removed from the ring.
+    const triAreas: number[] = [];
+    for (let t = 0; t < mesh!.indices.length; t += 3) {
+      const i0 = mesh!.indices[t]! * 3;
+      const i1 = mesh!.indices[t + 1]! * 3;
+      const i2 = mesh!.indices[t + 2]! * 3;
+      triAreas.push(shoelace([
+        [mesh!.positions[i0]!, mesh!.positions[i0 + 1]!],
+        [mesh!.positions[i1]!, mesh!.positions[i1 + 1]!],
+        [mesh!.positions[i2]!, mesh!.positions[i2 + 1]!],
+      ]));
+    }
+    expect(triAreas.reduce((a, b) => a + b, 0)).toBeCloseTo(14, 6);
   });
 
   it('hole straddling the rim halves cleanly', () => {
@@ -302,6 +341,19 @@ describe('buildFloorWithHoles — rect-hole subtraction', () => {
     expect(mesh).not.toBeNull();
     expect(covers(mesh!, 2, 3.5)).toBe(false);
     expect(covers(mesh!, 2, 2.5)).toBe(true);
+    // Conservation: hole∩ring = 2×1 strip inside the ring.
+    const triAreas: number[] = [];
+    for (let t = 0; t < mesh!.indices.length; t += 3) {
+      const i0 = mesh!.indices[t]! * 3;
+      const i1 = mesh!.indices[t + 1]! * 3;
+      const i2 = mesh!.indices[t + 2]! * 3;
+      triAreas.push(shoelace([
+        [mesh!.positions[i0]!, mesh!.positions[i0 + 1]!],
+        [mesh!.positions[i1]!, mesh!.positions[i1 + 1]!],
+        [mesh!.positions[i2]!, mesh!.positions[i2 + 1]!],
+      ]));
+    }
+    expect(triAreas.reduce((a, b) => a + b, 0)).toBeCloseTo(14, 6);
   });
 
   it('deterministic: two runs produce identical buffers', () => {

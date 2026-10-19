@@ -220,10 +220,20 @@ export function validateStairs(
   }
 
   // Pairwise hole-overlap rejection (deterministic order: plan order).
-  const holes = plan.stairs.map((s) => ({ id: s.id, rect: stairHoleRect(s) }));
+  // Grouped by ARRIVAL elevation (reviewer #80): two stacked flights in a
+  // duplex (arrivals 2.7 and 5.4) punch DIFFERENT slabs — their plan
+  // projections may legitimately overlap. #69 forbids overlapping holes
+  // per SURFACE, not per plan.
+  const holes = plan.stairs.map((s) => ({
+    id: s.id,
+    rect: stairHoleRect(s),
+    arrival: elevationByRoom.get(s.roomId)! + s.rise,
+  }));
   for (let i = 0; i < holes.length; i += 1) {
     for (let j = i + 1; j < holes.length; j += 1) {
-      if (rectsOverlap(holes[i]!.rect, holes[j]!.rect)) {
+      const sameArrivalPlane =
+        Math.abs(holes[i]!.arrival - holes[j]!.arrival) <= 1e-3;
+      if (sameArrivalPlane && rectsOverlap(holes[i]!.rect, holes[j]!.rect)) {
         throw new OverlappingStairHolesError(holes[i]!.id, holes[j]!.id);
       }
     }
