@@ -29,6 +29,8 @@ export interface EditorDomRefs {
   btnZoomIn: HTMLButtonElement;
   btnZoomOut: HTMLButtonElement;
   btnDimensions: HTMLButtonElement;
+  btnAddMeasure: HTMLButtonElement;
+  btnClearMeasure: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -90,6 +92,9 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnWindow = mkHintedBtn('Window', 'window', 'editor-window', 'window');
   const btnStamp = mkHintedBtn('Furnish', 'stamp', 'editor-stamp', 'furnish');
 
+  // Issue #66 (Pkg 1): two-point measure tool.
+  const btnMeasure = mkHintedBtn('Measure', 'measure', 'editor-measure', 'measure');
+
   // pkg 6 (issue #7): export + help buttons.
   const sep3 = document.createElement('span');
   sep3.className = 'toolbar-sep';
@@ -135,10 +140,16 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnDimensions.title = 'Show or hide wall lengths and room areas.';
   btnDimensions.setAttribute('aria-pressed', 'true');
   btnDimensions.setAttribute('data-testid', 'btn-dimensions');
+  // Issue #66: wipe-all for measure annotations, next to the toggle.
+  const btnClearMeasure = mkBtn('Clear measurements', 'editor-clear-measure');
+  btnClearMeasure.title = 'Remove every dimension annotation.';
+  btnClearMeasure.setAttribute('data-testid', 'btn-clear-measurements');
   [
-    btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp, sep,
+    btnSelect, btnRect, btnPoly, sep2, btnDoor, btnWindow, btnStamp,
+    btnMeasure, sep,
     btnUndo, btnRedo, btnDelete, sep3, btnExport, btnHelp,
     sep4, btnCenter, btnZoomIn, btnZoomOut, sep5, btnDimensions,
+    btnClearMeasure,
   ].forEach((el) =>
     toolbar.appendChild(el),
   );
@@ -188,7 +199,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     toolbar, canvas, badge, msg, status, statusTotal,
     btnExport, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
-    btnDimensions,
+    btnDimensions, btnAddMeasure: btnMeasure, btnClearMeasure,
     btnUndo, btnRedo, btnDelete,
     btnCenter, btnZoomIn, btnZoomOut,
   };

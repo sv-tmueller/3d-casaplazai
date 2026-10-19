@@ -40,6 +40,19 @@ export function centroid(vertices: Pt[]): Pt {
   return [sx / vertices.length, sy / vertices.length];
 }
 
+/**
+ * Absolute angle of the segment a→b in degrees, measured CCW-positive
+ * from the +X axis: (atan2(dy, dx) · 180/π + 360) % 360. A zero-length
+ * segment is DEFINED as 0° (atan2(0,0) is 0 anyway; kept explicit).
+ * Exported for reuse by Pkg 2 (issue #66 sub-plan).
+ */
+export function segmentAngleDegrees(a: Pt, b: Pt): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  if (dx === 0 && dy === 0) return 0;
+  return (Math.atan2(dy, dx) * (180 / Math.PI) + 360) % 360;
+}
+
 /** Shoelace-signed area; positive = counter-clockwise winding. */
 export function signedArea(poly: Pt[]): number {
   let total = 0;
