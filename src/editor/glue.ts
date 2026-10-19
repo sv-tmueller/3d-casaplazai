@@ -798,7 +798,10 @@ export function initEditorInteraction(
         return;
       }
       // Fragments never hit servers: the plan rides in location.hash.
-      const url = `${location.origin}${location.pathname}#plan=${out.fragment}`;
+      // Links target the VIEWER route — the recipient gets the 3D
+      // rendering (which is the decode/boot consumer of #plan=), not
+      // the sender's editor page.
+      const url = `${location.origin}/viewer#plan=${out.fragment}`;
       const copied = await copyToClipboard(url);
       if (!copied) {
         flashMessage(refs, 'Could not copy — clipboard unavailable.');
