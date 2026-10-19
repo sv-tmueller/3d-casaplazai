@@ -76,9 +76,9 @@ describe('shareLink.decodeShare typed failures (issue #91)', () => {
     expect(res).toMatchObject({ ok: false, reason: 'badPrefix' });
   });
 
-  it('rejects an empty payload (badBase64)', async () => {
+  it('rejects an empty payload (emptyPayload — issue #94)', async () => {
     const res = await decodeShare(SHARE_PREFIX);
-    expect(res).toMatchObject({ ok: false, reason: 'badBase64' });
+    expect(res).toMatchObject({ ok: false, reason: 'emptyPayload' });
   });
 
   it('rejects non-base64url garbage (badBase64)', async () => {

@@ -52,7 +52,8 @@ export type DecodeErrorReason =
   | 'badBase64'
   | 'badDeflate'
   | 'badJson'
-  | 'invalidPlan';
+  | 'invalidPlan'
+  | 'emptyPayload';
 
 export type DecodeResult =
   | { ok: true; plan: FloorplanData }
@@ -160,7 +161,10 @@ export async function decodeShare(inputFragment: string): Promise<DecodeResult> 
   }
   const payload = fragment.slice(SHARE_PREFIX.length);
   if (payload.length === 0) {
-    return { ok: false, reason: 'badBase64', message: 'The share payload is empty.' };
+    // Distinct from badBase64 (issue #94): an EMPTY payload is a
+    // truncated link, not corrupted characters — the viewer can word
+    // the banner differently ("looks cut off" vs "corrupted").
+    return { ok: false, reason: 'emptyPayload', message: 'The share payload is empty.' };
   }
 
   let zipped: Uint8Array;
