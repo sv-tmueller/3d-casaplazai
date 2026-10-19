@@ -720,6 +720,7 @@ export class ViewerApp {
       // Roof planes (pkg 8.1): triangles in the dedicated 'roof' slot —
       // the e2e parity figure for shed/gable presence (0 when absent).
       roofTriangleCount: this.countSlotTriangles('roof'),
+<<<<<<< HEAD
       // Quality tier (#87): 'high' unless ?quality=low opted out.
       qualityLevel: this.hiQuality ? 'high' : 'low',
       // Populated slots carrying a procedural MAP (#87): the high-tier
@@ -730,12 +731,29 @@ export class ViewerApp {
       // low<high cost probe (median shrugs off GC spikes and
       // compositor hiccups).
       medianFrameMs: this.medianFrameMs(),
-      // Slot roughness probes (#87): glass must read GLOSSIER than
+      // Glass/wall roughness probes (#87): glass must read GLOSSIER than
       // matte walls on BOTH tiers (e2e visual-gloss proxy — reading
       // live materials beats re-deriving constants in the spec).
       glassRoughness: this.firstSlotRoughness('glass'),
       wallRoughness: this.firstSlotRoughness('wall'),
+      // Roof affordances (issue #86): live opacity + visibility of the
+      // (merged) roof mesh — the e2e autofade/toggle probes. Null when
+      // the plan carries no roof slot at all.
+      roofOpacity: this.roofProbe()?.opacity ?? null,
+      roofVisible: this.roofProbe()?.visible ?? null,
     });
+  }
+
+  /** First roof-slot mesh's observable state (e2e probe backing). */
+  private roofProbe(): { opacity: number; visible: boolean } | null {
+    const mesh = this.sceneRoot?.meshes.find(
+      (m) => m.userData.slot === 'roof',
+    );
+    if (!mesh) return null;
+    return {
+      opacity: (mesh.material as MeshStandardMaterial).opacity,
+      visible: mesh.visible,
+    };
   }
 
   /** Count triangles/6 within meshes whose userData.slot matches. */
@@ -929,6 +947,11 @@ function makeRenderer(canvas: HTMLCanvasElement): WebGLRenderer | null {
       canvas,
       antialias: true,
       powerPreference: 'high-performance',
+      // Framebuffer preservation is gated on the diagnostic flag: the
+      // e2e luminance probes read the canvas via toDataURL (which needs
+      // the buffer alive past the compositor handoff); production keeps
+      // the cheaper default teardown.
+      preserveDrawingBuffer: isPerfEnabled(),
     });
   } catch {
     return null;

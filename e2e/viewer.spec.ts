@@ -279,3 +279,297 @@ test.describe.serial('viewer + walk mode (issue #6)', () => {
     expect(String(overlay)).toMatch(/\d/); // contains a number
   });
 });
+
+/*
+ * Pkg 9.1 (issue #86) — lighting/quality/roof-affordance e2e. All four
+ * specs are ADDITIVE: the pre-9.1 suite above runs untouched.
+ *
+ * Shared plan (inline, NOT the demo apartment): a two-storey house
+ * whose UPPER bedroom carries a gabled roof (two 30° leans on the
+ * opposed long walls, mirroring demo-townhouse's master bedroom) and a
+ * WEST DOOR leading into the roofless void — the fade-restore leg.
+ * Wall height 2.7 satisfies the roof validator (plate==wallHeight).
+ */
+const HOUSE_PLAN = {
+  schemaVersion: 2,
+  units: 'meters',
+  wallHeight: 2.7,
+  wallThickness: 0.24,
+  floors: [
+    {
+      id: 'floor-ground',
+      name: 'Ground',
+      elevation: 0,
+      rooms: [
+        {
+          id: 'hall',
+          name: 'Hall',
+          polygon: [
+            [0, 0],
+            [4.8, 0],
+            [4.8, 3.0],
+            [0, 3.0],
+          ],
+          floorTexture: 'wood',
+        },
+      ],
+      openings: [
+        {
+          // West door: the walker's exit into the roofless void (the
+          // fade-restore leg of spec (d) threads this doorway).
+          id: 'op-west-door',
+          roomId: 'hall',
+          kind: 'door',
+          segmentIndex: 3,
+          tCenter: 0.5,
+          width: 0.9,
+          sillHeight: 0,
+          headHeight: 2.05,
+        },
+      ],
+      furniture: [],
+    },
+    {
+      id: 'floor-upper',
+      name: 'Upper',
+      elevation: 2.7,
+      rooms: [
+        {
+          id: 'bedroom',
+          name: 'Bedroom',
+          polygon: [
+            [0, 0],
+            [4.8, 0],
+            [4.8, 3.0],
+            [0, 3.0],
+          ],
+          floorTexture: 'carpet',
+          roofs: [
+            { segmentIndex: 0, leanDeg: 30 },
+            { segmentIndex: 2, leanDeg: 30 },
+          ],
+        },
+      ],
+      openings: [],
+      furniture: [],
+    },
+  ],
+};
+
+/** Boot the viewer with the shared roof-house plan (fresh page state). */
+async function bootHouse(page: Page, query = ''): Promise<void> {
+  await page.goto(`/viewer${query}`);
+  await page.locator('.viewer-gl-canvas').waitFor();
+  await page.evaluate((plan) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__casaplaza.loadPlan(plan);
+  }, HOUSE_PLAN);
+  await page.waitForFunction(
+    () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = (window as any).__viewerStats?.();
+      return typeof s === 'object' && s !== null && s.meshCount > 0;
+    },
+    { timeout: 15_000 },
+  );
+}
+
+/** Mean perceptual luminance (0..255) over a fractional canvas rect. */
+async function regionLuminance(
+  page: Page,
+  fx: number,
+  fy: number,
+  fw: number,
+  fh: number,
+): Promise<number> {
+  return page.evaluate(([fx_, fy_, fw_, fh_]) => {
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      '.viewer-gl-canvas',
+    );
+    if (!canvas) throw new Error('canvas missing');
+    // Snapshot the live GL canvas into a 2D buffer (needs
+    // preserveDrawingBuffer, which rides on ?perf=1).
+    const snap = document.createElement('canvas');
+    snap.width = canvas.width;
+    snap.height = canvas.height;
+    const ctx = snap.getContext('2d');
+    if (!ctx) throw new Error('no 2d ctx');
+    ctx.drawImage(canvas, 0, 0);
+    const sx = Math.floor(canvas.width * fx_);
+    const sy = Math.floor(canvas.height * fy_);
+    const w = Math.max(1, Math.floor(canvas.width * fw_));
+    const h = Math.max(1, Math.floor(canvas.height * fh_));
+    const data = ctx.getImageData(sx, sy, w, h).data;
+    let sum = 0;
+    let px = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      // Rec.601 perceptual luma — good enough for range sanity checks.
+      sum += 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
+      px++;
+    }
+    return px > 0 ? sum / px : -1;
+  }, [fx, fy, fw, fh]);
+}
+
+test.describe.serial('lighting + roof affordances (issue #86)', () => {
+  // (a) Parametrized over BOTH quality presets: the perf overlay must
+  // publish digit-bearing stats under either level (proving the knob
+  // composes with the sampler rather than breaking the boot).
+  for (const quality of ['low', 'high'] as const) {
+    test(`(a)?perf=1 publishes frame stats at quality=${quality}`, async ({
+      page,
+    }) => {
+      test.setTimeout(45_000);
+      await page.goto(`/viewer?perf=1&quality=${quality}`);
+      await page.locator('.viewer-gl-canvas').waitFor();
+      await page.evaluate((plan) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__casaplaza.loadPlan(plan);
+      }, HOUSE_PLAN);
+      await page.waitForTimeout(2500); // prime the 240-sample window
+      const overlay = await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="hud-perf-panel"]');
+        return el !== null ? el.textContent : null;
+      });
+      expect(overlay).toBeTruthy();
+      expect(String(overlay)).toMatch(/fps med \d+/);
+      expect(String(overlay)).toMatch(/n=\d+/);
+    });
+  }
+
+  test('(b) luminance probe: lit interior vs sky-filled exterior read sane', async ({
+    page,
+  }) => {
+    // preserveDrawingBuffer rides on ?perf=1 — required for the probe.
+    await bootHouse(page, '?perf=1');
+    await page.waitForTimeout(900); // first frames flush
+    // The overview ortho camera looks straight DOWN at the framed
+    // plan, so: the CENTER of the canvas is the lit interior; the
+    // CORNER margins are open sky (gradient dome or solid backdrop).
+    const interior = await regionLuminance(page, 0.35, 0.35, 0.3, 0.3);
+    const exterior = await regionLuminance(page, 0.0, 0.0, 0.12, 0.12);
+    // Interior (walls/floor, lit): definitively non-black, non-blown.
+    expect(interior).toBeGreaterThan(10);
+    expect(interior).toBeLessThan(246);
+    // Corner margin: dominated by the bright sky.
+    expect(exterior).toBeGreaterThan(60);
+    // Sanity ordering: the sky reads brighter than the shaded interior.
+    expect(exterior).toBeGreaterThan(interior);
+  });
+
+  test('(c) roof HUD toggle masks and unmasks the roof meshes', async ({
+    page,
+  }) => {
+    await bootHouse(page);
+    const before = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (window as any).__viewerStats?.() ?? null;
+    });
+    expect(before?.roofTriangleCount).toBeGreaterThan(0);
+    expect(before?.roofVisible).toBe(true);
+
+    const btn = page.getByTestId('hud-roof-toggle');
+    await expect(btn).toBeVisible();
+    await btn.click(); // hide
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (window as any).__viewerStats?.()?.roofVisible ?? null;
+        }),
+      )
+      .toBe(false);
+    await expect(btn).toHaveText('Show roofs');
+
+    await btn.click(); // show
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (window as any).__viewerStats?.()?.roofVisible ?? null;
+        }),
+      )
+      .toBe(true);
+    await expect(btn).toHaveText('Hide roofs');
+  });
+
+  test('(d) walk-mode autofade dims the roof under the bedroom and restores on exit', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await bootHouse(page);
+    // Descend into walk mode. The walker spawns in the GROUND hall —
+    // which sits DIRECTLY UNDER the roofed bedroom (identical
+    // footprints), so the transitive roof counts as cover: the fade
+    // must engage from spawn without any steering gymnastics.
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(700);
+
+    // Under-cover: opacity tweens BELOW 1 (fade floor 0.12).
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return (window as any).__viewerStats?.()?.roofOpacity ?? null;
+          }),
+        { timeout: 10_000, intervals: [250] },
+      )
+      .toBeLessThan(1);
+
+    // Restore WITHOUT leaving walk mode: steer west THROUGH THE DOORWAY
+    // into the open void — no roof out there, so the upward ray
+    // escapes to the sky and opacity tweens back to 1.
+    const readCam = () =>
+      page.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (window as any).__viewerCam?.() ?? null;
+      });
+    const porchWaypoint = { x: -1.5, y: 1.5 };
+    for (let step = 0; step < 40; step++) {
+      const cam = await readCam();
+      expect(cam, 'DEBUG SEAM __viewerCam must exist in walk mode').not.toBeNull();
+      if (Math.hypot(porchWaypoint.x - cam!.discX, porchWaypoint.y - cam!.discY) < 0.3) {
+        break;
+      }
+      const yaw = Math.atan2(
+        porchWaypoint.y - cam!.discY,
+        porchWaypoint.x - cam!.discX,
+      );
+      await page.evaluate((y) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__viewerYaw(y);
+      }, yaw);
+      await page.keyboard.down('KeyW');
+      await page.waitForTimeout(160);
+      await page.keyboard.up('KeyW');
+    }
+    const arrived = await readCam();
+    expect(
+      Math.hypot(arrived!.discX - porchWaypoint.x, arrived!.discY - porchWaypoint.y),
+      'walker must reach the roofless porch',
+    ).toBeLessThan(0.6);
+
+    // Outdoors: the roof fades back to fully opaque.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return (window as any).__viewerStats?.()?.roofOpacity ?? null;
+          }),
+        { timeout: 10_000, intervals: [250] },
+      )
+      .toBe(1);
+
+    // Finally ESC → overview ALSO restores (belt and braces: the
+    // mode-exit path resets opacity independently of the ray verdict).
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(700);
+    const restored = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (window as any).__viewerStats?.()?.roofOpacity ?? null;
+    });
+    expect(restored).toBe(1);
+  });
+});

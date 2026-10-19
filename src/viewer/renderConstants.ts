@@ -15,6 +15,9 @@
  */
 export type QualityLevel = 'low' | 'high';
 
+/** Exhaustive runtime tuple of {@link QualityLevel} members. */
+export const QUALITY_LEVELS = ['low', 'high'] as const;
+
 /* ---------------------------------- sky ----------------------------------- */
 
 /** Solid page-backdrop sky tone (LOW quality + legacy paintSky path). */
