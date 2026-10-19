@@ -543,11 +543,23 @@ function reduceAddFloor(st: EditorState, cmd: { name?: string }): DispatchResult
   const top = st.data.floors.reduce((m, f) => Math.max(m, f.elevation), 0);
   // Trim like renameFloor does, so " Loft " == "Loft".
   const wanted = cmd.name?.trim();
+  // Issue #94: derive the sequential name from the highest EXISTING
+  // "Floor N" suffix, not floors.length+1 alone — deleting the middle
+  // storey of [Ground, Floor 2, Floor 3] leaves [Ground, Floor 3],
+  // where naive length+1 (= 3) would mint a DUPLICATE "Floor 3". The
+  // floors.length leg keeps the HISTORICAL numbering intact (ground is
+  // "Ground", so the second storey has always been "Floor 2"); renamed
+  // floors simply don't match the pattern and don't lower the ceiling.
+  let maxSuffix = 0;
+  for (const f of st.data.floors) {
+    const m = /^Floor (\d+)$/.exec(f.name);
+    if (m) maxSuffix = Math.max(maxSuffix, Number(m[1]));
+  }
   const floor: Floor = {
     id: makeId('floor'),
     // Sequential display name ("Floor 2" for storey #2, etc.);
     // explicit names win when non-empty.
-    name: wanted ? wanted : `Floor ${st.data.floors.length + 1}`,
+    name: wanted ? wanted : `Floor ${Math.max(maxSuffix, st.data.floors.length) + 1}`,
     elevation: top + st.data.wallHeight + FLOOR_GAP_M,
     rooms: [],
     openings: [],
