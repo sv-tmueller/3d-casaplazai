@@ -42,6 +42,13 @@ export interface EditorDomRefs {
   floorRenameForm: HTMLFormElement;
   floorRenameInput: HTMLInputElement;
   btnDeleteFloor: HTMLButtonElement;
+  /* pkg 8.1 (issue #83): wall-lean popover (roof authoring). */
+  leanPopover: HTMLDivElement;
+  leanForm: HTMLFormElement;
+  leanSegFieldset: HTMLFieldSetElement;
+  leanSlider: HTMLInputElement;
+  leanValue: HTMLSpanElement;
+  btnClearLean: HTMLButtonElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -280,6 +287,68 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
 
   toolbar.appendChild(floorPopover);
 
+  // pkg 8.1 (issue #83): wall-lean popover — #68/#75 precedent (visibility-
+  // toggled div, role=dialog, Escape/outside close in glue.ts). Populated
+  // per selected room by glue.ts (one radio per wall segment + a degree
+  // slider); fully keyboard-operable (radios + range input + form submit).
+  const leanPopover = document.createElement('div');
+  leanPopover.className = 'snap-popover lean-popover';
+  leanPopover.setAttribute('role', 'dialog');
+  leanPopover.setAttribute('aria-label', 'Wall lean (roof)');
+  leanPopover.setAttribute('data-testid', 'lean-popover');
+  leanPopover.hidden = true;
+
+  const leanTitle = document.createElement('div');
+  leanTitle.className = 'snap-popover-title';
+  leanTitle.textContent = 'Wall lean (roof)';
+  leanPopover.appendChild(leanTitle);
+
+  const leanForm = document.createElement('form');
+  leanForm.className = 'lean-form';
+
+  const leanSegFieldset = document.createElement('fieldset');
+  leanSegFieldset.className = 'snap-fieldset';
+  const leanLegend = document.createElement('legend');
+  leanLegend.textContent = 'Wall';
+  leanSegFieldset.appendChild(leanLegend);
+  leanForm.appendChild(leanSegFieldset);
+
+  const leanSliderLabel = document.createElement('label');
+  leanSliderLabel.className = 'snap-master';
+  const leanSlider = document.createElement('input');
+  leanSlider.type = 'range';
+  leanSlider.name = 'lean-deg';
+  leanSlider.min = '0';
+  leanSlider.max = '75';
+  leanSlider.step = '1';
+  leanSlider.value = '0';
+  leanSlider.dataset.testid = 'lean-slider';
+  leanSlider.setAttribute('aria-label', 'Lean degrees');
+  const leanValue = document.createElement('span');
+  leanValue.dataset.testid = 'lean-value';
+  leanValue.textContent = '0°';
+  leanSliderLabel.append(leanSlider, leanValue);
+  leanForm.appendChild(leanSliderLabel);
+
+  const leanApply = document.createElement('button');
+  leanApply.type = 'submit';
+  leanApply.className = 'editor-btn';
+  leanApply.textContent = 'Apply';
+  leanApply.setAttribute('data-testid', 'btn-apply-lean');
+  leanForm.appendChild(leanApply);
+
+  leanPopover.appendChild(leanForm);
+
+  const btnClearLean = document.createElement('button');
+  btnClearLean.type = 'button';
+  btnClearLean.className = 'editor-btn editor-clear-lean';
+  btnClearLean.textContent = 'Clear lean';
+  btnClearLean.title = 'Remove the lean from the selected wall.';
+  btnClearLean.setAttribute('data-testid', 'btn-clear-lean');
+  leanPopover.appendChild(btnClearLean);
+
+  toolbar.appendChild(leanPopover);
+
   // Furniture palette (visible only while the Furnish tool is armed).
   const palette = document.createElement('div');
   palette.className = 'editor-palette';
@@ -331,6 +400,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnCenter, btnZoomIn, btnZoomOut,
     btnPrevFloor, btnNextFloor, btnAddFloor, floorBadge,
     floorPopover, floorRenameForm, floorRenameInput, btnDeleteFloor,
+    leanPopover, leanForm, leanSegFieldset, leanSlider, leanValue, btnClearLean,
   };
 }
 

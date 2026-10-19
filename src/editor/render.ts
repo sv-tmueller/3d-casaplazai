@@ -93,6 +93,9 @@ export function paintScene(
   }
 
   if (segHighlight) drawSegHighlight(ctx, cam, plan, segHighlight);
+  // pkg 8.1 (issue #83): lean chips ride on top of everything static so
+  // they stay legible over shared walls.
+  drawLeanBadges(ctx, cam, plan);
   if (ghost) drawGhost(ctx, cam, ghost);
   drawInProgress(ctx, cam, phase);
 }
@@ -356,6 +359,45 @@ function drawStamp(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(f.type.charAt(0).toUpperCase(), ctr[0], ctr[1]);
+}
+
+/**
+ * pkg 8.1 (issue #83): per-wall lean badges — for every leaned segment of
+ * a room, draw a small amber chip at the segment's midpoint carrying the
+ * lean in degrees ("30°"). Drawn on top of room strokes so it reads even
+ * when the wall is shared; skips degenerate segments.
+ */
+function drawLeanBadges(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera,
+  plan: FloorplanData,
+): void {
+  for (const room of flatRooms(plan)) {
+    const rows = room.roofs ?? [];
+    if (rows.length === 0) continue;
+    const segs = roomSegments(room);
+    for (const row of rows) {
+      const seg = segs[row.segmentIndex];
+      if (!seg || seg.length === 0) continue;
+      const mid = pointAtT(seg, 0.5);
+      const s = worldToScreen(cam, mid);
+      const label = `${row.leanDeg}\u00B0`;
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const w = ctx.measureText(label).width + 8;
+      const h = 14;
+      ctx.fillStyle = '#fef3c7';
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(s[0] - w / 2, s[1] - h / 2, w, h);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#92400e';
+      ctx.fillText(label, s[0], s[1]);
+    }
+  }
 }
 
 /** Yellow glow over the wall segment currently attracting the tool. */

@@ -533,6 +533,23 @@ body {
   padding-top: 8px;
 }
 
+/* pkg 8.1 (issue #83): lean popover — form column stretches inside the
+ * #68 popover skeleton; the degree readout rides beside the slider. */
+.lean-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lean-form .snap-master {
+  border-top: none;
+  padding-top: 0;
+}
+
+.editor-clear-lean {
+  width: 100%;
+}
+
 /* Loading splash (index.html static markup; removed by editor mount). */
 .loading-splash {
   position: fixed;

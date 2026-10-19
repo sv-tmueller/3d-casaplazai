@@ -3,7 +3,7 @@
  * every state change. Lives here (not in controller.ts) so the gesture
  * math stays unit-testable without a real canvas/browser.
  */
-import type { FloorplanData, FurnitureItem } from '../shared/schema';
+import type { FloorplanData, FurnitureItem, Room } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms, migrate, validateFloorplan } from '../shared/schema';
 import { AutosaveManager } from './autosave';
 import {
@@ -542,6 +542,128 @@ export function initEditorInteraction(
     }
   }, true);
 
+  /* ---------- pkg 8.1 (issue #83): wall-lean popover ---------- */
+
+  /**
+   * Populate the lean popover for a room: one radio per wall segment
+   * (labels "Wall 1..n"), preselecting the FIRST leaned segment (else
+   * segment 0) and syncing the slider to that segment's stored lean.
+   * Radios are rebuilt per open — rooms gain/lose segments constantly.
+   */
+  function populateLeanPopover(room: Room): void {
+    refs.leanSegFieldset.replaceChildren(
+      refs.leanSegFieldset.querySelector('legend')!,
+    );
+    const rows = room.roofs ?? [];
+    for (let i = 0; i < room.polygon.length; i += 1) {
+      const label = document.createElement('label');
+      label.className = 'snap-radio';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'lean-seg';
+      radio.value = String(i);
+      radio.dataset.testid = `lean-seg-${i}`;
+      const row = rows.find((r) => r.segmentIndex === i);
+      if (row) radio.checked = true;
+      label.append(radio, document.createTextNode(` Wall ${i + 1}`));
+      refs.leanSegFieldset.appendChild(label);
+    }
+    // Checked segment drives the slider seed (stored lean, else 0).
+    syncLeanSlider();
+  }
+
+  /** Slider ← checked radio segment's stored lean (0 when none). */
+  function syncLeanSlider(): void {
+    const st = store.getState();
+    const room = st.selectedId !== null
+      ? flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId)
+      : undefined;
+    const checked = refs.leanSegFieldset.querySelector<HTMLInputElement>(
+      'input[name="lean-seg"]:checked',
+    );
+    const si = checked ? Number(checked.value) : 0;
+    const row = room?.roofs?.find((r) => r.segmentIndex === si);
+    refs.leanSlider.value = String(row?.leanDeg ?? 0);
+    refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
+  }
+
+  const setLeanPopoverOpen = (open: boolean): void => {
+    refs.leanPopover.hidden = !open;
+    if (open) {
+      const firstRadio = refs.leanSegFieldset.querySelector<HTMLInputElement>(
+        'input[name="lean-seg"]',
+      );
+      firstRadio?.focus();
+    }
+  };
+
+  /** Checked radio's segment index, or null when the room has no walls. */
+  function checkedLeanSeg(): number | null {
+    const checked = refs.leanSegFieldset.querySelector<HTMLInputElement>(
+      'input[name="lean-seg"]:checked',
+    );
+    if (!checked) return null;
+    const si = Number(checked.value);
+    return Number.isInteger(si) ? si : null;
+  }
+
+  refs.leanSegFieldset.addEventListener('change', () => {
+    syncLeanSlider();
+  });
+
+  // Live degree readout while the slider moves (committed on Apply).
+  refs.leanSlider.addEventListener('input', () => {
+    refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
+  });
+
+  refs.leanForm.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const st = store.getState();
+    const roomId = st.selectedId;
+    if (roomId === null) return;
+    const si = checkedLeanSeg();
+    if (si === null) return;
+    const leanDeg = Math.round(Number(refs.leanSlider.value));
+    // Lean 0 strips the row (reduceSetWallLean treats it as clear too,
+    // but routing through clearWallLean exercises the explicit path).
+    const res = leanDeg === 0
+      ? store.dispatch({ type: 'clearWallLean', roomId, segmentIndex: si })
+      : store.dispatch({ type: 'setWallLean', roomId, segmentIndex: si, leanDeg });
+    if (!res.ok) {
+      flashMessage(refs, res.error);
+      return;
+    }
+    setLeanPopoverOpen(false);
+  });
+
+  refs.btnClearLean.addEventListener('click', () => {
+    const st = store.getState();
+    const roomId = st.selectedId;
+    if (roomId === null) return;
+    const si = checkedLeanSeg();
+    if (si === null) return;
+    const res = store.dispatch({ type: 'clearWallLean', roomId, segmentIndex: si });
+    if (!res.ok) {
+      flashMessage(refs, res.error);
+      return;
+    }
+    setLeanPopoverOpen(false);
+  });
+
+  // Outside click closes the popover (dumb listeners, no focus trap).
+  document.addEventListener('pointerdown', (ev) => {
+    if (refs.leanPopover.hidden) return;
+    if (refs.leanPopover.contains(ev.target as Node)) return;
+    setLeanPopoverOpen(false);
+  });
+  // Escape closes it too (capture phase so canvas key handling is moot).
+  document.addEventListener('keydown', (ev) => {
+    if (!refs.leanPopover.hidden && ev.key === 'Escape') {
+      ev.stopPropagation();
+      setLeanPopoverOpen(false);
+    }
+  }, true);
+
 
   refs.btnPoly.addEventListener('click', () => setActiveTool('polygon'));
   refs.btnDoor.addEventListener('click', () => setActiveTool('door'));
@@ -692,6 +814,21 @@ export function initEditorInteraction(
   (window as unknown as { __editorDimsVisible?: () => boolean }).__editorDimsVisible =
     () => dimensionsVisible;
 
+  // pkg 8.1 (issue #83) read-only seam (same precedent): the v1 wire
+  // bridge DROPS the roofs field, so e2e asserts the active floor's
+  // leans through here instead.
+  (
+    window as unknown as {
+      __editorLeans?: () => Array<{ roomId: string; segmentIndex: number; leanDeg: number }>;
+    }
+  ).__editorLeans = () =>
+    flatRooms(activeFloorPlan(store.getState())).flatMap((room) =>
+      (room.roofs ?? []).map((row) => ({
+        roomId: room.id,
+        segmentIndex: row.segmentIndex,
+        leanDeg: row.leanDeg,
+      })),
+    );
 
 
 
@@ -1366,6 +1503,25 @@ export function initEditorInteraction(
       const opening = refs.snapPopover.hidden === true;
       if (opening) syncSnapControls();
       setSnapPopoverOpen(opening);
+      ev.preventDefault();
+      return;
+    }
+    // pkg 8.1 (issue #83): "L" opens the wall-lean popover for the
+    // SELECTED room (keyboard-first authoring — trackpad-only user).
+    // Registered in shortcuts.ts (shortcut-sheet + README sync duty).
+    if ((ev.key === 'l' || ev.key === 'L') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      // Typing inside the popover's own inputs must not re-trigger.
+      if (!refs.leanPopover.hidden) return;
+      const sel = store.getState().selectedId;
+      const room = sel !== null
+        ? flatRooms(activeFloorPlan(store.getState())).find((r) => r.id === sel)
+        : undefined;
+      if (!room) {
+        flashMessage(refs, 'Select a room first, then press L to set a wall lean.');
+        return;
+      }
+      populateLeanPopover(room);
+      setLeanPopoverOpen(true);
       ev.preventDefault();
       return;
     }
