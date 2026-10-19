@@ -101,3 +101,44 @@ export const ROOFS_RAYCAST_INTERVAL_TICKS = 5;
 
 /** Upward-ray cutoff, meters (covers any legal roof height). */
 export const ROOFS_RAYCAST_FAR_M = 60;
+
+/* ---------------------------- sun path (issue #121) ----------------------- */
+
+/**
+ * Noon sun perch offset from the plan centre, metres — the pre-#121
+ * hard-code, now the solar model's calibration anchor. Do NOT retune:
+ * sun.ts derives its elevation / azimuth / radius from these values, so
+ * the noon preset reproduces the old vector exactly (the pin test in
+ * tests/unit/viewer.sun.spec.ts is the contract).
+ */
+export const SUN_NOON_OFFSET_X_M = 8;
+export const SUN_NOON_OFFSET_Y_M = -8;
+export const SUN_NOON_OFFSET_Z_M = 12;
+
+/** Sun-orbit radius, metres: |(8, −8, 12)| ≈ 16.49 (derived). */
+export const SUN_PATH_RADIUS_M = Math.hypot(
+  SUN_NOON_OFFSET_X_M,
+  SUN_NOON_OFFSET_Y_M,
+  SUN_NOON_OFFSET_Z_M,
+);
+
+/** Noon elevation, radians: atan2(z, hypot(x, y)) ≈ 0.8148 (46.69°). */
+export const SUN_EL_NOON_RAD = Math.atan2(
+  SUN_NOON_OFFSET_Z_M,
+  Math.hypot(SUN_NOON_OFFSET_X_M, SUN_NOON_OFFSET_Y_M),
+);
+
+/** Noon bearing, degrees CW from +Y (plan north) — the +X/−Y quadrant. */
+export const SUN_AZ_NOON_DEG = 135;
+
+/** Night floor: elevation clamp (degrees) and sun-intensity factor. */
+export const SUN_NIGHT_ELEV_MIN_DEG = 2;
+export const SUN_NIGHT_INTENSITY_FLOOR = 0.15;
+
+/** Dusk colour stops: sun tint, sky-dome bottom, sky-dome top. */
+export const SUN_DUSK_COLOR_HEX = 0xff9e54;
+export const SKY_DUSK_BOTTOM_HEX = 0xf0b27a;
+export const SKY_DUSK_TOP_HEX = 0x2e3a6e;
+
+/** Ambient dusk boost cap: AMBIENT_INTENSITY × (1 + this) at full dusk. */
+export const AMBIENT_DUSK_BOOST_MAX = 0.6;
