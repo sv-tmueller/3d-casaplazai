@@ -154,8 +154,7 @@ test.describe.serial('editor core', () => {
         );
         if (raw === null) return 0;
         try {
-          // v2 shape (issue #74): rooms nest under floors[].
-          return JSON.parse(raw).floors?.[0]?.rooms?.length ?? 0;
+          return JSON.parse(raw).rooms?.length ?? 0;
         } catch {
           return 0;
         }

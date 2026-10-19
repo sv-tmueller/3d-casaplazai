@@ -59,6 +59,7 @@ import { openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, toggleHelpModal } from './helpModal';
 import { EditorStore, emptyPlan } from './store';
+import { toLegacyWire } from './wire';
 import { vecAdd, vecSub } from './geom';
 import {
   labelHitTest,
@@ -338,7 +339,9 @@ export function initEditorInteraction(
 
   store.subscribe((_s) => {
     if (_s === undefined) return;
-    if (store.dirty) autosave.scheduleSave(_s.data);
+    // Slot speaks the frozen v1 wire (wire.ts contract): flatten through
+    // toLegacyWire so every writer agrees on the format (reviewer #74).
+    if (store.dirty) autosave.scheduleSave(toLegacyWire(_s.data));
     refreshBadgeAndButtons();
     refreshStatus();
     repaint();
