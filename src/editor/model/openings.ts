@@ -505,7 +505,6 @@ export function mirrorCounterparts(
     .map(([roomId, v]) => ({ roomId, segmentIndex: v.segmentIndex, t: v.t }));
 }
 
-
 /**
  * Emit BOTH rows for a door committed on a possibly-shared wall:
  * the originating row plus the honest mirror set (issue #40 — see
