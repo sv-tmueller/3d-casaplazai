@@ -972,5 +972,7 @@ function activeRooms(plan: FloorplanData): Room[] {
 
 /** Parse location.search for the perf flag (?perf=1). */
 export function isPerfEnabled(search = window.location.search): boolean {
-  return /[?&]perf=1/.test(search);
+  // End-anchored like quality.ts's parser (issue #94): "?perf=10" is a
+  // DIFFERENT parameter value and must not light the overlay.
+  return /[?&]perf=1(?=&|$)/.test(search);
 }

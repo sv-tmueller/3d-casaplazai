@@ -592,7 +592,33 @@ describe('double replaceAll is idempotent (regression: double-loadPlan)', () => 
   });
 });
 
-/* --------------- issue #53: resizeRoom dispatch + undo regression ---------- */
+/* --------------- issue #94: floor-name collision on delete-then-add --------- */
+
+describe('addFloor default-name derivation (issue #94)', () => {
+  it('delete-then-add reuses NO vacated suffix (names stay unique)', () => {
+    const store = newStore();
+    store.dispatch({ type: 'addFloor' }); // Floor 2
+    store.dispatch({ type: 'addFloor' }); // Floor 3
+    // Delete the middle floor, leaving [Ground, Floor 3]: naive
+    // length+1 (= 3) would mint a DUPLICATE "Floor 3" here.
+    store.dispatch({ type: 'setActiveFloor', index: 1 });
+    store.dispatch({ type: 'deleteFloor' });
+    store.dispatch({ type: 'addFloor' });
+    const names = store.getState().data.floors.map((f) => f.name);
+    expect(names).toEqual(['Ground', 'Floor 3', 'Floor 4']);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('renamed floors never collide with derived defaults', () => {
+    const store = newStore();
+    store.dispatch({ type: 'addFloor', name: 'Loft' }); // renamed: no match
+    store.dispatch({ type: 'addFloor' });
+    const names = store.getState().data.floors.map((f) => f.name);
+    expect(names).toEqual(['Ground', 'Loft', 'Floor 3']);
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
+
 
 describe('resizeRoom dispatch (#53)', () => {
   const livingPoly = (store: EditorStore): number[][] =>

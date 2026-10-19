@@ -12,10 +12,11 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   decodeShare,
   encodeShare,
+  SHARE_ENCODE_INPUT_MAX_JSON,
   SHARE_PREFIX,
   SHARE_WARN_LENGTH,
 } from '../../src/shared/shareLink';
@@ -76,9 +77,9 @@ describe('shareLink.decodeShare typed failures (issue #91)', () => {
     expect(res).toMatchObject({ ok: false, reason: 'badPrefix' });
   });
 
-  it('rejects an empty payload (badBase64)', async () => {
+  it('rejects an empty payload (emptyPayload — issue #94)', async () => {
     const res = await decodeShare(SHARE_PREFIX);
-    expect(res).toMatchObject({ ok: false, reason: 'badBase64' });
+    expect(res).toMatchObject({ ok: false, reason: 'emptyPayload' });
   });
 
   it('rejects non-base64url garbage (badBase64)', async () => {
@@ -194,5 +195,24 @@ describe('shareLink length guard tiers (issue #91)', () => {
 
   it('hard-refuses past the max tier', async () => {
     await expect(encodeShare(bloatedPlan(900))).rejects.toThrow(/too long/i);
+  });
+
+  it('refuses monster plans BEFORE deflating (issue #94 pre-cost guard)', async () => {
+    // Spy on the constructor deflate() rides: rejecting a monster plan
+    // without constructing a stream PROVES the guard fires pre-deflate.
+    const ctorSpy = vi.spyOn(globalThis, 'CompressionStream');
+    try {
+      await expect(encodeShare(bloatedPlan(5000))).rejects.toThrow(
+        /too large.*before compression/is,
+      );
+    } finally {
+      ctorSpy.mockRestore();
+    }
+    expect(ctorSpy).not.toHaveBeenCalled();
+
+    // Sanity: the constant is a real ceiling, not vacuously huge —
+    // bloatedPlan(5000) crosses it while legit plans stay far below.
+    const sample = JSON.stringify(townhouse());
+    expect(sample.length).toBeLessThan(SHARE_ENCODE_INPUT_MAX_JSON);
   });
 });

@@ -46,13 +46,23 @@ export const SHARE_WARN_LENGTH = 2000;
  */
 export const SHARE_MAX_LENGTH = 8000;
 
+/**
+ * Raw-JSON ceiling (chars) judged BEFORE deflating (issue #94): a plan
+ * this size costs hundreds of MB of stream churn only to be refused by
+ * the fragment cap afterwards. The ratio is calibrated so legitimate
+ * plans never trip it — the hard cap's worst observed compressor
+ * input is orders of magnitude smaller.
+ */
+export const SHARE_ENCODE_INPUT_MAX_JSON = 4_000_000;
+
 /** Why a fragment failed to decode — machine-readable, UI renders the message. */
 export type DecodeErrorReason =
   | 'badPrefix'
   | 'badBase64'
   | 'badDeflate'
   | 'badJson'
-  | 'invalidPlan';
+  | 'invalidPlan'
+  | 'emptyPayload';
 
 export type DecodeResult =
   | { ok: true; plan: FloorplanData }
@@ -127,6 +137,17 @@ export async function encodeShare(
   plan: FloorplanData,
 ): Promise<{ fragment: string; warning?: EncodeWarning }> {
   const json = JSON.stringify(plan);
+  // Cost guard BEFORE deflate (issue #94): a monster plan would burn
+  // CPU/memory compressing megabytes only to be refused by the fragment
+  // cap a beat later. Reject up front with the RAW size quoted — the
+  // deflate figure is irrelevant since we never get there.
+  if (json.length > SHARE_ENCODE_INPUT_MAX_JSON) {
+    throw new Error(
+      `Plan too large to share (${Math.round(json.length / 1000)} kB of JSON, ` +
+        `ceiling ${Math.round(SHARE_ENCODE_INPUT_MAX_JSON / 1000)} kB before compression); ` +
+        'export/import the plan as JSON instead',
+    );
+  }
   const zipped = await deflate(new TextEncoder().encode(json));
   const fragment = SHARE_PREFIX + bytesToBase64Url(zipped);
 
@@ -160,7 +181,10 @@ export async function decodeShare(inputFragment: string): Promise<DecodeResult> 
   }
   const payload = fragment.slice(SHARE_PREFIX.length);
   if (payload.length === 0) {
-    return { ok: false, reason: 'badBase64', message: 'The share payload is empty.' };
+    // Distinct from badBase64 (issue #94): an EMPTY payload is a
+    // truncated link, not corrupted characters — the viewer can word
+    // the banner differently ("looks cut off" vs "corrupted").
+    return { ok: false, reason: 'emptyPayload', message: 'The share payload is empty.' };
   }
 
   let zipped: Uint8Array;

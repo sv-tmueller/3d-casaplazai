@@ -464,8 +464,17 @@ export function initEditorInteraction(
     setSnapPopoverOpen(false);
   });
   // Escape closes it too (capture phase so canvas key handling is moot).
+  // Issue #94: but NEVER while a draw gesture is mid-flight — swallowing
+  // Escape there would starve the canvas draw-cancel path (below), the
+  // exact bug this guard exists for. The popover may stay open; the
+  // gesture always wins the key.
+  const drawGestureInProgress = (): boolean => phase.tag !== 'idle';
   document.addEventListener('keydown', (ev) => {
-    if (!refs.snapPopover.hidden && ev.key === 'Escape') {
+    if (
+      !refs.snapPopover.hidden &&
+      ev.key === 'Escape' &&
+      !drawGestureInProgress()
+    ) {
       ev.stopPropagation();
       setSnapPopoverOpen(false);
     }
@@ -535,9 +544,14 @@ export function initEditorInteraction(
     if (refs.floorBadge.contains(ev.target as Node)) return;
     setFloorPopoverOpen(false);
   });
-  // Escape closes it too (capture phase so canvas key handling is moot).
+  // Escape closes it too (capture phase so canvas key handling is moot),
+  // except mid-gesture (Issue #94 — see drawGestureInProgress above).
   document.addEventListener('keydown', (ev) => {
-    if (!refs.floorPopover.hidden && ev.key === 'Escape') {
+    if (
+      !refs.floorPopover.hidden &&
+      ev.key === 'Escape' &&
+      !drawGestureInProgress()
+    ) {
       ev.stopPropagation();
       setFloorPopoverOpen(false);
     }
@@ -667,9 +681,14 @@ export function initEditorInteraction(
     if (refs.leanPopover.contains(ev.target as Node)) return;
     setLeanPopoverOpen(false);
   });
-  // Escape closes it too (capture phase so canvas key handling is moot).
+  // Escape closes it too (capture phase so canvas key handling is moot),
+  // except mid-gesture (Issue #94 — see drawGestureInProgress above).
   document.addEventListener('keydown', (ev) => {
-    if (!refs.leanPopover.hidden && ev.key === 'Escape') {
+    if (
+      !refs.leanPopover.hidden &&
+      ev.key === 'Escape' &&
+      !drawGestureInProgress()
+    ) {
       ev.stopPropagation();
       setLeanPopoverOpen(false);
     }

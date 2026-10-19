@@ -5,6 +5,25 @@
 
 import { describe, expect, it } from 'vitest';
 import { isHighQuality } from '../../src/viewer/quality';
+import { isPerfEnabled } from '../../src/viewer/appController';
+
+describe('isPerfEnabled — end-anchored parse (issue #94)', () => {
+  it('enables on the exact flag, solo or among peers', () => {
+    expect(isPerfEnabled('?perf=1')).toBe(true);
+    expect(isPerfEnabled('?foo=2&perf=1')).toBe(true);
+    expect(isPerfEnabled('?perf=1&bar=3')).toBe(true);
+  });
+
+  it('does NOT enable on perf=10 — a different value, not our flag', () => {
+    expect(isPerfEnabled('?perf=10')).toBe(false);
+    expect(isPerfEnabled('?perf=10&foo=1')).toBe(false);
+  });
+
+  it('stays off when absent', () => {
+    expect(isPerfEnabled('')).toBe(false);
+    expect(isPerfEnabled('?quality=low')).toBe(false);
+  });
+});
 
 describe('isHighQuality — ratified default-HIGH semantics', () => {
   it('defaults HIGH when the param is absent', () => {

@@ -173,6 +173,20 @@ describe('addFloor elevation default (#69 §D)', () => {
     store.dispatch({ type: 'addFloor', name: ' Loft ' });
     expect(store.getState().data.floors[2].name).toBe('Loft');
   });
+
+  it('delete-then-add never duplicates a default name (issue #94)', () => {
+    const store = seededStore();
+    store.dispatch({ type: 'addFloor' }); // Floor 2
+    store.dispatch({ type: 'addFloor' }); // Floor 3
+    // Delete the middle floor, leaving [Ground, Floor 3]: naive
+    // length+1 (= 3) would mint a DUPLICATE "Floor 3" here.
+    store.dispatch({ type: 'setActiveFloor', index: 1 });
+    store.dispatch({ type: 'deleteFloor' });
+    store.dispatch({ type: 'addFloor' });
+    const names = store.getState().data.floors.map((f) => f.name);
+    expect(names).toEqual(['Ground', 'Floor 3', 'Floor 4']);
+    expect(new Set(names).size).toBe(names.length);
+  });
 });
 
 describe('deleteFloor sole-floor refusal (issue #75)', () => {

@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   MEASURE_STORAGE_KEY,
-  formatAngleLabel,
+  clampAngleLabel,
   formatDistanceLabel,
   labelHitTest,
   loadMeasurements,
@@ -42,8 +42,22 @@ describe('measure model (issue #66)', () => {
 
   it('formats distance with two decimals and angle with one', () => {
     expect(formatDistanceLabel(4.236)).toBe('4.24 m');
-    expect(formatAngleLabel(53.13)).toBe('53.1\u00B0');
+    expect(clampAngleLabel(53.13)).toBe('53.1\u00B0');
     expect(measurementLabelText(M)).toBe('5.00 m \u00B7 53.1\u00B0');
+  });
+
+  // Issue #94: clampAngleLabel is the SINGLE angle formatter (the
+  // gesture-live readouts ride the same helper), so the wrap/clamp
+  // contract is pinned here for both call sites at once.
+  it.each([
+    [359.96, '0.0\u00B0'], // rounds to 360.0 → wraps to 0.0, never "360.0"
+    [359.94, '359.9\u00B0'],
+    [-0.04, '0.0\u00B0'], // tiny negative rounds to -0.0 → 0.0
+    [-53.13, '-53.1\u00B0'], // larger negatives pass through modulo intact
+    [720.04, '0.0\u00B0'], // multi-turn wraps
+    [45.0, '45.0\u00B0'],
+  ])('clampAngleLabel(%p) -> %p', (deg, expected) => {
+    expect(clampAngleLabel(deg)).toBe(expected);
   });
 
   it('label pill sits above the segment midpoint, offset perpendicular', () => {

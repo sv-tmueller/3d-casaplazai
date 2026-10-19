@@ -42,17 +42,23 @@ export function formatDistanceLabel(meters: number): string {
   return `${meters.toFixed(2)} m`;
 }
 
-/** "53.1°" — one decimal, clamped to [0, 360) after rounding (a raw
- * angle in [~359.95, 360) would otherwise format as "360.0°"; same
- * clamp as angleReadouts.ts — reviewer should-fix, cross-package parity). */
-export function formatAngleLabel(degrees: number): string {
+/**
+ * "53.1°" — one decimal, clamped to [0, 360) after rounding (a raw
+ * angle in [~359.95, 360) would otherwise format as "360.0°").
+ *
+ * Issue #94: the single owner of this rounding+clamping recipe — the
+ * gesture-live readouts (render/angleReadouts.ts) formerly carried a
+ * byte-identical twin. Glyph-wise "\u00B0" ≡ "°"; only the spelling
+ * differed.
+ */
+export function clampAngleLabel(degrees: number): string {
   const shown = Number(degrees.toFixed(1)) % 360;
   return `${shown.toFixed(1)}\u00B0`;
 }
 
 /** Combined pill text, e.g. "5.00 m · 53.1°". */
 export function measurementLabelText(m: Measurement): string {
-  return `${formatDistanceLabel(measurementDistance(m))} \u00B7 ${formatAngleLabel(measurementAngle(m))}`;
+  return `${formatDistanceLabel(measurementDistance(m))} \u00B7 ${clampAngleLabel(measurementAngle(m))}`;
 }
 
 /** Screen offset of the label pill from the segment midpoint (px). */
