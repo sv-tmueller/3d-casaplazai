@@ -403,12 +403,17 @@ export function adaptScene(
     });
 
     const panes = windowPaneRects(planFromRooms(roomsById, openings));
-    const paneDz = new Map(panes.map((p) => [p.openingId, 0]));
-    if (plan) {
-      for (const opening of openings) {
-        paneDz.set(opening.id, liftOf(opening));
-      }
-    }
+    // Single pass (issue #94 readability fold): dz is liftOf(opening)
+    // when a multi-storey plan supplies elevations, else 0 — the old
+    // seeded-zero map + conditional overwrite computed the same thing.
+    const paneDz = new Map(
+      panes.map((p) => [
+        p.openingId,
+        plan
+          ? liftOf(openings.find((o) => o.id === p.openingId)!)
+          : 0,
+      ]),
+    );
     const thickness = wallThickness;
     for (const pane of panes) {
       const dz = paneDz.get(pane.openingId) ?? 0;
