@@ -7,7 +7,7 @@
  * same reducer/undo/autosave stream. Gesture-streamable commands carry
  * STREAMABLE_CMD payloads; everything else commits atomically.
  */
-import type { FloorplanData, Floor, Opening, Room, Vec2 } from '../shared/schema';
+import type { FloorplanData, Floor, Opening, Room, Staircase, Vec2 } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import { signedArea, vecAdd, vecEq } from './geom';
 import type { UnderlayState } from './model/underlay';
@@ -124,7 +124,36 @@ export type Command =
    * mutation; unknown ids are skipped, an empty effective batch
    * refuses without snapshotting.
    */
-  | { type: 'deleteEntities'; ids: string[] };
+  | { type: 'deleteEntities'; ids: string[] }
+
+  /* ---- pkg 13.4 additions (issue #118): stairs editor ---- */
+  /**
+   * Place a staircase inside a known room. Deep geometric legality (gap
+   * match, room containment, hole overlap) is validated by the CALLER on
+   * a candidate plan copy via validateGeometry() — the glue commit path
+   * and the inspector's guarded commits; this reducer keeps structural
+   * sanity only (same split as the opening reducers).
+   */
+  | {
+      type: 'addStair';
+      roomId: string;
+      position: Pt;
+      rotationDeg: number;
+      width: number;
+      run: number;
+      rise: number;
+      stepCount: number;
+    }
+  /** Edit stair scalars; rotation re-orients the flight about its centre. */
+  | {
+      type: 'updateStair';
+      stairId: string;
+      fields: Partial<Pick<Staircase, 'rotationDeg' | 'width' | 'run' | 'rise' | 'stepCount'>>;
+    }
+  /** Flip the flight end-for-end (rotationDeg + 180 mod 360); centre stays. */
+  | { type: 'flipStair'; stairId: string }
+  /** Delete one staircase (stairs are leaves — nothing cascades off them). */
+  | { type: 'deleteStair'; stairId: string };
 
 export type DispatchResult =
   | { ok: true }
@@ -177,7 +206,14 @@ function clampActiveFloorIdx(st: EditorState): void {
       fl !== undefined &&
       (fl.rooms.some((r) => r.id === st.selectedId) ||
         fl.openings.some((o) => o.id === st.selectedId) ||
-        fl.furniture.some((f) => f.id === st.selectedId));
+        fl.furniture.some((f) => f.id === st.selectedId) ||
+        // pkg 13.4 (issue #118): stairs are PLAN-level (data.stairs) —
+        // a selected stair counts as "on" this floor when its host
+        // (departure) room lives here; leaving the departure floor
+        // drops the selection like any other cross-floor phantom.
+        st.data.stairs.some(
+          (s) => s.id === st.selectedId && fl.rooms.some((r) => r.id === s.roomId),
+        ));
     if (!onFloor) st.selectedId = null;
   }
 }
@@ -308,6 +344,11 @@ function reduceDeleteRoom(st: EditorState, cmd: { roomId: string }): DispatchRes
   // Cascade-remove any openings/furniture anchored to the deleted room.
   floor.openings = floor.openings.filter((o: Opening) => o.roomId !== cmd.roomId);
   floor.furniture = floor.furniture.filter((f) => f.roomId !== cmd.roomId);
+  // pkg 13.4 (issue #118): stairs anchor to their host (departure) room
+  // via roomId — a stranded row throws UnknownStairRoomError at the next
+  // compile, so the cascade purges them HERE (fix the class, not the
+  // site: every room-removing path routes through this reducer).
+  st.data.stairs = st.data.stairs.filter((s) => s.roomId !== cmd.roomId);
   return { ok: true };
 }
 
@@ -322,7 +363,10 @@ function reduceSetEntitySelection(
   const known =
     flatRooms(st.data).some((r) => r.id === entityId) ||
     flatOpenings(st.data).some((o) => o.id === entityId) ||
-    flatFurniture(st.data).some((f) => f.id === entityId);
+    flatFurniture(st.data).some((f) => f.id === entityId) ||
+    // pkg 13.4 (issue #118): stairs are plan-level entities too — the
+    // click-select path addresses them through this same command.
+    st.data.stairs.some((s) => s.id === entityId);
   if (!known) return { ok: false, error: `unknown entity "${entityId}"` };
   st.selectedId = entityId;
   return { ok: true };
@@ -570,6 +614,18 @@ function reduceDeleteFurniture(st: EditorState, furnitureId: string): DispatchRe
  */
 const FLOOR_GAP_M = 0.3;
 
+/**
+ * Elevation the next addFloor would mint: max(elevation) + wallHeight +
+ * FLOOR_GAP_M (issue #69 §D). Exported so the stairs tool can derive the
+ * arrival rise / preview a pending storey WITHOUT duplicating the
+ * formula — a hand-defaulted 2.7 m rise would fail StairGapMismatchError
+ * against the real 3.0 m storey pitch (derive, never default).
+ */
+export function nextFloorElevation(plan: FloorplanData): number {
+  const top = plan.floors.reduce((m, f) => Math.max(m, f.elevation), 0);
+  return top + plan.wallHeight + FLOOR_GAP_M;
+}
+
 function reduceSetActiveFloor(st: EditorState, index: number): DispatchResult {
   if (!Number.isInteger(index) || index < 0 || index >= st.data.floors.length) {
     return { ok: false, error: `floor index ${index} out of range` };
@@ -579,7 +635,6 @@ function reduceSetActiveFloor(st: EditorState, index: number): DispatchResult {
 }
 
 function reduceAddFloor(st: EditorState, cmd: { name?: string }): DispatchResult {
-  const top = st.data.floors.reduce((m, f) => Math.max(m, f.elevation), 0);
   // Trim like renameFloor does, so " Loft " == "Loft".
   const wanted = cmd.name?.trim();
   // Issue #94: derive the sequential name from the highest EXISTING
@@ -599,7 +654,7 @@ function reduceAddFloor(st: EditorState, cmd: { name?: string }): DispatchResult
     // Sequential display name ("Floor 2" for storey #2, etc.);
     // explicit names win when non-empty.
     name: wanted ? wanted : `Floor ${Math.max(maxSuffix, st.data.floors.length) + 1}`,
-    elevation: top + st.data.wallHeight + FLOOR_GAP_M,
+    elevation: nextFloorElevation(st.data),
     rooms: [],
     openings: [],
     furniture: [],
@@ -620,9 +675,46 @@ function reduceDeleteFloor(st: EditorState): DispatchResult {
   if (st.data.floors.length <= 1) {
     return { ok: false, error: 'cannot delete the only floor' };
   }
+  const doomed = st.data.floors[st.activeFloorIdx];
+  const doomedRooms = new Set(doomed.rooms.map((r) => r.id));
+  const doomedElevation = doomed.elevation;
   st.data.floors.splice(st.activeFloorIdx, 1);
+  // pkg 13.4 (issue #118): stairs are PLAN-level — purge every flight the
+  // removed storey strands: departing from one of its rooms, or arriving
+  // at its elevation (a survivor's rise would then match no floor).
+  st.data.stairs = st.data.stairs.filter(
+    (s) => !stairStrandedByFloor(st.data, s, doomedRooms, doomedElevation),
+  );
   clampActiveFloorIdx(st);
   return { ok: true };
+}
+
+/** Elevation of the floor hosting a room, or null when the room is gone. */
+function roomElevation(data: FloorplanData, roomId: string): number | null {
+  for (const floor of data.floors) {
+    if (floor.rooms.some((r) => r.id === roomId)) return floor.elevation;
+  }
+  return null;
+}
+
+/**
+ * pkg 13.4 (issue #118): true when the removed storey leaves this stair
+ * standing on nothing — its host room departed that storey, the host room
+ * is already gone (defensive: dangling), or its arrival elevation
+ * (departure + rise) was that storey's walking level. Mirrors
+ * validateStairs' 1 mm gap tolerance so store-side purges and compile-side
+ * rejections speak one language.
+ */
+function stairStrandedByFloor(
+  data: FloorplanData,
+  stair: Staircase,
+  doomedRooms: ReadonlySet<string>,
+  doomedElevation: number,
+): boolean {
+  if (doomedRooms.has(stair.roomId)) return true;
+  const departure = roomElevation(data, stair.roomId);
+  if (departure === null) return true;
+  return Math.abs(departure + stair.rise - doomedElevation) <= 1e-3;
 }
 
 /* ------------------- pkg 8.1 roof reducers (issue #83) -------------------- */
@@ -715,6 +807,11 @@ function reduceDeleteEntities(st: EditorState, cmd: { ids: string[] }): Dispatch
     } else if (floor.furniture.some((f) => f.id === id)) {
       const res = reduceDeleteFurniture(st, id);
       if (res.ok) acted += 1;
+    } else if (st.data.stairs.some((s) => s.id === id)) {
+      // pkg 13.4 (issue #118): stairs join the marquee set (rect-simple
+      // hit test) — bulk delete routes them like any other kind.
+      const res = reduceDeleteStair(st, { stairId: id });
+      if (res.ok) acted += 1;
     }
     // Unknown id: skipped (selection raced a delete; not an error).
   }
@@ -729,11 +826,128 @@ function reduceDeleteEntities(st: EditorState, cmd: { ids: string[] }): Dispatch
       !(
         floor.rooms.some((r) => r.id === st.selectedId) ||
         floor.openings.some((o) => o.id === st.selectedId) ||
-        floor.furniture.some((f) => f.id === st.selectedId)
+        floor.furniture.some((f) => f.id === st.selectedId) ||
+        st.data.stairs.some((s) => s.id === st.selectedId)
       ))
   ) {
     st.selectedId = null;
   }
+  return { ok: true };
+}
+
+/* ---------------- pkg 13.4 stair reducers (issue #118) ------------------ */
+
+/** Minimum step count the schema accepts (mirrors the validator rule). */
+const MIN_STAIR_STEPS = 3;
+
+function findStair(
+  st: EditorState,
+  stairId: string,
+): { ok: true; stair: Staircase } | { ok: false; error: string } {
+  const stair = st.data.stairs.find((s) => s.id === stairId);
+  if (!stair) return { ok: false, error: `unknown stair "${stairId}"` };
+  return { ok: true, stair };
+}
+
+/**
+ * Structural sanity for the stair scalars (deep geometry — gap match,
+ * containment, hole overlap — belongs to validateGeometry() on the commit
+ * paths). Returns an error message, or null when every present field is
+ * sane. Mirrors the schema's shallow rules so the store can never mint a
+ * plan the schema would reject.
+ */
+function stairScalarError(fields: {
+  width?: number;
+  run?: number;
+  rise?: number;
+  stepCount?: number;
+}): string | null {
+  if (fields.width !== undefined && (!Number.isFinite(fields.width) || fields.width <= 0)) {
+    return 'stair width must be greater than zero';
+  }
+  if (fields.run !== undefined && (!Number.isFinite(fields.run) || fields.run <= 0)) {
+    return 'stair run must be greater than zero';
+  }
+  if (fields.rise !== undefined && (!Number.isFinite(fields.rise) || fields.rise <= 0)) {
+    return 'stair rise must be greater than zero';
+  }
+  if (
+    fields.stepCount !== undefined &&
+    (!Number.isInteger(fields.stepCount) || fields.stepCount < MIN_STAIR_STEPS)
+  ) {
+    return `stair stepCount must be an integer >= ${MIN_STAIR_STEPS}`;
+  }
+  return null;
+}
+
+function reduceAddStair(
+  st: EditorState,
+  cmd: Extract<Command, { type: 'addStair' }>,
+): DispatchResult {
+  if (!flatRooms(st.data).some((r) => r.id === cmd.roomId)) {
+    return { ok: false, error: `unknown room "${cmd.roomId}"` };
+  }
+  const scalarErr = stairScalarError(cmd);
+  if (scalarErr !== null) return { ok: false, error: scalarErr };
+  if (
+    !Number.isFinite(cmd.position[0]) ||
+    !Number.isFinite(cmd.position[1]) ||
+    !Number.isFinite(cmd.rotationDeg)
+  ) {
+    return { ok: false, error: 'stair pose must be finite' };
+  }
+  const stair: Staircase = {
+    id: makeId('stair'),
+    roomId: cmd.roomId,
+    position: [cmd.position[0], cmd.position[1]],
+    rotationDeg: cmd.rotationDeg,
+    width: cmd.width,
+    run: cmd.run,
+    rise: cmd.rise,
+    stepCount: cmd.stepCount,
+  };
+  st.data.stairs.push(stair);
+  // Selection lands on the fresh flight (addOpening precedent) so the
+  // inspector immediately shows its fields.
+  st.selectedId = stair.id;
+  return { ok: true };
+}
+
+function reduceUpdateStair(
+  st: EditorState,
+  cmd: Extract<Command, { type: 'updateStair' }>,
+): DispatchResult {
+  const found = findStair(st, cmd.stairId);
+  if (!found.ok) return found;
+  const scalarErr = stairScalarError(cmd.fields);
+  if (scalarErr !== null) return { ok: false, error: scalarErr };
+  if (cmd.fields.rotationDeg !== undefined && !Number.isFinite(cmd.fields.rotationDeg)) {
+    return { ok: false, error: 'stair rotation must be a finite number' };
+  }
+  Object.assign(found.stair, cmd.fields);
+  return { ok: true };
+}
+
+function reduceFlipStair(
+  st: EditorState,
+  cmd: { stairId: string },
+): DispatchResult {
+  const found = findStair(st, cmd.stairId);
+  if (!found.ok) return found;
+  // Pure data op: +180° mod 360. The footprint CENTRE is unchanged (the
+  // rotated rect maps onto itself); only the uphill axis reverses.
+  found.stair.rotationDeg = (((found.stair.rotationDeg + 180) % 360) + 360) % 360;
+  return { ok: true };
+}
+
+function reduceDeleteStair(
+  st: EditorState,
+  cmd: { stairId: string },
+): DispatchResult {
+  const idx = st.data.stairs.findIndex((s) => s.id === cmd.stairId);
+  if (idx === -1) return { ok: false, error: `unknown stair "${cmd.stairId}"` };
+  st.data.stairs.splice(idx, 1);
+  if (st.selectedId === cmd.stairId) st.selectedId = null;
   return { ok: true };
 }
 
@@ -939,6 +1153,15 @@ export class EditorStore {
       /* ---- pkg 13.2 addition (issue #110) ---- */
       case 'deleteEntities':
         return reduceDeleteEntities(this._state, cmd);
+      /* ---- pkg 13.4 additions (issue #118) ---- */
+      case 'addStair':
+        return reduceAddStair(this._state, cmd);
+      case 'updateStair':
+        return reduceUpdateStair(this._state, cmd);
+      case 'flipStair':
+        return reduceFlipStair(this._state, cmd);
+      case 'deleteStair':
+        return reduceDeleteStair(this._state, cmd);
     }
   }
 
@@ -982,7 +1205,8 @@ export class EditorStore {
       this._state.selectedId !== null &&
       !flatRooms(this._state.data).some((r) => r.id === this._state.selectedId) &&
       !flatOpenings(this._state.data).some((o) => o.id === this._state.selectedId) &&
-      !flatFurniture(this._state.data).some((f) => f.id === this._state.selectedId)
+      !flatFurniture(this._state.data).some((f) => f.id === this._state.selectedId) &&
+      !this._state.data.stairs.some((s) => s.id === this._state.selectedId)
     ) {
       this._state = { ...this._state, selectedId: null };
     }
