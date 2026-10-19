@@ -101,7 +101,7 @@ import {
 } from "./model/measure";
 import { compassAngleBetween, polarEndpoint } from "./model/angles";
 import { mountDimFields, type DimFields } from "./typeInDims";
-import { Mini3DInset } from "./mini3d";
+import type { Mini3DInset } from "./mini3d";
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -662,9 +662,13 @@ export function initEditorInteraction(
     try {
       // Dynamic import on FIRST toggle only: three.js + the viewer
       // pipeline stay OUT of the editor's initial chunk (SUB_PLAN §3).
-      const { loadViewerDeps } = await import('./mini3d');
+      // Both bindings come from the dynamic import — glue holds only a
+      // TYPE import statically, so rolldown can actually split it.
+      const { Mini3DInset: Ctor, loadViewerDeps } = await import(
+        './mini3d'
+      );
       const deps = await loadViewerDeps();
-      mini3d = new Mini3DInset(refs.inspectorDock, deps, {
+      mini3d = new Ctor(refs.inspectorDock, deps, {
         gestureGate: drawGestureInProgress,
       });
       return mini3d;

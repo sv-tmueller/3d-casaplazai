@@ -979,6 +979,13 @@ body {
   touch-action: none;
 }
 
+/* display:block above beats the UA [hidden] rule — same pitfall as
+ * .mini3d-panel; the fallback swap relies on BOTH halves hiding. */
+.mini3d-canvas[hidden],
+.mini3d-fallback[hidden] {
+  display: none;
+}
+
 .mini3d-canvas:active {
   cursor: grabbing;
 }
