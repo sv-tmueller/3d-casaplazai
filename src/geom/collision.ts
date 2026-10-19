@@ -6,7 +6,7 @@
  * zero wall AABBs (probe-tested).
  */
 
-import type { FloorplanData, Opening, Room } from '../shared/schema';
+import type { FloorplanData, FurnitureItem, Opening, Room } from '../shared/schema';
 import { flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
 import type { Aabb } from './types';
 import {
@@ -20,7 +20,12 @@ import { makeSegments } from './mathutil';
 /** Clearance added to every collision box, meters. */
 export const PLAYER_RADIUS = 0.3;
 
-/** AABB of one solid wall-piece spec positioned along a segment. */
+/**
+ * AABB of one solid wall-piece spec positioned along a segment. Carries
+ * the piece's z range (issue #76) so per-floor compilation can lift the
+ * box to its storey and walk-confinement can respect the visitor's
+ * elevation band.
+ */
 export function collideWallPiece(
   spec: WallPieceSpec,
   ax: number,
@@ -43,6 +48,8 @@ export function collideWallPiece(
     minY: Math.min(...ys),
     maxX: Math.max(...xs),
     maxY: Math.max(...ys),
+    minZ: spec.z0,
+    maxZ: spec.z1,
   };
 }
 
@@ -53,6 +60,9 @@ export function expandPlayerRadius(box: Aabb, radius = PLAYER_RADIUS): Aabb {
     minY: box.minY - radius,
     maxX: box.maxX + radius,
     maxY: box.maxY + radius,
+    ...(box.minZ !== undefined && box.maxZ !== undefined
+      ? { minZ: box.minZ, maxZ: box.maxZ }
+      : {}),
   };
 }
 
@@ -141,36 +151,72 @@ export function buildCollisions(plan: FloorplanData): Aabb[] {
 }
 
 /**
- * Expanded collision boxes for furniture footprints (issue #18):
- * the rotated-corner AABB of each stamped item (same rotation math as
- * `furnitureVolumes` in compile.ts), grown by PLAYER_RADIUS so walking
- * capsules stop short of sofas, beds and counters alike. Empty for
- * plans without furniture.
+ * Bottom/top heights of one furniture type's oriented volume, meters.
+ * Single source shared by the render volumes (compile.ts) and the
+ * collision boxes so the two can never disagree (issue #76: the
+ * invisible-breakage trap — furniture collision boxes must fence the
+ * SAME z band the rendered prism occupies, on the SAME storey).
+ */
+export function furnitureZRange(type: FurnitureItem['type']): [number, number] {
+  switch (type) {
+    case 'bed':
+      return [0, 0.55];
+    case 'sofa':
+      return [0, 0.8];
+    case 'table':
+      return [0, 0.75];
+    case 'chair':
+      return [0, 0.45];
+    case 'counter':
+      return [0, 0.9];
+    case 'bathtub':
+      return [0, 0.6];
+    default:
+      return [0, 0.75]; // toilet
+  }
+}
+
+/**
+ * Expanded collision box for ONE furniture footprint (issue #76 split
+ * out of furnitureCollisionBoxes so per-floor compilation can lift each
+ * box to its owning storey): the rotated-corner AABB of the stamped
+ * item, grown by PLAYER_RADIUS, carrying the type's z band.
+ */
+export function furnitureCollisionBox(item: FurnitureItem): Aabb {
+  const [fx, fy] = item.footprint;
+  const hw = fx / 2;
+  const hh = fy / 2;
+  const rad = (item.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [lx, ly] of [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ]) {
+    xs.push(item.position[0] + lx * cos - ly * sin);
+    ys.push(item.position[1] + lx * sin + ly * cos);
+  }
+  const [zMin, zMax] = furnitureZRange(item.type);
+  return expandPlayerRadius({
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys),
+    minZ: zMin,
+    maxZ: zMax,
+  });
+}
+
+/**
+ * Expanded collision boxes for furniture footprints (issue #18), flat
+ * across all floors at their plan-local z. Kept for flat consumers;
+ * per-floor compilation (compile.ts) lifts each box individually via
+ * furnitureCollisionBox.
  */
 export function furnitureCollisionBoxes(plan: FloorplanData): Aabb[] {
-  return flatFurniture(plan).map((item) => {
-    const [fx, fy] = item.footprint;
-    const hw = fx / 2;
-    const hh = fy / 2;
-    const rad = (item.rotationDeg * Math.PI) / 180;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-    const xs: number[] = [];
-    const ys: number[] = [];
-    for (const [lx, ly] of [
-      [-hw, -hh],
-      [hw, -hh],
-      [hw, hh],
-      [-hw, hh],
-    ]) {
-      xs.push(item.position[0] + lx * cos - ly * sin);
-      ys.push(item.position[1] + lx * sin + ly * cos);
-    }
-    return expandPlayerRadius({
-      minX: Math.min(...xs),
-      minY: Math.min(...ys),
-      maxX: Math.max(...xs),
-      maxY: Math.max(...ys),
-    });
-  });
+  return flatFurniture(plan).map(furnitureCollisionBox);
 }

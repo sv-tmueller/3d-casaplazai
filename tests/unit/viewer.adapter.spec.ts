@@ -64,13 +64,15 @@ describe('adaptScene — demo fixture parity', () => {
     expect(bucketVerts).toBeGreaterThan(0);
   });
 
-  it('translates collisions 1:1', () => {
+  it('translates collisions 1:1 (z fences included, issue #76)', () => {
     expect(adapted.collisions.length).toBe(compiled.collisions.length);
     expect(adapted.collisions[0]).toEqual({
       minX: compiled.collisions[0]?.minX,
       minY: compiled.collisions[0]?.minY,
       maxX: compiled.collisions[0]?.maxX,
       maxY: compiled.collisions[0]?.maxY,
+      minZ: compiled.collisions[0]?.minZ,
+      maxZ: compiled.collisions[0]?.maxZ,
     });
   });
 

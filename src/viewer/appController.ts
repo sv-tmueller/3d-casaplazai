@@ -261,7 +261,11 @@ export class ViewerApp {
     let spawn = { x: 0, y: 0, yaw: 0 };
     if (plan) {
       try {
-        spawn = solveSpawn(flatRooms(plan), adapted.collisions);
+        // Solve ONLY within the active storey's rooms (issue #76): the
+        // largest room ACROSS ALL FLOORS could sit upstairs, stranding
+        // the walker on the wrong storey. The walk rig grounds itself
+        // at the same floor via adapted.activeFloorElevation.
+        spawn = solveSpawn(activeRooms(plan), adapted.collisions);
       } catch (err) {
         if (err instanceof SpawnFailureError) {
           toast(this.hud, err.message, 'error');
@@ -338,6 +342,7 @@ export class ViewerApp {
         roomsById(validated),
         flatOpenings(validated),
         validated.wallThickness,
+        validated,
       );
 
       if (sceneHasNaN(adapted.buckets.map((b) => b.positions))) {
@@ -394,7 +399,7 @@ export class ViewerApp {
     if (isStandingLegal(x, y, adapted)) return;
 
     try {
-      const spawn = solveSpawn(flatRooms(plan), adapted.collisions);
+      const spawn = solveSpawn(activeRooms(plan), adapted.collisions);
       this.replaceWalkRig(spawn.x, spawn.y, spawn.yaw);
     } catch (err) {
       if (err instanceof SpawnFailureError) {
@@ -662,6 +667,17 @@ function roomsById(
   plan: FloorplanData,
 ): Map<string, Room> {
   return new Map(flatRooms(plan).map((r) => [r.id, r]));
+}
+
+/**
+ * Rooms of the ACTIVE storey (issue #76): the lowest floor, mirroring
+ * the adapter's activeFloorElevation resolver. Walk spawning solves
+ * within THESE rooms only — a bigger room upstairs must not strand the
+ * walker on the wrong storey. (7.4 replaces this with the
+ * user-selected floor.)
+ */
+function activeRooms(plan: FloorplanData): Room[] {
+  return plan.floors[0]?.rooms ?? [];
 }
 
 /** Parse location.search for the perf flag (?perf=1). */

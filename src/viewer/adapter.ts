@@ -19,7 +19,7 @@ import {
   type MeshBuffer,
   windowPaneRects,
 } from '../geom';
-import type { Opening, Room } from '../shared/schema';
+import type { FloorplanData, Opening, Room } from '../shared/schema';
 import type {
   AdaptedScene,
   CollisionBox,
@@ -303,6 +303,7 @@ export function adaptScene(
   roomsById: ReadonlyMap<string, Room>,
   openings?: Opening[],
   wallThickness = 0.24,
+  plan?: FloorplanData,
 ): AdaptedScene {
   const wallBufs: MeshBuffer[] = [];
   const ceilBufs: MeshBuffer[] = [];
@@ -390,18 +391,35 @@ export function adaptScene(
     0,
   );
 
-  const collisions: CollisionBox[] = compiled.collisions.map((c) => ({
-    minX: c.minX,
-    minY: c.minY,
-    maxX: c.maxX,
-    maxY: c.maxY,
-  }));
+  // Collisions pass through WITH their z fences (issue #76): the walk
+  // rig filters them to the active storey, so a flat copy would strand
+  // the upstairs walker behind downstairs walls. Legacy callers without
+  // z data keep the exact old shape.
+  const collisions: CollisionBox[] = compiled.collisions.map((c) => {
+    const box: CollisionBox = {
+      minX: c.minX,
+      minY: c.minY,
+      maxX: c.maxX,
+      maxY: c.maxY,
+    };
+    if (c.minZ !== undefined && c.maxZ !== undefined) {
+      box.minZ = c.minZ;
+      box.maxZ = c.maxZ;
+    }
+    return box;
+  });
 
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const room of roomsById.values()) {
+  // Bounds prefer the plan's floor nesting (rooms may live above the
+  // ground storey; the map alone cannot tell which storey a polygon
+  // came from). Legacy callers keep the roomsById sweep.
+  const boundRooms: readonly Room[] = plan
+    ? plan.floors.flatMap((f) => f.rooms)
+    : [...roomsById.values()];
+  for (const room of boundRooms) {
     for (const pt of room.polygon) {
       minX = Math.min(minX, pt[0]);
       minY = Math.min(minY, pt[1]);
@@ -416,11 +434,19 @@ export function adaptScene(
     maxY = 0;
   }
 
+  // Active storey = LOWEST floor (elevations strictly increase, so
+  // floors[0] is it). Floor-selection UI is deliberately absent here;
+  // 7.4 swaps this resolver for the user-chosen floor.
+  const activeFloorElevation = plan
+    ? plan.floors[0]?.elevation ?? 0
+    : 0;
+
   return {
     buckets,
     collisions,
     triangleCount,
     bounds: { minX, minY, maxX, maxY },
+    activeFloorElevation,
   };
 }
 

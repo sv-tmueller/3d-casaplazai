@@ -71,6 +71,7 @@ describe('dedupeWalls — stacked windows (issue #29)', () => {
     rooms: [
       {
         roomId: room.id,
+        elevation: 0,
         floor: buildFloor(room),
         ceiling: buildCeiling(room, 2.7),
         walls: buildRoomWalls(room, plan),

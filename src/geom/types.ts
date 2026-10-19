@@ -8,12 +8,24 @@
 
 import type { Vec2 } from '../shared/schema';
 
-/** Axis-aligned bounding box in 2D (xy plane), inclusive corners. */
+/**
+ * Axis-aligned bounding box in 2D (xy plane), inclusive corners.
+ *
+ * OPTIONAL z bounds (issue #76): present when a plan storey's
+ * elevation is nonzero — the compiler bakes floor.elevation into them
+ * so collision consumers can tell which storey a box fences. Absent
+ * (undefined) means "ground plane, z ∈ [0, ∞)" — the pre-floors shape
+ * every existing consumer assumes.
+ */
 export interface Aabb {
   minX: number;
   minY: number;
   maxX: number;
   maxY: number;
+  /** Lower fence of the box's z range, world meters (optional storey). */
+  minZ?: number;
+  /** Upper fence of the box's z range, world meters (optional storey). */
+  maxZ?: number;
 }
 
 /** Oriented bounding volume for one furniture stamp. */
@@ -38,9 +50,21 @@ export interface MeshBuffer {
   indices: Uint32Array;
 }
 
-/** Surfaces belonging to a single room. */
+/**
+ * Surfaces belonging to a single room. Additive (issue #76): the owning
+ * floor's elevation is carried per-room so the viewer can attribute
+ * rooms to storeys WITHOUT re-deriving the mapping from plan.floors.
+ * The compiler applies it as a baked z offset (see compile.ts), meaning
+ * every position inside these buffers is already world-z, not floor-
+ * local z.
+ */
 export interface RoomMeshes {
   roomId: string;
+  /**
+   * Walking-surface elevation of the floor this room was compiled at,
+   * meters (dz already baked into floor/ceiling/walls positions).
+   */
+  elevation: number;
   floor: MeshBuffer;
   ceiling: MeshBuffer;
   /** Extruded wall slab meshes carved around this room's openings. */

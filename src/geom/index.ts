@@ -35,6 +35,9 @@ export {
   buildCollisions,
   collideWallPiece,
   expandPlayerRadius,
+  furnitureCollisionBox,
+  furnitureCollisionBoxes,
+  furnitureZRange,
   roomCollisionPieces,
   segmentHitsBoxes,
 } from './collision';
