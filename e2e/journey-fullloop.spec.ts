@@ -106,9 +106,9 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
     { timeout: 15_000 },
   );
 
-  // Descend into walk mode via the HUD toggle (headless pointer lock is
-  // unreliable; the camera seam is the dependable signal).
-  await page.getByTestId('hud-mode-toggle').click();
+  // Descend into walk mode via the HUD mode segment (headless pointer
+  // lock is unreliable; the camera seam is the dependable signal).
+  await page.getByTestId('hud-mode-segment-walk').click();
   // Wait for the WALK rig specifically: the overview camera lacks the
   // disc fields; catching the transition mid-fade yields undefined.
   await page.waitForFunction(

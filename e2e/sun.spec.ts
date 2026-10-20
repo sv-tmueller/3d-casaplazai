@@ -190,12 +190,15 @@ async function waitBearing(page: Page, target: number): Promise<void> {
  * (__viewerCam non-null + non-backdrop pixels).
  */
 async function ensureRenderedOverview(page: Page): Promise<void> {
-  const toggle = page.getByTestId('hud-mode-toggle');
+  // #146: the segment reflects the CURRENT mode — the Walk segment is
+  // aria-pressed while walking, instead of a button labeled with the
+  // opposite mode.
+  const walkSegment = page.getByTestId('hud-mode-segment-walk');
   await page.keyboard.press('Tab'); // → walk
-  await expect(toggle).toHaveText('Overview');
+  await expect(walkSegment).toHaveAttribute('aria-pressed', 'true');
   await page.waitForTimeout(900);
   await page.keyboard.press('Tab'); // → overview (seats the orbit rig)
-  await expect(toggle).toHaveText('Walk');
+  await expect(walkSegment).toHaveAttribute('aria-pressed', 'false');
   await page
     .waitForFunction(
       () => {
@@ -345,13 +348,19 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     // same seat), so the two captures differ by the LIGHT, not the
     // pose — the same-window re-seat control is byte-identical (0.000).
     await page.keyboard.press('Tab'); // → walk
-    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Overview');
+    await expect(page.getByTestId('hud-mode-segment-walk')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await waitSeatedWalk(page);
     const genBefore = await atlasGenerations(page);
     const interiorBefore = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
 
     await page.keyboard.press('Tab'); // → overview
-    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Walk');
+    await expect(page.getByTestId('hud-mode-segment-walk')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
     await setTimeByKeyboard(page, 8);
     // Clear the slider focus: a focused input turns Tab into focus
     // navigation instead of the mode toggle.
@@ -359,7 +368,10 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
       (document.activeElement as HTMLElement | null)?.blur?.();
     });
     await page.keyboard.press('Tab'); // → walk again
-    await expect(page.getByTestId('hud-mode-toggle')).toHaveText('Overview');
+    await expect(page.getByTestId('hud-mode-segment-walk')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     await waitSeatedWalk(page);
 
     const interiorAfter = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);

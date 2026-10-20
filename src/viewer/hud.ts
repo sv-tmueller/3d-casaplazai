@@ -1,11 +1,15 @@
 /**
- * HUD (issue #6): the viewer's DOM overlay kit — Walk/Overview toggle,
- * mode-transition fade curtain, toast stack (typed failures like
- * SpawnFailureError surface HERE, never as crashes), and the ?perf=1
+ * HUD (issue #6, redesigned in #146): the viewer's DOM overlay kit — a
+ * docked, collapsible control panel (Mode segment, Visibility/Sun/Floor
+ * groups) over the 3D stage, plus the mode-transition fade curtain, the
+ * toast stack (typed failures like SpawnFailureError surface HERE, never
+ * as crashes), the bottom-center hint strip and the ?perf=1
  * rolling-percentile FPS/frame-time overlay fed by FrameStats samples.
  *
- * Pure DOM construction + imperative updates; no framework, no three.js
- * dependencies, so the whole thing unit-tests under happy-dom.
+ * Pure DOM construction + imperative updates; single-owner wiring for
+ * every control (onBind* attaches, reflect* publishes state back); no
+ * framework, no three.js dependencies, so the whole thing unit-tests
+ * under happy-dom.
  */
 
 import type { FrameStats, SunSettings, ViewMode } from './types';
@@ -25,16 +29,47 @@ const PERCENTILE_HIGH = 95;
 /** Root class hook for every HUD-managed subtree. */
 const HUD_ROOT_CLASS = 'viewer-hud-root';
 
+/**
+ * Persisted HUD preferences (#146), keyed per browser. Versioned so a
+ * future shape change can migrate (or ignore) older slots.
+ */
+export const HUD_STATE_STORAGE_KEY = 'casaplaza.viewer.hud.v1';
+
+/** Placeholder for the floor readout before a plan is loaded. */
+const FLOOR_READOUT_EMPTY = '—';
+
+/** Monotonic suffix so generated ids never alias across HUD instances. */
+let uidSeq = 0;
+
 /** Everything the HUD owns, constructed lazily on mount. */
 export interface HudHandles {
   root: HTMLDivElement;
-  toggleBtn: HTMLButtonElement;
+  /** Docked control panel (#146); owns every control except the hint. */
+  panel: HTMLDivElement;
+  /** Collapsible panel body (hidden while collapsed). */
+  panelBody: HTMLDivElement;
+  /** Chevron button toggling the body (#146). */
+  collapseBtn: HTMLButtonElement;
+  /**
+   * Mode segment group (#146). Keeps the legacy `hud-mode-toggle`
+   * testid so pre-redesign locators still resolve; the active segment
+   * is marked via aria-pressed + class, reflecting the CURRENT mode.
+   */
+  modeGroup: HTMLDivElement;
+  /** Overview segment button (testid hud-mode-segment-overview). */
+  overviewBtn: HTMLButtonElement;
+  /** Walk segment button (testid hud-mode-segment-walk). */
+  walkBtn: HTMLButtonElement;
+  /** Bottom-center hint strip element (#146); sits outside the panel. */
+  hint: HTMLSpanElement;
   /** Roof visibility toggle (issue #86); reflects the live state. */
   roofBtn: HTMLButtonElement;
   /** Walls-transparency slider (issue #120); 0..100 position. */
   wallsAlpha: HTMLInputElement;
   /** Live % readout beside the walls slider. */
   wallsAlphaLabel: HTMLSpanElement;
+  /** Floor readout (#146): read-only name of the story being rendered. */
+  floorReadout: HTMLSpanElement;
   fade: HTMLDivElement;
   toasts: HTMLDivElement;
   perfPanel: HTMLPreElement | null;
@@ -44,10 +79,16 @@ export interface HudHandles {
   walkReticle: HTMLDivElement;
   /** Time-of-day slider (issue #121): hours 0…24, keyboard-native. */
   sunTimeInput: HTMLInputElement;
+  /** Clock readout beside the time slider (#146), e.g. "14:30". */
+  sunTimeLabel: HTMLSpanElement;
   /** North-offset slider (issue #121): whole-path rotation, ±180°. */
   sunNorthInput: HTMLInputElement;
+  /** Degrees readout beside the north slider (#146), e.g. "30°". */
+  sunNorthLabel: HTMLSpanElement;
   /** Compass rose (issue #121): the static div rotated by −offset. */
   compass: HTMLDivElement;
+  /** Storage seam resolved at build time (null when unavailable). */
+  storage: Storage | null;
 }
 
 /** Callback invoked when the user toggles Walk/Overview. */
@@ -65,23 +106,189 @@ export type SunTimeListener = (timeHours: number) => void;
 /** Callback invoked when the user rotates the sun path (degrees ±180). */
 export type SunNorthListener = (northOffsetDeg: number) => void;
 
-/** Construct the HUD overlay inside the given viewer pane. */
-export function buildHud(hostPane: HTMLElement): HudHandles {
+/** Callback invoked with the NEXT collapse state (#146). */
+export type CollapseListener = (collapsed: boolean) => void;
+
+/** Persisted HUD state shape (#146). */
+export interface HudPersistedState {
+  collapsed: boolean;
+}
+
+/** Fresh defaults: the panel is expanded until the user says otherwise. */
+function defaultHudState(): HudPersistedState {
+  return { collapsed: false };
+}
+
+/** Generate an element id unique within this document. */
+function nextDomId(prefix: string): string {
+  uidSeq += 1;
+  return `${prefix}-${uidSeq}`;
+}
+
+/**
+ * Localstorage accessor following the editor/model/settings.ts
+ * precedent (#146): storage can THROW in privacy mode or sandboxed
+ * frames, so resolution is best-effort and may legitimately be null.
+ */
+export function safeHudStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    // Access denied (privacy mode): run without persistence.
+    return null;
+  }
+}
+
+/**
+ * Read the persisted HUD state. Hostile slots — unreadable storage,
+ * corrupt JSON, wrong shapes — fail OPEN to expanded and drop the junk
+ * rather than trapping the panel closed.
+ */
+export function loadHudState(storage: Storage | null): HudPersistedState {
+  if (!storage) return defaultHudState();
+  let raw: string | null;
+  try {
+    raw = storage.getItem(HUD_STATE_STORAGE_KEY);
+  } catch {
+    // Unreadable slot: default, and don't try to clean it up.
+    return defaultHudState();
+  }
+  if (raw === null) return defaultHudState();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    dropHudState(storage);
+    return defaultHudState();
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    dropHudState(storage);
+    return defaultHudState();
+  }
+  const collapsed = (parsed as Record<string, unknown>).collapsed;
+  if (typeof collapsed !== 'boolean') {
+    dropHudState(storage);
+    return defaultHudState();
+  }
+  return { collapsed };
+}
+
+/** Persist the HUD state; every failure mode is a silent no-op. */
+export function saveHudState(
+  storage: Storage | null,
+  state: HudPersistedState,
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(
+      HUD_STATE_STORAGE_KEY,
+      JSON.stringify({ collapsed: state.collapsed }),
+    );
+  } catch {
+    // Quota exceeded / storage disabled: persistence is best-effort.
+  }
+}
+
+/** Remove a corrupt slot (best-effort). */
+function dropHudState(storage: Storage): void {
+  try {
+    storage.removeItem(HUD_STATE_STORAGE_KEY);
+  } catch {
+    // Nothing else to do — reads already failed open.
+  }
+}
+
+/** Small helper: an element with a class and optional testid. */
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className: string,
+  testid?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (testid !== undefined) node.dataset.testid = testid;
+  return node;
+}
+
+/** Section heading inside the panel body. */
+function groupTitle(text: string): HTMLDivElement {
+  const title = el('div', 'hud-group-title');
+  title.textContent = text;
+  return title;
+}
+
+/** Visible <label for=…> paired with a generated control id. */
+function fieldLabel(forId: string, text: string): HTMLLabelElement {
+  const label = el('label', 'hud-field-label');
+  label.htmlFor = forId;
+  label.textContent = text;
+  return label;
+}
+
+/**
+ * Construct the HUD overlay inside the given viewer pane. The optional
+ * storage seam (#146) defaults to window.localStorage so units can
+ * inject a fake; resolution may yield null on sandboxed browsers.
+ */
+export function buildHud(
+  hostPane: HTMLElement,
+  storage: Storage | null = safeHudStorage(),
+): HudHandles {
   const root = document.createElement('div');
   root.className = HUD_ROOT_CLASS;
 
-  const bar = document.createElement('div');
-  bar.className = 'hud-bar';
+  const collapsed = loadHudState(storage).collapsed;
 
-  const toggleBtn = document.createElement('button');
-  toggleBtn.type = 'button';
-  toggleBtn.className = 'hud-toggle hud-btn-overview';
-  toggleBtn.dataset.testid = 'hud-mode-toggle';
-  toggleBtn.textContent = 'Walk';
-  toggleBtn.setAttribute('aria-label', 'Toggle walk mode');
+  // ---- Docked control panel (#146) --------------------------------
+  const panel = el('div', 'hud-panel', 'hud-panel');
+
+  const header = el('div', 'hud-panel-header');
+  const title = el('span', 'hud-panel-title');
+  title.textContent = 'View';
+
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'hud-collapse-toggle';
+  collapseBtn.dataset.testid = 'hud-collapse-toggle';
+  const chevron = el('span', 'hud-chevron');
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = '▾';
+  collapseBtn.appendChild(chevron);
+  header.append(title, collapseBtn);
+
+  // Mode segment (#146): always visible — even collapsed — so the two
+  // top-level modes stay one keystroke away. Buttons are native; the
+  // active segment carries aria-pressed + a class reflecting the
+  // CURRENT mode (reflectMode publishes it).
+  const modeGroup = el('div', 'hud-segment', 'hud-mode-toggle');
+  modeGroup.setAttribute('role', 'group');
+  modeGroup.setAttribute('aria-label', 'View mode');
+
+  const overviewBtn = document.createElement('button');
+  overviewBtn.type = 'button';
+  overviewBtn.className = 'hud-segment-btn';
+  overviewBtn.dataset.testid = 'hud-mode-segment-overview';
+  overviewBtn.textContent = 'Overview';
+
+  const walkBtn = document.createElement('button');
+  walkBtn.type = 'button';
+  walkBtn.className = 'hud-segment-btn';
+  walkBtn.dataset.testid = 'hud-mode-segment-walk';
+  walkBtn.textContent = 'Walk';
+
+  modeGroup.append(overviewBtn, walkBtn);
+
+  // Collapsible body: the controls below the fold. The Mode segment
+  // deliberately stays OUTSIDE it (always-on control).
+  const panelBody = el('div', 'hud-panel-body', 'hud-panel-body');
+  panelBody.id = nextDomId('hud-panel-body');
+  collapseBtn.setAttribute('aria-controls', panelBody.id);
+
+  // ---- Visibility group -------------------------------------------
+  const visGroup = el('div', 'hud-group');
 
   // Roof visibility toggle (issue #86): keyboard-focusable like its
-  // sibling (plain buttons tab naturally — the mouseless mandate), and
+  // siblings (plain buttons tab naturally — the mouseless mandate), and
   // aria-pressed mirrors the live state for screen readers.
   const roofBtn = document.createElement('button');
   roofBtn.type = 'button';
@@ -91,15 +298,11 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   roofBtn.setAttribute('aria-label', 'Toggle roof visibility');
   roofBtn.setAttribute('aria-pressed', 'false');
 
-  const hint = document.createElement('span');
-  hint.className = 'hud-hint';
-  hint.dataset.testid = 'hud-hint';
-  hint.textContent = '';
-
   // Walls-transparency slider (issue #120): a NATIVE range input — the
   // arrow keys operate it for free (mouseless mandate; no custom key
   // handling). Position is the 0..100 percent; STATE is normalized 0..1
   // (SH3D wallsAlpha convention) and lives in the controller.
+  const wallsField = el('div', 'hud-field');
   const wallsAlpha = document.createElement('input');
   wallsAlpha.type = 'range';
   wallsAlpha.min = '0';
@@ -107,25 +310,30 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   wallsAlpha.step = '1';
   wallsAlpha.value = '0';
   wallsAlpha.className = 'hud-slider';
+  wallsAlpha.id = nextDomId('hud-walls-alpha');
   wallsAlpha.dataset.testid = 'hud-walls-alpha';
   wallsAlpha.setAttribute('aria-label', 'Wall transparency');
 
-  const wallsAlphaLabel = document.createElement('span');
-  wallsAlphaLabel.className = 'hud-slider-value';
+  const wallsAlphaLabel = el('span', 'hud-slider-value');
   wallsAlphaLabel.dataset.testid = 'hud-walls-alpha-label';
   wallsAlphaLabel.textContent = '0%';
 
-  bar.append(toggleBtn, roofBtn, wallsAlpha, wallsAlphaLabel, hint);
+  wallsField.append(
+    fieldLabel(wallsAlpha.id, 'Walls transparency'),
+    wallsAlpha,
+    wallsAlphaLabel,
+  );
+  visGroup.append(groupTitle('Visibility'), roofBtn, wallsField);
 
-  // Sun/time-of-day controls (issue #121), appended AFTER the existing
-  // bar children (append-only discipline — sibling #120's walls-alpha
-  // slider slots ahead of this cluster per the ratified DOM order).
+  // ---- Sun group (issue #121, grouped in #146) ---------------------
   // Range inputs are keyboard-native (arrow keys) per the mouseless
-  // mandate; the compass rose is the 2D read of the north offset.
-  const sunCluster = document.createElement('div');
-  sunCluster.className = 'hud-sun-cluster';
-  sunCluster.dataset.testid = 'hud-sun-cluster';
+  // mandate; the compass rose is the 2D read of the north offset. The
+  // cluster keeps its legacy testid for pre-redesign locators.
+  const sunGroup = el('div', 'hud-group', 'hud-sun-cluster');
+  const sunGroupTitle = groupTitle('Sun');
+  sunGroupTitle.dataset.testid = 'hud-sun-cluster-title';
 
+  const timeField = el('div', 'hud-field');
   const sunTimeInput = document.createElement('input');
   sunTimeInput.type = 'range';
   sunTimeInput.className = 'hud-sun-time';
@@ -134,8 +342,20 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   sunTimeInput.max = '24';
   sunTimeInput.step = '0.5';
   sunTimeInput.value = '12';
+  sunTimeInput.id = nextDomId('hud-sun-time');
   sunTimeInput.setAttribute('aria-label', 'Time of day (hours)');
 
+  const sunTimeLabel = el('span', 'hud-field-value');
+  sunTimeLabel.dataset.testid = 'hud-sun-time-label';
+  sunTimeLabel.textContent = hoursToClock(12);
+
+  timeField.append(
+    fieldLabel(sunTimeInput.id, 'Time of day'),
+    sunTimeInput,
+    sunTimeLabel,
+  );
+
+  const northField = el('div', 'hud-field');
   const sunNorthInput = document.createElement('input');
   sunNorthInput.type = 'range';
   sunNorthInput.className = 'hud-sun-north';
@@ -144,59 +364,108 @@ export function buildHud(hostPane: HTMLElement): HudHandles {
   sunNorthInput.max = '180';
   sunNorthInput.step = '5';
   sunNorthInput.value = '0';
+  sunNorthInput.id = nextDomId('hud-sun-north');
   sunNorthInput.setAttribute('aria-label', 'North offset (degrees)');
+
+  const sunNorthLabel = el('span', 'hud-field-value');
+  sunNorthLabel.dataset.testid = 'hud-sun-north-label';
+  sunNorthLabel.textContent = formatNorth(0);
 
   // Decorative: the offset value reaches screen readers through the
   // slider above; the rose just rotates to match.
-  const compass = document.createElement('div');
-  compass.className = 'hud-compass';
-  compass.dataset.testid = 'hud-compass';
+  const compass = el('div', 'hud-compass', 'hud-compass');
   compass.setAttribute('aria-hidden', 'true');
 
-  sunCluster.append(sunTimeInput, sunNorthInput, compass);
-  bar.append(sunCluster);
+  northField.append(
+    fieldLabel(sunNorthInput.id, 'North offset'),
+    sunNorthInput,
+    sunNorthLabel,
+    compass,
+  );
+  sunGroup.append(sunGroupTitle, timeField, northField);
 
-  const fade = document.createElement('div');
-  fade.className = 'hud-fade';
-  fade.dataset.testid = 'hud-fade';
+  // ---- Floor readout (#146) ---------------------------------------
+  // Read-only: the viewer pins the lowest storey (adapter decision), so
+  // this mirrors the floor ACTUALLY being rendered — never a control.
+  const floorGroup = el('div', 'hud-group');
+  const floorField = el('div', 'hud-field');
+  const floorFieldLabel = el('span', 'hud-field-label');
+  floorFieldLabel.textContent = 'Floor';
+  const floorReadout = el('span', 'hud-field-value', 'hud-floor-readout');
+  floorReadout.textContent = FLOOR_READOUT_EMPTY;
+  floorField.append(floorFieldLabel, floorReadout);
+  floorGroup.append(groupTitle('Floor'), floorField);
 
-  const toasts = document.createElement('div');
-  toasts.className = 'hud-toasts';
-  toasts.dataset.testid = 'hud-toasts';
+  panelBody.append(visGroup, sunGroup, floorGroup);
+  panel.append(header, modeGroup, panelBody);
 
-  root.append(bar, fade, toasts);
+  // ---- Bottom-center hint strip (#146) ----------------------------
+  // Moved out of the control panel: the walking hints belong to the
+  // stage, not to the dock. Strip and toasts share one bottom-anchored
+  // column (see .hud-bottom) so the two can never collide.
+  const strip = el('div', 'hud-strip');
+  const hint = el('span', 'hud-hint', 'hud-hint');
+  hint.textContent = '';
+  strip.appendChild(hint);
+
+  const fade = el('div', 'hud-fade', 'hud-fade');
+  const toasts = el('div', 'hud-toasts', 'hud-toasts');
+
+  // #146 fix round: ONE bottom-anchored column for the transient toast
+  // stack and the persistent hint strip. The strip pins to the bottom
+  // edge and the toasts grow UPWARD above it, so no stack height can
+  // reach the hint — a fixed offset cannot do this (the toast count is
+  // unbounded: a plan that keeps failing re-toasts on every recompile
+  // poll, measured up to 14 stacked). The strip is LAST in the DOM, so
+  // it also paints above the toasts instead of being obscured by them.
+  const bottom = el('div', 'hud-bottom', 'hud-bottom');
+  bottom.append(toasts, strip);
+
+  root.append(panel, fade, bottom);
 
   // Walk-entry affordances (issue #30): a prominent click prompt and a
   // subtle reticle, both hidden by default; setWalkAffordances toggles.
-  const walkOverlay = document.createElement('div');
-  walkOverlay.className = 'hud-walk-overlay';
-  walkOverlay.dataset.testid = 'walk-entry-overlay';
+  const walkOverlay = el('div', 'hud-walk-overlay', 'walk-entry-overlay');
   walkOverlay.textContent = 'Click to walk';
   walkOverlay.hidden = true;
 
-  const walkReticle = document.createElement('div');
-  walkReticle.className = 'hud-reticle';
-  walkReticle.dataset.testid = 'walk-reticle';
+  const walkReticle = el('div', 'hud-reticle', 'walk-reticle');
   walkReticle.hidden = true;
 
   root.append(walkOverlay, walkReticle);
   hostPane.appendChild(root);
 
-  return {
+  const handles: HudHandles = {
     root,
-    toggleBtn,
+    panel,
+    panelBody,
+    collapseBtn,
+    modeGroup,
+    overviewBtn,
+    walkBtn,
+    hint,
     roofBtn,
     wallsAlpha,
     wallsAlphaLabel,
+    floorReadout,
     fade,
     toasts,
     perfPanel: null,
     walkOverlay,
     walkReticle,
     sunTimeInput,
+    sunTimeLabel,
     sunNorthInput,
+    sunNorthLabel,
     compass,
+    storage,
   };
+
+  // Apply the persisted preference (a reload boots into place; no flash
+  // of the wrong state, since the class is set before first paint).
+  reflectCollapsed(handles, collapsed);
+
+  return handles;
 }
 
 /**
@@ -212,38 +481,113 @@ export function setWalkAffordances(
   handles.walkReticle.hidden = !state.reticle;
 }
 
-/** Reflect the CURRENT mode on the toggle (shows the OTHER mode's name). */
+/**
+ * Reflect the CURRENT mode on the segment (#146): the active button is
+ * marked with aria-pressed + a class instead of the old button labeling
+ * the opposite mode.
+ */
 export function reflectMode(handles: HudHandles, mode: ViewMode): void {
-  if (mode === 'overview') {
-    handles.toggleBtn.textContent = 'Walk';
-    handles.toggleBtn.classList.add('hud-btn-overview');
-    handles.toggleBtn.classList.remove('hud-btn-walking');
-  } else {
-    handles.toggleBtn.textContent = 'Overview';
-    handles.toggleBtn.classList.add('hud-btn-walking');
-    handles.toggleBtn.classList.remove('hud-btn-overview');
-  }
+  markSegment(handles.overviewBtn, mode === 'overview');
+  markSegment(handles.walkBtn, mode === 'walk');
+}
+
+/** Publish one segment's active state (aria + class). */
+function markSegment(btn: HTMLButtonElement, active: boolean): void {
+  btn.setAttribute('aria-pressed', String(active));
+  btn.classList.toggle('hud-segment-active', active);
+}
+
+/**
+ * Attach the mode-segment handlers (#146, single-owner wiring). Each
+ * click requests the mode of the CLICKED segment — not a blind flip —
+ * so double clicks stay idempotent.
+ */
+export function onBindModeSegment(
+  handles: HudHandles,
+  listener: ToggleListener,
+): () => void {
+  const onOverview = (): void => listener('overview');
+  const onWalk = (): void => listener('walk');
+  handles.overviewBtn.addEventListener('click', onOverview);
+  handles.walkBtn.addEventListener('click', onWalk);
+  return () => {
+    handles.overviewBtn.removeEventListener('click', onOverview);
+    handles.walkBtn.removeEventListener('click', onWalk);
+  };
 }
 
 /** Show the contextual affordance hint ('Click to walk', etc.). */
 export function showHint(handles: HudHandles, text: string): void {
-  const hint = handles.root.querySelector<HTMLSpanElement>(
-    '[data-testid=hud-hint]',
-  );
-  if (hint) hint.textContent = text;
+  handles.hint.textContent = text;
 }
 
-/** Attach the toggle click handler (single-owner wiring). */
-export function onBindToggle(
+/**
+ * Reflect the collapse state (#146): hide the body, flip aria-expanded,
+ * and toggle the class that rotates the chevron. The panel stays
+ * mounted — the Mode segment remains reachable.
+ */
+export function reflectCollapsed(
   handles: HudHandles,
-  current: () => ViewMode,
-  listener: ToggleListener,
+  collapsed: boolean,
+): void {
+  handles.panelBody.hidden = collapsed;
+  handles.collapseBtn.setAttribute('aria-expanded', String(!collapsed));
+  handles.collapseBtn.setAttribute(
+    'aria-label',
+    collapsed ? 'Expand controls' : 'Collapse controls',
+  );
+  handles.panel.classList.toggle('hud-panel-collapsed', collapsed);
+}
+
+/** Read the live collapse state off the DOM (single source of truth). */
+export function isHudCollapsed(handles: HudHandles): boolean {
+  return isHidden(handles.panelBody);
+}
+
+/**
+ * Normalize the DOM `hidden` property (boolean, or the `until-found`
+ * string in newer lib.dom typings) into a plain boolean.
+ */
+function isHidden(node: HTMLElement): boolean {
+  return node.hidden !== false;
+}
+
+/** Attach the collapse-toggle handler (#146, single-owner wiring). */
+export function onBindCollapse(
+  handles: HudHandles,
+  listener: CollapseListener,
 ): () => void {
   const onClick = (): void => {
-    listener(current() === 'overview' ? 'walk' : 'overview');
+    listener(!isHudCollapsed(handles));
   };
-  handles.toggleBtn.addEventListener('click', onClick);
-  return () => handles.toggleBtn.removeEventListener('click', onClick);
+  handles.collapseBtn.addEventListener('click', onClick);
+  return () => handles.collapseBtn.removeEventListener('click', onClick);
+}
+
+/**
+ * Format slider hours (0…24, 0.5 step) as a wall clock readout
+ * ("14:30"). Hostile values clamp instead of rendering garbage: the
+ * readout never shows NaN, and 24:00 is the ceiling.
+ */
+export function hoursToClock(hours: number): string {
+  if (!Number.isFinite(hours)) return '00:00';
+  const minutes = Math.min(24 * 60, Math.max(0, Math.round(hours * 60)));
+  const hh = Math.floor(minutes / 60);
+  const mm = minutes % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+/** Format a north offset as integer degrees ('30°', '-45°'). */
+export function formatNorth(northOffsetDeg: number): string {
+  if (!Number.isFinite(northOffsetDeg)) return '0°';
+  return `${Math.round(northOffsetDeg)}°`;
+}
+
+/** Publish the name of the floor the viewer is rendering (#146). */
+export function reflectFloorName(handles: HudHandles, name: string): void {
+  const trimmed = name.trim();
+  handles.floorReadout.textContent =
+    trimmed === '' ? FLOOR_READOUT_EMPTY : trimmed;
 }
 
 /**
@@ -338,16 +682,19 @@ export function onBindSunNorth(
 }
 
 /**
- * Reflect a set of sun settings on the HUD (issue #121): slider values,
- * and the compass rose rotated by −northOffsetDeg (a CSS transform on
- * the static div — the only moving part).
+ * Reflect a set of sun settings on the HUD (issue #121, readouts added
+ * in #146): slider values, the clock/degree readouts and the compass
+ * rose rotated by −northOffsetDeg (a CSS transform on the static div —
+ * the only moving part).
  */
 export function reflectSunSettings(
   handles: HudHandles,
   settings: SunSettings,
 ): void {
   handles.sunTimeInput.value = String(settings.timeHours);
+  handles.sunTimeLabel.textContent = hoursToClock(settings.timeHours);
   handles.sunNorthInput.value = String(settings.northOffsetDeg);
+  handles.sunNorthLabel.textContent = formatNorth(settings.northOffsetDeg);
   handles.compass.style.transform = `rotate(${-settings.northOffsetDeg}deg)`;
 }
 
@@ -371,14 +718,14 @@ export function toast(
   message: string,
   variant: 'info' | 'error' = 'info',
 ): void {
-  const el = document.createElement('div');
-  el.className = `hud-toast hud-toast-${variant}`;
-  el.dataset.testid = 'hud-toast';
-  el.textContent = message;
-  handles.toasts.appendChild(el);
+  const node = document.createElement('div');
+  node.className = `hud-toast hud-toast-${variant}`;
+  node.dataset.testid = 'hud-toast';
+  node.textContent = message;
+  handles.toasts.appendChild(node);
   window.setTimeout(() => {
-    el.classList.add('hud-toast-leaving');
-    window.setTimeout(() => el.remove(), 350);
+    node.classList.add('hud-toast-leaving');
+    window.setTimeout(() => node.remove(), 350);
   }, TOAST_TTL_MS);
 }
 

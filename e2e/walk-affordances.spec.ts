@@ -57,8 +57,8 @@ test.describe('walk-mode entry affordances (issue #30)', () => {
     await expect(overlay).toBeHidden();
     await expect(reticle).toBeHidden();
 
-    // Enter walk via the mode toggle, then wait out the 320 ms fade.
-    await page.locator('[data-testid="hud-mode-toggle"]').click();
+    // Enter walk via the mode segment, then wait out the 320 ms fade.
+    await page.locator('[data-testid="hud-mode-segment-walk"]').click();
     await page.waitForTimeout(700);
 
     await expect(overlay).toBeVisible();
