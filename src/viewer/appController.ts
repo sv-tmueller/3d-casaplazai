@@ -26,17 +26,21 @@ import { adaptScene, sceneHasNaN } from './adapter';
 import {
   buildHud,
   destroyHud,
+  onBindCollapse,
+  onBindModeSegment,
   onBindRoofToggle,
   onBindSunNorth,
   onBindSunTime,
-  onBindToggle,
   onBindWallsAlpha,
   PerfOverlay,
   playFade,
+  reflectCollapsed,
+  reflectFloorName,
   reflectMode,
   reflectRoofVisibility,
   reflectSunSettings,
   reflectWallsAlpha,
+  saveHudState,
   setWalkAffordances,
   showHint,
   toast,
@@ -136,6 +140,7 @@ export class ViewerApp {
   private hud!: HudHandles;
   private perf: PerfOverlay;
   private unbindToggle: (() => void) | null = null;
+  private unbindCollapse: (() => void) | null = null;
 
   /**
    * Quality tier resolved at boot (#87's quality.ts — absorbed #86's
@@ -227,11 +232,18 @@ export class ViewerApp {
 
     this.hud = buildHud(this.pane);
     this.perf.mount(this.hud);
-    this.unbindToggle = onBindToggle(
-      this.hud,
-      () => (this.phase === 'walk' ? 'walk' : 'overview'),
-      (next) => this.requestMode(next),
+    // Mode segment (#146): each click requests the CLICKED mode — not a
+    // blind flip — so double clicks stay idempotent; reflectMode (boot
+    // and post-swap) marks the CURRENT segment.
+    this.unbindToggle = onBindModeSegment(this.hud, (next: ViewMode) =>
+      this.requestMode(next),
     );
+    // Panel collapse (#146): reflect + persist per browser. buildHud
+    // already applied the persisted state, so a reload boots collapsed.
+    this.unbindCollapse = onBindCollapse(this.hud, (collapsed) => {
+      reflectCollapsed(this.hud, collapsed);
+      saveHudState(this.hud.storage, { collapsed });
+    });
     // Roof visibility toggle (issue #86): flips every roof-slot mesh;
     // reflection keeps the button label/aria in step with reality.
     this.unbindRoofToggle = onBindRoofToggle(
@@ -289,6 +301,9 @@ export class ViewerApp {
       if (this.phase !== 'walk' || !this.walkCam) return;
       if (this.walkCam.locked) {
         setWalkAffordances(this.hud, { overlay: false, reticle: true });
+        // Entry prompt gives way to the controls hint (#146); the strip
+        // stays bottom-center, OUTSIDE the docked panel.
+        showHint(this.hud, 'WASD to move · Esc to release');
       }
     };
     document.addEventListener('pointerlockchange', onLockChange);
@@ -485,6 +500,10 @@ export class ViewerApp {
       const changedShape = this.lastGood !== null;
       this.lastGood = { adapted, planSignature: sig };
       this.lastAcceptedSignature = sig;
+      // Floor readout (#146): the viewer pins floors[0] — the lowest
+      // storey the adapter grounds every rig on — so the readout names
+      // THAT floor: truthful about what is RENDERED (sub-plan decision a).
+      reflectFloorName(this.hud, validated.floors[0]?.name ?? '');
       this.renderScene(adapted, changedShape);
     } catch (err) {
       // INVALID INTERMEDIATE: keep rendering the last good scene.
@@ -1089,6 +1108,7 @@ export class ViewerApp {
       this.sceneRoot = null;
     }
     this.unbindToggle?.();
+    this.unbindCollapse?.();
     this.unbindRoofToggle?.();
     this.unbindWallsAlpha?.();
     this.unbindSunTime?.();
