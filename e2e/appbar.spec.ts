@@ -69,5 +69,28 @@ test.describe('toolbar IA (#142)', () => {
       /^-?\d+\.\d{2}, -?\d+\.\d{2} m$/,
     );
     await expect(page.getByTestId('status-total')).toContainText('Total:');
+
+    // --- #142 AC: the retired entity-count debug string stays retired -----
+    await expect(page.locator('.editor-status')).not.toHaveText(
+      /rooms:|openings:|undo/,
+    );
+
+    // --- #142 AC: snap popover sits in its .pop-anchor and closes on -----
+    // an outside pointerdown (relocated-popover dismissal sentinel).
+    const snap = page.getByTestId('snap-popover');
+    await expect(snap).toBeHidden();
+    await page.getByTestId('btn-snap').click();
+    await expect(snap).toBeVisible();
+    expect(await snap.evaluate((el) => el.closest('.pop-anchor') !== null)).toBe(
+      true,
+    );
+    await page.mouse.click(cb.x + 24, cb.y + 24);
+    await expect(snap).toBeHidden();
+
+    // --- #142 (finding 1): the icon-only floor trio renders glyphs -----
+    // (blank ~30px squares were the defect; pin real svg children).
+    for (const id of ['btn-prev-floor', 'btn-next-floor', 'btn-add-floor']) {
+      await expect(page.getByTestId(id).locator('svg.editor-btn-icon')).toHaveCount(1);
+    }
   });
 });

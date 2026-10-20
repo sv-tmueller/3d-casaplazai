@@ -327,7 +327,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // Next / Add. Fully mouseless: plain buttons, Tab-reachable, with
   // PageUp/PageDown + [ / ] keyboard aliases (glue.ts).
   const btnPrevFloor = iconOnly(
-    mkBtn("Previous floor", "editor-prev-floor"),
+    mkBtn("Previous floor", "editor-prev-floor", "chevron-down"),
     "Previous floor",
   );
   btnPrevFloor.title = "Switch to the floor below (PageUp).";
@@ -338,12 +338,15 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   floorBadge.setAttribute("aria-haspopup", "dialog");
   floorBadge.setAttribute("data-testid", "floor-badge");
   const btnNextFloor = iconOnly(
-    mkBtn("Next floor", "editor-next-floor"),
+    mkBtn("Next floor", "editor-next-floor", "chevron-up"),
     "Next floor",
   );
   btnNextFloor.title = "Switch to the floor above (PageDown).";
   btnNextFloor.setAttribute("data-testid", "btn-next-floor");
-  const btnAddFloor = iconOnly(mkBtn("Add floor", "editor-add-floor"), "Add floor");
+  const btnAddFloor = iconOnly(
+    mkBtn("Add floor", "editor-add-floor", "plus"),
+    "Add floor",
+  );
   btnAddFloor.title = "Append a new floor above the current one.";
   btnAddFloor.setAttribute("data-testid", "btn-add-floor");
 

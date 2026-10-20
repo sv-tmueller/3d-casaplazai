@@ -29,7 +29,11 @@ export type IconKey =
   /* pkg 13.4 (issue #118): staircase tool. */
   | 'stairs'
   /* pkg #142 (issue #142): File menu owner glyph. */
-  | 'file';
+  | 'file'
+  /* pkg #142 fix round (reviewer finding 1): floor-nav trio glyphs. */
+  | 'chevron-up'
+  | 'chevron-down'
+  | 'plus';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
 
@@ -73,6 +77,11 @@ export const ICONS: Record<IconKey, string> = {
   stairs: `<path ${S} d="M3 19h4v-4h4v-4h4V7h6"/><path ${S} d="M15.5 3.5L19 7l-3.5 3.5"/>`,
   // pkg #142: sheet-of-paper glyph for the File menu owner.
   file: `<path ${S} d="M7 3h7l4 4v14H7z"/><path ${S} d="M14 3v4h4"/>`,
+  // Floor nav: chevron-up = up a storey, chevron-down = down a storey,
+  // plus = append a floor. Prevents the blank icon-only squares.
+  'chevron-up': `<path ${S} d="M6 15l6-6 6 6"/>`,
+  'chevron-down': `<path ${S} d="M6 9l6 6 6-6"/>`,
+  plus: `<path ${S} d="M12 5v14M5 12h14"/>`,
 };
 
 /** Full `<svg>` markup for an icon; `aria-hidden` keeps names text-only. */
