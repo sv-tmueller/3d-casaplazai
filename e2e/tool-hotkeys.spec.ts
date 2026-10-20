@@ -30,7 +30,7 @@ type Plan = {
     polygon: number[][];
     floorTexture: string | null;
   }>;
-  openings: Array<{ id: string; roomId: string; kind: string }>;
+  openings: Array<{ id: string; roomId: string; kind: string; tCenter: number }>;
   furniture: Array<{
     id: string;
     type: string;
@@ -406,5 +406,116 @@ test.describe.serial('single-key tool hotkeys (issue #143)', () => {
     await expect(dialog).toBeHidden();
     await page.keyboard.press('v');
     await assertArmed(page, 'Select');
+  });
+
+  /**
+   * AC8 (review round 2): the mid-gesture guard must ALSO see the
+   * PHASE-LESS opening drag. pointerdown on an opening arms dragOpening
+   * while `phase` stays "idle" (the store gesture only opens once the
+   * pointer clears the threshold), so drawGestureInProgress() alone let a
+   * hotkey reach setActiveTool — which nulls dragOpening WITHOUT
+   * endGesture(). The leaked _gestureBase made the next atomic command
+   * throw and poisoned the undo stack (silently for V, which dispatches
+   * nothing). Pre-fix this fails at the first assertArmed after the
+   * mid-drag D.
+   */
+  test('AC8: hotkey mid opening-drag is swallowed; gesture and undo survive', async ({
+    page,
+  }) => {
+    await loadPlan(page, [STUDIO]);
+    await page.locator('.editor-canvas').focus();
+
+    // Arm Door by hotkey and place a door at the south wall midpoint
+    // (x=2.0, y=-3.5 — the AC6 recipe), then hand the pointer to Select.
+    await page.keyboard.press('d');
+    await assertArmed(page, 'Door');
+    const place = await aim(page, 2.0, -3.5);
+    await page.mouse.move(place.x, place.y);
+    await page.waitForTimeout(120); // hover preview before commit
+    await page.mouse.click(place.x, place.y);
+    await page.keyboard.press('v');
+    await assertArmed(page, 'Select');
+    const placed = await getPlan(page);
+    expect(placed.openings).toHaveLength(1);
+    expect(placed.openings[0].tCenter).toBeCloseTo(0.5, 2);
+
+    // Grab the door and cross the engage threshold: dragOpening is live
+    // and store.beginGesture() has fired while phase === idle.
+    const from = await aim(page, 2.0, -3.5);
+    const mid = await aim(page, 2.4, -3.5);
+    const to = await aim(page, 2.7, -3.5);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(mid.x, mid.y, { steps: 6 });
+
+    // Mid-drag hotkeys: V (the silent-leak pressure) and D (the loud
+    // retool) must BOTH be swallowed — the armed tool survives.
+    await page.keyboard.press('v');
+    await assertArmed(page, 'Select');
+    await page.keyboard.press('d');
+    await assertArmed(page, 'Select');
+
+    // The drag is still the live interaction: finish it. The final
+    // tCenter excludes the mid-drag stall a leaked V would leave (0.633
+    // at x=2.4 vs the 0.733 of the full run to x=2.7).
+    await page.mouse.move(to.x, to.y, { steps: 4 });
+    await page.mouse.up();
+    const dragged = await getPlan(page);
+    expect(dragged.openings).toHaveLength(1);
+    // The drag landed: the door followed the pointer from x=2.0 to x=2.7.
+    // This wall's param runs right-to-left, so tCenter drops 0.5 -> ~0.267
+    // (a V-leak would have frozen it near the mid-drag 0.367).
+    expect(dragged.openings[0].tCenter).toBeCloseTo(0.2667, 1);
+
+    // No leaked gesture: the streamed drag collapsed into ONE undo step.
+    await page.keyboard.press('Control+z');
+    const undone = await getPlan(page);
+    expect(undone.openings).toHaveLength(1);
+    expect(undone.openings[0].tCenter).toBeCloseTo(0.5, 2);
+
+    // ...and the NEXT atomic command still lands (a leaked _gestureBase
+    // would make this addOpening throw).
+    await page.keyboard.press('d');
+    await assertArmed(page, 'Door');
+    const second = await aim(page, 2.0, -0.5); // north wall, same room
+    await page.mouse.move(second.x, second.y);
+    await page.waitForTimeout(120);
+    await page.mouse.click(second.x, second.y);
+    expect((await getPlan(page)).openings).toHaveLength(2);
+  });
+
+  /**
+   * AC9 (review round 2): the export popover owns the keyboard too. Its
+   * capture handler stops only Escape, so D used to arm Door and R used
+   * to rotate the SELECTED FURNITURE behind the open dialog — invisibly,
+   * with an export free to capture the unseen rotation.
+   */
+  test('AC9: hotkeys are inert while the export dialog is open', async ({
+    page,
+  }) => {
+    await loadPlan(page, [STUDIO], [SOFA]);
+    await page.locator('.editor-canvas').focus();
+    await page.keyboard.press('v');
+    await assertArmed(page, 'Select');
+    // Select the sofa so R's rotation branch is live.
+    const drop = await aim(page, 1.8, -2.0);
+    await page.mouse.click(drop.x, drop.y);
+
+    await page.getByTestId('btn-export').click();
+    const dialog = page.getByTestId('export-dialog');
+    await expect(dialog).toBeVisible();
+
+    // Neither the tool nor the furniture may move behind the dialog.
+    await page.keyboard.press('d');
+    await page.keyboard.press('r');
+    await assertArmed(page, 'Select');
+    expect((await getPlan(page)).furniture[0].rotationDeg).toBe(0);
+    await expect(dialog).toBeVisible();
+
+    // Cancel the popover — the hotkeys wake up again.
+    await page.getByTestId('export-cancel').click();
+    await expect(dialog).toBeHidden();
+    await page.keyboard.press('d');
+    await assertArmed(page, 'Door');
   });
 });

@@ -97,7 +97,7 @@ import { angleReadoutLabels } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { encodeShare } from '../shared/shareLink';
-import { openExportDialog } from './exportDialog';
+import { isExportDialogOpen, openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, isHelpModalOpen, toggleHelpModal } from './helpModal';
 import { EditorStore, activeFloorPlan, emptyPlan, nextFloorElevation, underlayFor } from './store';
@@ -1461,9 +1461,31 @@ export function initEditorInteraction(
     }
     // Mid-gesture keys are swallowed, same discipline as I/3: a tool
     // switch now would kill the live draw via setActiveTool's cleanup.
-    if (drawGestureInProgress()) return;
-    // Never retool behind the "?" cheat sheet.
-    if (isHelpModalOpen()) return;
+    // Review round 2 (#143): drawGestureInProgress() reads `phase`, so it
+    // is BLIND to the phase-less pointer-owned interactions the canvas
+    // Escape strand recognizes — marquee band, underlay resize, opening
+    // drag (same three branches below). The opening drag is the corrosive
+    // one: pointerdown arms `dragOpening` while `phase` stays "idle" and
+    // the store gesture only opens once the pointer clears the threshold
+    // (handleOpeningDrag). Retooling mid-drag reached setActiveTool,
+    // which nulls dragOpening WITHOUT endGesture(): the leaked
+    // _gestureBase made the next atomic command throw ("non-streamable
+    // command inside gesture") and poisoned undo (silently for V, which
+    // dispatches nothing).
+    if (
+      drawGestureInProgress() ||
+      dragOpening !== null ||
+      marquee !== null ||
+      resizingUnderlay !== null
+    ) {
+      return;
+    }
+    // Never retool behind an open dialog sheet. The "?" cheat sheet owns
+    // the keyboard, and so does the export popover — its capture handler
+    // stops only Escape, so D used to arm Door and R used to rotate the
+    // selected furniture INVISIBLY behind it (a following export could
+    // capture the unseen rotation).
+    if (isHelpModalOpen() || isExportDialogOpen()) return;
     const next = TOOL_HOTKEYS[ev.key.toLowerCase()];
     if (next === undefined) return; // exact match only (Space is not here)
     if (next === "rectangle") {
