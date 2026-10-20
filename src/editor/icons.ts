@@ -33,6 +33,9 @@ export type IconKey =
   /* pkg #142 fix round (reviewer finding 1): floor-nav trio glyphs. */
   | 'chevron-up'
   | 'chevron-down'
+  /* pkg 14.x (issue #126): pan tool + dark-theme toggle. */
+  | 'pan'
+  | 'theme'
   | 'plus';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
@@ -82,6 +85,10 @@ export const ICONS: Record<IconKey, string> = {
   'chevron-up': `<path ${S} d="M6 15l6-6 6 6"/>`,
   'chevron-down': `<path ${S} d="M6 9l6 6 6-6"/>`,
   plus: `<path ${S} d="M12 5v14M5 12h14"/>`,
+  // Pan (issue #126): four-way move cross.
+  pan: `<path ${S} d="M12 3v18M3 12h18"/><path ${S} d="M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>`,
+  // Theme (issue #126): crescent moon (dark mode).
+  theme: `<path ${S} d="M20 14.6A8.6 8.6 0 0 1 9.4 4 8.6 8.6 0 1 0 20 14.6z"/>`,
 };
 
 /** Full `<svg>` markup for an icon; `aria-hidden` keeps names text-only. */

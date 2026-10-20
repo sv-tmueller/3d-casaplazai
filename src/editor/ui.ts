@@ -45,6 +45,9 @@ export interface EditorDomRefs {
   btnSelect: HTMLButtonElement;
   btnRect: HTMLButtonElement;
   btnPoly: HTMLButtonElement;
+  /* pkg 14.x (issue #126): pan tool + dark-theme toggle. */
+  btnPan: HTMLButtonElement;
+  btnTheme: HTMLButtonElement;
   btnDoor: HTMLButtonElement;
   btnWindow: HTMLButtonElement;
   btnStamp: HTMLButtonElement;
@@ -191,6 +194,11 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const btnSelect = mkHintedBtn("Select", "select", "", "select");
   const btnRect = mkHintedBtn("Rectangle", "rectangle", "", "rectangle");
   const btnPoly = mkHintedBtn("Polygon", "polygon", "", "polygon");
+  // pkg 14.x (issue #126): dedicated Pan tool. Alt/middle-drag already
+  // pans anywhere; this makes panning a first-class, Tab-reachable mode
+  // (and holding Space arms it temporarily — glue.ts).
+  const btnPan = mkHintedBtn("Pan", "pan", "", "pan");
+  btnPan.setAttribute("data-testid", "btn-pan");
 
   // pkg 3 (issue #4): opening + furniture tools.
   const btnDoor = mkHintedBtn("Door", "door", "editor-door", "door");
@@ -269,6 +277,14 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   // aria-label, which every existing locator keys on.
   btnHelp.setAttribute("aria-label", "Keyboard shortcuts");
   btnHelp.setAttribute("data-testid", "btn-help");
+  // pkg 14.x (issue #126): dark-theme toggle — an EDITOR preference
+  // (localStorage casaplaza.theme.v1), never plan data. The label stays
+  // "Dark"; aria-pressed carries the state (glue.ts syncs it against
+  // <html data-theme>).
+  const btnTheme = mkBtn("Dark", "editor-theme", "theme");
+  btnTheme.title = "Toggle the dark editor theme.";
+  btnTheme.setAttribute("aria-pressed", "false");
+  btnTheme.setAttribute("data-testid", "btn-theme");
 
   // pkg 2 (issue #46): 2D navigation — center + zoom buttons.
   const btnCenter = iconOnly(mkBtn("Center", "editor-center", "center"), "Center");
@@ -438,6 +454,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
       underlayAnchor,
       btnMini3d,
       btnInspector,
+      // #126: theme toggle rides with the view toggles.
+      btnTheme,
     ]),
     btnHelp,
   );
@@ -476,6 +494,9 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     btnSelect,
     btnRect,
     btnPoly,
+    // #126: Pan sits between the shape tools and the openings — the
+    // drafting order (draw, navigate, place).
+    btnPan,
     btnDoor,
     btnWindow,
     btnStamp,
@@ -768,7 +789,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     canvas, badge, msg, status, statusCoords, statusTotal,
     btnExport, btnFile, fileMenu,
     btnShare, btnImport, btnExportJson, importFileInput, btnHelp,
-    btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
+    btnSelect, btnRect, btnPoly, btnPan, btnDoor, btnWindow, btnStamp, palette,
+    btnTheme,
     measureFlyout,
     btnStairs,
     btnDimensions, btnSnap, snapPopover,

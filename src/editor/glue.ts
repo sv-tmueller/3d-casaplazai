@@ -54,6 +54,12 @@ import {
   type SnapSettings,
 } from "./model/settings";
 import {
+  DEFAULT_THEME,
+  loadTheme,
+  saveTheme,
+  type ThemePreference,
+} from "./model/theme";
+import {
   clampTForDrag,
   nearestSegment,
   openingAt,
@@ -283,7 +289,16 @@ export function initEditorInteraction(
   const ctx = canvas.getContext("2d"); // null in stub/happy-dom environments
   const cam: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
   let tool: AnyToolMode = "select";
+  // Issue #168 (#126 fix round): true while the Pan tool is armed BY the
+  // Space-hold. Every explicit pick funnels through setActiveTool, which
+  // drops this flag, so an explicit tool choice beats the Space-release
+  // restore at the bottom of this section.
+  let spacePanOwnsTool = false;
   let phase: InteractionPhase = { tag: "idle" };
+  // Issue #126 (Pkg 14.x): editor theme preference (light/dark), loaded at
+  // boot from its own localStorage slot and mirrored onto <html> by
+  // applyTheme() below. EDITOR state only — never part of the plan.
+  let theme: ThemePreference = DEFAULT_THEME;
   let hoverRoomId: string | null = null;
   /** Issue #53: index of the resize handle under the cursor, if any. */
   let hoverHandle: number | null = null;
@@ -485,6 +500,9 @@ export function initEditorInteraction(
       // pkg 13.2 (issue #110): marquee band + multi-member highlight.
       marquee !== null && marquee.engaged ? marquee : null,
       [...multiSelected],
+      // Issue #126: canvas theme (light default keeps pre-#126 paints
+      // bit-identical; the export painter omits it and stays white).
+      theme,
     );
     // Pkg 12.3 (issue #101, fix round): the WALL case paints WHICH
     // segment the inspector is addressing (yellow, same readout path as
@@ -894,6 +912,7 @@ export function initEditorInteraction(
   /* ---------- toolbar ---------- */
   function setActiveTool(next: AnyToolMode): void {
     tool = next;
+    spacePanOwnsTool = false; // #168: an explicit pick ends any Space claim
     dragOpening = null; // #61: switching tools abandons any opening candidate
     measureDraft = null; // #66: switching tools abandons a pending anchor
     // Issue #100: tool switch also abandons a live poly draw (and its
@@ -912,6 +931,9 @@ export function initEditorInteraction(
     // Furniture palette rides shotgun with the stamp tool.
     refs.palette.hidden = tool !== "stamp";
 
+    // Issue #126: the Pan tool (Space-hold funnels through here too)
+    // owns the grab cursor on the canvas.
+    canvas.classList.toggle("pan-armed", tool === "pan");
     for (const [btn, val] of [
       [refs.btnSelect, "select"],
       [refs.btnRect, "rectangle"],
@@ -921,6 +943,7 @@ export function initEditorInteraction(
       [refs.btnStamp, "stamp"],
       [refs.btnStairs, "stairs"],
       [refs.btnAddMeasure, "measure"],
+      [refs.btnPan, "pan"],
     ] as Array<[HTMLButtonElement, AnyToolMode]>) {
       btn.classList.toggle("active", val === tool);
       btn.setAttribute("aria-pressed", String(val === tool));
@@ -1554,6 +1577,8 @@ export function initEditorInteraction(
     setActiveTool(next);
   });
 
+  // Issue #126: the Pan tool button (Space-hold arms it without a click).
+  refs.btnPan.addEventListener("click", () => setActiveTool("pan"));
   // Issue #66: wipe all annotations (persists immediately).
   // Issue #138: the pending anchor dies WITH them — a stale draft
   // otherwise ate one Escape press under the guarded popovers
@@ -1845,11 +1870,18 @@ export function initEditorInteraction(
     repaint();
   }
 
-  refs.btnCenter.addEventListener("click", () => {
+  /**
+   * Issue #126: fit-to-plan framing — shared by the Center button and the
+   * "0" shortcut (pkg 7.2: frames the ACTIVE floor; whole-plan writers
+   * like export keep full scope).
+   */
+  function fitToPlan(): void {
     const { w, h } = viewportSize();
-    // pkg 7.2: fit-camera frames the ACTIVE floor (whole-plan writers
-    // like export keep full scope).
     applyCamera(computeFitCamera(activeFloorPlan(store.getState()), w, h));
+  }
+
+  refs.btnCenter.addEventListener("click", () => {
+    fitToPlan();
   });
   refs.btnZoomIn.addEventListener("click", () => {
     const { w, h } = viewportSize();
@@ -1859,6 +1891,92 @@ export function initEditorInteraction(
     const { w, h } = viewportSize();
     applyCamera(zoomAboutCenter(cam, 1 / ZOOM_BUTTON_STEP, w, h));
   });
+
+  /* ---------- Issue #126: dark theme (editor preference) ---------- */
+
+  /**
+   * Apply a theme: mirror it onto <html data-theme> (style.css overrides
+   * the #54 tokens there), sync the toolbar button, and repaint (the
+   * canvas palette is a TS record in render.ts, not CSS).
+   */
+  function applyTheme(next: ThemePreference): void {
+    theme = next;
+    document.documentElement.dataset.theme = next;
+    refs.btnTheme.setAttribute("aria-pressed", String(next === "dark"));
+    refs.btnTheme.classList.toggle("active", next === "dark");
+    repaint();
+  }
+
+  refs.btnTheme.addEventListener("click", () => {
+    const next: ThemePreference = theme === "dark" ? "light" : "dark";
+    saveTheme(safeLocalStorage(), next);
+    applyTheme(next);
+  });
+
+  /* ---------- Issue #126: Space-hold temporary pan ---------- */
+
+  /**
+   * Holding Space arms the Pan tool; releasing restores the previous tool
+   * (Figma/Photoshop muscle memory). Guards mirror the canvas key strand:
+   * ignored while typing, mid-gesture, on auto-repeat, with modifiers, or
+   * when a button has focus (native Space activation must keep working).
+   */
+  const blocksSpacePan = (t: EventTarget | null): boolean => {
+    const el = t as HTMLElement | null;
+    if (el === null) return false;
+    return (
+      el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      el.tagName === "BUTTON" ||
+      el.isContentEditable
+    );
+  };
+  let spacePanArmed = false;
+  let toolBeforeSpace: AnyToolMode | null = null;
+  const releaseSpacePan = (): void => {
+    if (!spacePanArmed) return;
+    spacePanArmed = false;
+    const restore = toolBeforeSpace;
+    toolBeforeSpace = null;
+    // Unwind only if Space armed the pan AND the user has not switched
+    // tools meanwhile (an explicit pick always wins: it funnels through
+    // setActiveTool, which drops the ownership flag — issue #168).
+    if (restore === null || !spacePanOwnsTool) return;
+    spacePanOwnsTool = false;
+    if (phase.tag === "panning") {
+      // Issue #168: Space released MID-drag. Without this, the
+      // setActiveTool below resets the phase to idle and the pointerup
+      // branch that clears .pan-dragging never runs — the drag is
+      // stranded (frozen camera + stuck grabbing cursor). Finalize it
+      // here instead; the camera keeps its current position.
+      canvas.classList.remove("pan-dragging");
+      endDrag();
+    }
+    if (restore !== "pan") setActiveTool(restore);
+  };
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key !== " ") return;
+    if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+    if (blocksSpacePan(ev.target)) return;
+    if (drawGestureInProgress()) return;
+    ev.preventDefault(); // kill page scroll while panning
+    if (spacePanArmed) return;
+    spacePanArmed = true;
+    toolBeforeSpace = tool;
+    if (tool !== "pan") {
+      setActiveTool("pan");
+      // Claimed AFTER the arm call, because setActiveTool clears it (#168).
+      spacePanOwnsTool = true;
+    }
+  });
+  window.addEventListener("keyup", (ev) => {
+    if (ev.key !== " ") return;
+    releaseSpacePan();
+  });
+  // Safety net: focus loss while Space is held (alt-tab) must not leave
+  // the pan tool wedged.
+  window.addEventListener("blur", releaseSpacePan);
 
   // Read-only debug seam for e2e: main.ts's __casaplaza bridge is out of
   // Pkg 2's grant, so the camera is exposed from glue instead.
@@ -2289,10 +2407,13 @@ export function initEditorInteraction(
 
   /* ---------- pointer interactions ---------- */
   canvas.addEventListener("pointerdown", (ev) => {
-    if (ev.button === 1 || ev.altKey) {
+    // Issue #126: the dedicated Pan tool pans on plain left-drag exactly
+    // like alt/middle-drag (Space-hold arms the same mode temporarily).
+    if (ev.button === 1 || ev.altKey || (tool === "pan" && ev.button === 0)) {
       // Middle-button or alt-drag pans.
       const pos = evPos(ev);
       phase = { tag: "panning", startX: pos[0], startY: pos[1] };
+      canvas.classList.add("pan-dragging");
       canvas.setPointerCapture(ev.pointerId);
       return;
     }
@@ -3075,6 +3196,7 @@ export function initEditorInteraction(
       return;
     }
     if (phase.tag === "resizing" || phase.tag === "panning") {
+      canvas.classList.remove("pan-dragging");
       endDrag();
     }
   });
@@ -3310,6 +3432,16 @@ export function initEditorInteraction(
       ev.preventDefault();
       return;
     }
+    // Issue #126: "0" fits the whole plan in the viewport (the Center
+    // button's framing, shared via fitToPlan; registered in shortcuts.ts
+    // for the sheet + README sync). Same guards as "3"/"I": swallowed
+    // mid-gesture, and Ctrl/Cmd+0 stays the browser's zoom reset.
+    if (ev.key === "0" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      if (drawGestureInProgress()) return;
+      fitToPlan();
+      ev.preventDefault();
+      return;
+    }
     if (
       (ev.key === "Backspace" || ev.key === "Delete") &&
       !ev.ctrlKey &&
@@ -3466,6 +3598,9 @@ export function initEditorInteraction(
   });
 
   /* ---------- boot ---------- */
+  // Issue #126: load the stored theme and mirror it onto <html> before the
+  // first paint (the canvas palette and the CSS tokens read it).
+  applyTheme(loadTheme(safeLocalStorage()));
   const ro = new ResizeObserver(resizeCanvas);
   ro.observe(canvas.parentElement!);
   resizeCanvas();

@@ -106,7 +106,9 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | PageUp / [       | Switch to the floor below                            |
 | PageDown / ]     | Switch to the floor above                            |
 | Del / Backspace  | Delete selected room, opening, or furniture          |
-| Alt+Drag / Middle-Drag | Pan the canvas                                       |
+| 0                | Fit the whole plan in the viewport                   |
+| Space (hold)     | Temporarily switch to the Pan tool                    |
+| Alt+Drag / Middle-Drag | Pan the canvas                                 |
 | Wheel            | Zoom at cursor                                       |
 <!-- END SHORTCUTS -->
 
