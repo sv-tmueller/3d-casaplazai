@@ -39,7 +39,31 @@ export function openHelpModal(): void {
   table.className = 'help-modal-table';
   const tbody = document.createElement('tbody');
 
+  let prevGroup: string | undefined;
   for (const entry of SHORTCUTS) {
+    // Issue #143: a run of consecutive same-group entries gets ONE
+    // full-width section row. The README table stays flat (the sync
+    // spec only reads keys/action cells), so it needs no change.
+    // Styling stays inline on purpose: this package's file budget is
+    // fixed (glue/shortcuts/ui/helpModal/README/e2e) and style.css is
+    // #142's territory.
+    if (entry.group !== undefined && entry.group !== prevGroup) {
+      const groupRow = document.createElement('tr');
+      groupRow.dataset.group = entry.group;
+      const groupCell = document.createElement('th');
+      groupCell.colSpan = 2;
+      groupCell.className = 'help-group';
+      groupCell.textContent = entry.group;
+      groupCell.style.textAlign = 'left';
+      groupCell.style.fontSize = '11px';
+      groupCell.style.textTransform = 'uppercase';
+      groupCell.style.letterSpacing = '0.06em';
+      groupCell.style.color = '#64748b';
+      groupCell.style.paddingTop = '8px';
+      groupRow.appendChild(groupCell);
+      tbody.appendChild(groupRow);
+    }
+    prevGroup = entry.group;
     const row = document.createElement('tr');
     row.dataset.surface = entry.surface;
     const keysCell = document.createElement('td');

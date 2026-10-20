@@ -97,9 +97,9 @@ import { angleReadoutLabels } from './render/angleReadouts';
 import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
 import { encodeShare } from '../shared/shareLink';
-import { openExportDialog } from './exportDialog';
+import { isExportDialogOpen, openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
-import { closeHelpModal, toggleHelpModal } from './helpModal';
+import { closeHelpModal, isHelpModalOpen, toggleHelpModal } from './helpModal';
 import { EditorStore, activeFloorPlan, emptyPlan, nextFloorElevation, underlayFor } from './store';
 import { stairProgress, validateGeometry } from '../geom';
 import { vecAdd, vecSub } from './geom';
@@ -1462,6 +1462,98 @@ export function initEditorInteraction(
   refs.btnStamp.addEventListener("click", () => setActiveTool("stamp"));
   refs.btnStairs.addEventListener("click", () => setActiveTool("stairs"));
   refs.btnAddMeasure.addEventListener("click", () => setActiveTool("measure"));
+
+  /* ---------- issue #143: single-key tool hotkeys ---------- */
+
+  /**
+   * The 8 tool hotkeys live in ONE document-level handler (NOT the
+   * canvas listener) so they fire from anywhere in the editor while the
+   * exact-match map lookup keeps every other key structurally outside
+   * the decision path — Space (#126 pan) can never be intercepted
+   * because there is no catch-all single-letter branch, ever.
+   */
+  const TOOL_HOTKEYS: Record<string, AnyToolMode> = {
+    v: "select",
+    r: "rectangle",
+    p: "polygon",
+    d: "door",
+    w: "window",
+    f: "stamp",
+    t: "stairs",
+    m: "measure",
+  };
+
+  document.addEventListener("keydown", (ev) => {
+    // Chords stay untouched (undo/redo, browser combos).
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    // Typing wins: the inspector fields, the floor-rename input, and
+    // every #155 popover input are excluded here (letter keys are text
+    // while a field owns focus — never a tool switch, never a rotate).
+    const target = ev.target as HTMLElement | null;
+    if (
+      target !== null &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
+    // Mid-gesture keys are swallowed, same discipline as I/3: a tool
+    // switch now would kill the live draw via setActiveTool's cleanup.
+    // Review round 2 (#143): drawGestureInProgress() reads `phase`, so it
+    // is BLIND to the phase-less pointer-owned interactions the canvas
+    // Escape strand recognizes — marquee band, underlay resize, opening
+    // drag (same three branches below). The opening drag is the corrosive
+    // one: pointerdown arms `dragOpening` while `phase` stays "idle" and
+    // the store gesture only opens once the pointer clears the threshold
+    // (handleOpeningDrag). Retooling mid-drag reached setActiveTool,
+    // which nulls dragOpening WITHOUT endGesture(): the leaked
+    // _gestureBase made the next atomic command throw ("non-streamable
+    // command inside gesture") and poisoned undo (silently for V, which
+    // dispatches nothing).
+    if (
+      drawGestureInProgress() ||
+      dragOpening !== null ||
+      marquee !== null ||
+      resizingUnderlay !== null
+    ) {
+      return;
+    }
+    // Never retool behind an open dialog sheet. The "?" cheat sheet owns
+    // the keyboard, and so does the export popover — its capture handler
+    // stops only Escape, so D used to arm Door and R used to rotate the
+    // selected furniture INVISIBLY behind it (a following export could
+    // capture the unseen rotation).
+    if (isHelpModalOpen() || isExportDialogOpen()) return;
+    const next = TOOL_HOTKEYS[ev.key.toLowerCase()];
+    if (next === undefined) return; // exact match only (Space is not here)
+    if (next === "rectangle") {
+      // R is dual-purpose: it rotates the selected furniture piece (the
+      // former canvas-local R strand, folded in here so R can never
+      // double-fire — canvas keydown bubbles up to this listener), and
+      // arms Rectangle when nothing rotatable is selected.
+      const sel = store.getState().selectedId;
+      const item =
+        sel === null
+          ? undefined
+          : flatFurniture(activeFloorPlan(store.getState())).find(
+              (f) => f.id === sel,
+            );
+      if (item) {
+        ev.preventDefault();
+        store.dispatch({
+          type: "rotateFurniture",
+          furnitureId: item.id,
+          rotationDeg: nextRotation(item.rotationDeg),
+        });
+        return;
+      }
+    }
+    ev.preventDefault();
+    setActiveTool(next);
+  });
+
   // Issue #66: wipe all annotations (persists immediately).
   refs.btnClearMeasure.addEventListener("click", () => {
     measurements = [];
@@ -3078,6 +3170,10 @@ export function initEditorInteraction(
       destroyDrawDims();
       phase = { tag: "idle" };
       repaint();
+      // Issue #143: the idle Esc fallthrough also disarms the active
+      // tool back to Select (second Esc lands on the safe tool once no
+      // gesture/selection rescue above claimed the key).
+      if (tool !== "select") setActiveTool("select");
       return;
     }
     // pkg 12.1 (issue #99): arrow keys nudge the SELECTED underlay
@@ -3110,22 +3206,11 @@ export function initEditorInteraction(
       store.redo();
       return;
     }
-    if ((ev.key === "r" || ev.key === "R") && !ev.ctrlKey && !ev.metaKey) {
-      const sel = store.getState().selectedId;
-      if (sel === null) return;
-      const item = flatFurniture(activeFloorPlan(store.getState())).find(
-        (f) => f.id === sel,
-      );
-      if (item) {
-        ev.preventDefault();
-        store.dispatch({
-          type: "rotateFurniture",
-          furnitureId: item.id,
-          rotationDeg: nextRotation(item.rotationDeg),
-        });
-      }
-      return;
-    }
+    // Issue #143: the R strand MOVED to the document-level tool-hotkey
+    // handler (installed with the toolbar wiring). Canvas keydown
+    // bubbles up to it, so R keeps rotating the selected furniture with
+    // canvas focus AND arms Rectangle with nothing selected — deleting
+    // the old branch here is what keeps R from double-firing.
     // Issue #68: "S" toggles the snap-settings popover. Registered in
     // shortcuts.ts (feeds the "?" help modal + README sync spec).
     if (

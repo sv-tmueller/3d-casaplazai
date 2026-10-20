@@ -13,6 +13,14 @@ export interface ShortcutEntry {
   action: string;
   /** Surface the binding lives on: canvas or viewer HUD. */
   surface: 'editor' | 'viewer';
+  /**
+   * Issue #143: optional grouping label. The help modal (helpModal.ts)
+   * renders one full-width section row before each run of consecutive
+   * entries sharing a group; the README table stays flat (the sync spec
+   * only reads keys/action cells). The registry stays the single source
+   * of truth for both surfaces.
+   */
+  group?: 'Tools';
 }
 
 export const SHORTCUTS: ShortcutEntry[] = [
@@ -22,7 +30,27 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'Ctrl+Z', action: 'Undo', surface: 'editor' },
   { keys: 'Ctrl+Shift+Z', action: 'Redo', surface: 'editor' },
   { keys: 'Ctrl+Y', action: 'Redo', surface: 'editor' },
-  { keys: 'R', action: 'Rotate selected furniture 90°', surface: 'editor' },
+  // Issue #143: single-key tool hotkeys (V R P D W F T M). R is
+  // dual-purpose — it rotates the selected furniture piece, and arms
+  // Rectangle when nothing (rotatable) is selected.
+  { keys: 'V', action: 'Arm the Select tool', surface: 'editor', group: 'Tools' },
+  {
+    keys: 'R',
+    action: 'Arm Rectangle (rotates selected furniture 90° while one is selected)',
+    surface: 'editor',
+    group: 'Tools',
+  },
+  { keys: 'P', action: 'Arm the Polygon tool', surface: 'editor', group: 'Tools' },
+  { keys: 'D', action: 'Arm the Door tool', surface: 'editor', group: 'Tools' },
+  { keys: 'W', action: 'Arm the Window tool', surface: 'editor', group: 'Tools' },
+  {
+    keys: 'F',
+    action: 'Arm the Furnish (stamp) tool',
+    surface: 'editor',
+    group: 'Tools',
+  },
+  { keys: 'T', action: 'Arm the Stairs tool', surface: 'editor', group: 'Tools' },
+  { keys: 'M', action: 'Arm the Measure tool', surface: 'editor', group: 'Tools' },
   {
     keys: 'S',
     action: 'Toggle the Snapping settings popover',
