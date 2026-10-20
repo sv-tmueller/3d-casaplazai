@@ -992,6 +992,49 @@ body {
   display: none;
 }
 
+/* Empty-plan state (issue #148): with no rooms on any floor the viewer
+   stands the scene down to the sky/ground backdrop and shows this calm
+   centered line instead of toasting a validator failure. Pointer-
+   transparent so the (empty) canvas keeps its orbit drag. */
+.hud-empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+
+.hud-empty-state[hidden] {
+  display: none;
+}
+
+/* Parked Walk toggle (issue #148): plainly unavailable, not merely inert. */
+.hud-toggle-disabled,
+.hud-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.hud-toggle-disabled:hover,
+.hud-toggle:disabled:hover {
+  border-color: var(--border);
+}
+
+/* Repeat counter on a de-duplicated toast (issue #148). */
+.hud-toast-count {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 /* --------------------- pkg 3 (issue #54) facelift ------------------------ */
 
 /* Statusbar typography synced with the toolbar refresh. */

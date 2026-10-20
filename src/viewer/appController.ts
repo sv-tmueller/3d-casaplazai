@@ -29,6 +29,7 @@ import {
   onBindCollapse,
   onBindModeSegment,
   onBindRoofToggle,
+  dismissErrorToasts,
   onBindSunNorth,
   onBindSunTime,
   onBindWallsAlpha,
@@ -41,7 +42,9 @@ import {
   reflectSunSettings,
   reflectWallsAlpha,
   saveHudState,
+  setEmptyState,
   setWalkAffordances,
+  setWalkDisabled,
   showHint,
   toast,
   type HudHandles,
@@ -62,6 +65,7 @@ import {
   buildViewerScene,
   configureRenderer,
   disposeObject,
+  emptyAdaptedScene,
   paintSky,
 } from './sceneBuilder';
 import {
@@ -123,6 +127,16 @@ export function planSignature(plan: FloorplanData): string {
 }
 
 /**
+ * True when the plan holds no rooms on ANY storey (issue #148): the
+ * viewer's EMPTY STATE, not a validation error. The schema's
+ * "at least one room" rule stays untouched — this predicate only keeps
+ * the viewer from feeding the validator a plan it is meant to reject.
+ */
+export function isEmptyPlan(plan: FloorplanData): boolean {
+  return flatRooms(plan).length === 0;
+}
+
+/**
  * The viewer application controller. Instantiate once per page; call
  * dispose() on teardown.
  */
@@ -154,6 +168,14 @@ export class ViewerApp {
 
   /** Manual roof-visibility state (HUD toggle, issue #86). */
   private roofsShown = true;
+
+  /**
+   * Empty-plan state (issue #148): true while the plan has no rooms and
+   * the sky/ground backdrop + centered prompt stand in for the scene.
+   * Entered from refreshAdaptation BEFORE the validator sees the plan;
+   * left on the first successful compile.
+   */
+  private emptyStateActive = false;
 
   /** Walls-transparency slider (issue #120): unbind + normalized state. */
   private unbindWallsAlpha: (() => void) | null = null;
@@ -322,6 +344,10 @@ export class ViewerApp {
   /** Mode request from the HUD toggle (ignored mid-transition). */
   public requestMode(next: ViewMode): void {
     if (this.disposed || this.phase === 'transition') return;
+    // Issue #148: nothing to walk in while the plan has no rooms. The
+    // toggle is parked in the empty state; this guard holds the same
+    // invariant for the Tab handler and programmatic callers.
+    if (next === 'walk' && this.lastGood === null) return;
     if (next === this.viewMode()) return;
     void this.swapModes(next);
   }
@@ -474,6 +500,16 @@ export class ViewerApp {
     }
 
     const sig = planSignature(plan);
+
+    // Issue #148: a room-less plan is NOT an error. Classify before the
+    // validator is consulted (its ≥1-room rule stays intact) and stand
+    // the scene down to the empty state instead of re-toasting every
+    // 250ms poll.
+    if (isEmptyPlan(plan)) {
+      this.enterEmptyState();
+      return;
+    }
+
     if (!initial && sig === this.lastAcceptedSignature) {
       return; // unchanged since the last accepted compile
     }
@@ -498,12 +534,23 @@ export class ViewerApp {
       }
 
       const changedShape = this.lastGood !== null;
+      // Issue #148: a successful compile means the plan is valid again —
+      // leave the empty state if it was active, retract the failure toast
+      // it superseded, and seat an eye when none survived the empty or
+      // failed stretch, so the accepted scene is really in frame.
+      this.exitEmptyState();
       this.lastGood = { adapted, planSignature: sig };
       this.lastAcceptedSignature = sig;
       // Floor readout (#146): the viewer pins floors[0] — the lowest
       // storey the adapter grounds every rig on — so the readout names
       // THAT floor: truthful about what is RENDERED (sub-plan decision a).
       reflectFloorName(this.hud, validated.floors[0]?.name ?? '');
+      // Issue #148: the plan is valid again — retract the stale failure
+      // toast and reseat the overview rig if the empty stretch unseated it.
+      dismissErrorToasts(this.hud);
+      if (this.phase === 'overview' && !this.orbitCam) {
+        this.seatRig('overview');
+      }
       this.renderScene(adapted, changedShape);
     } catch (err) {
       // INVALID INTERMEDIATE: keep rendering the last good scene.
@@ -514,6 +561,63 @@ export class ViewerApp {
         toast(this.hud, 'Recompile failed — keeping last good view', 'error');
       }
     }
+  }
+
+  /**
+   * Enter the empty-plan state (issue #148): a room-less plan gets the
+   * sky/ground backdrop, the centered prompt and a parked Walk toggle —
+   * never a validator toast. Idempotent: the poll reaches this branch on
+   * every cycle while the plan stays empty.
+   *
+   * lastGood/lastAcceptedSignature are cleared so the first real room
+   * re-seats fully instead of reframing a scene the user has deleted.
+   */
+  private enterEmptyState(): void {
+    if (this.emptyStateActive) return;
+    this.emptyStateActive = true;
+
+    this.lastGood = null;
+    this.lastAcceptedSignature = null;
+
+    // Tear the live rig down FIRST — a walk rig has no rooms to stand in
+    // (same deactivate pattern as a mode swap). The rebuilt backdrop rig
+    // below takes its place.
+    this.rig?.deactivate();
+    this.walkCam = null;
+    this.orbitCam = null;
+    this.rig = null;
+    this.phase = 'overview';
+    // Mirrors the walk-exit reset: no autofade can be mid-flight.
+    this.roofFadeState = 'shown';
+    this.indoor = false;
+
+    setEmptyState(this.hud, true);
+    setWalkDisabled(this.hud, true);
+    setWalkAffordances(this.hud, { overlay: false, reticle: false });
+    showHint(this.hud, '');
+    reflectMode(this.hud, 'overview');
+
+    // Backdrop: the normal builder fed the neutral, geometry-free scene
+    // (defined in sceneBuilder), then an orbit rig framed on its plot so
+    // the empty stage still renders and orbits.
+    const empty = emptyAdaptedScene();
+    this.renderScene(empty, false);
+    this.orbitCam = this.makeOrbitRig(empty);
+    this.rig = this.orbitCam;
+  }
+
+  /**
+   * Leave the empty state (issue #148): the prompt goes away, Walk
+   * becomes available again and the toggle mirrors overview. Returns
+   * true only when this call actually left the state.
+   */
+  private exitEmptyState(): boolean {
+    if (!this.emptyStateActive) return false;
+    this.emptyStateActive = false;
+    setEmptyState(this.hud, false);
+    setWalkDisabled(this.hud, false);
+    reflectMode(this.hud, this.phase as ViewMode);
+    return true;
   }
 
   /** Swap the drawn scene graph for a freshly adapted one. */
@@ -720,8 +824,11 @@ export class ViewerApp {
    */
   private paintSun(): void {
     const root = this.sceneRoot;
-    const adapted = this.lastGood?.adapted;
-    if (!root || !adapted) return;
+    // Empty-plan state (issue #148): no snapshot to read bounds off, but
+    // the backdrop still owes the live sun a pose — fall back to the
+    // neutral plot so the time/north sliders stay live while empty.
+    const adapted = this.lastGood?.adapted ?? emptyAdaptedScene();
+    if (!root) return;
     const state = applySunPose(root.lights, this.sunSettings, adapted.bounds);
     applySkyDusk(root.skyDome, state.duskBlend);
     if (this.hiQuality && this.renderer) {
@@ -922,6 +1029,9 @@ export class ViewerApp {
       // (bearing/elevation derived from position − target) plus the
       // current intensities — the AC1/AC2/AC3 e2e channel.
       ...this.sunProbe(),
+      // Empty-plan state (issue #148): true while the sky/ground
+      // backdrop + prompt stand in for the scene (fresh-profile probe).
+      emptyState: this.emptyStateActive,
       // Shadow-atlas generations (#121 fix round): without this, a
       // frozen refresh is only visible as a few-percent pixel delta —
       // far inside the screenshot noise. A deleted needsUpdate parks

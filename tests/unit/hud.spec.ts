@@ -9,11 +9,12 @@
  * readout (mouseless mandate); the collapse state persists per browser
  * through an injectable storage seam.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HUD_STATE_STORAGE_KEY,
   buildHud,
+  dismissErrorToasts,
   hoursToClock,
   isHudCollapsed,
   loadHudState,
@@ -31,8 +32,12 @@ import {
   reflectWallsAlpha,
   safeHudStorage,
   saveHudState,
+  setEmptyState,
   setWalkAffordances,
+  setWalkDisabled,
   showHint,
+  toast,
+  TOAST_TTL_MS,
   wallsAlphaFromSlider,
   type HudHandles,
 } from '../../src/viewer/hud';
@@ -328,6 +333,125 @@ describe('sun controls (issue #121)', () => {
     expect(handles.sunNorthInput.value).toBe('0');
     expect(handles.sunNorthLabel.textContent).toBe('0°');
     expect(handles.compass.style.transform).toBe('rotate(0deg)');
+  });
+});
+
+describe('toast de-duplication (issue #148)', () => {
+  let handles: HudHandles;
+
+  const nodes = (): HTMLElement[] => [
+    ...document.querySelectorAll<HTMLElement>('.hud-toast'),
+  ];
+  const badge = (node: HTMLElement): HTMLElement | null =>
+    node.querySelector<HTMLElement>('[data-testid="hud-toast-count"]');
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stacks DISTINCT messages as separate nodes, oldest first', () => {
+    toast(handles, 'first thing');
+    toast(handles, 'second thing');
+    expect(nodes()).toHaveLength(2);
+    expect(nodes().map((n) => n.textContent)).toEqual(['first thing', 'second thing']);
+  });
+
+  it('collapses a repeated message into one node carrying an ×N counter', () => {
+    toast(handles, 'Cannot render plan: boom', 'error');
+    toast(handles, 'Cannot render plan: boom', 'error');
+    expect(nodes()).toHaveLength(1);
+    const node = nodes()[0]!;
+    expect(node.textContent).toContain('Cannot render plan: boom');
+    expect(badge(node)?.textContent).toBe('×2');
+    // A third repeat keeps counting on the same node.
+    toast(handles, 'Cannot render plan: boom', 'error');
+    expect(nodes()).toHaveLength(1);
+    expect(badge(nodes()[0]!)?.textContent).toBe('×3');
+  });
+
+  it('treats the same text in a different variant as a separate node', () => {
+    toast(handles, 'heads up', 'info');
+    toast(handles, 'heads up', 'error');
+    expect(nodes()).toHaveLength(2);
+    expect(nodes()[0]!.dataset.variant).toBe('info');
+    expect(nodes()[1]!.dataset.variant).toBe('error');
+  });
+
+  it('resets the TTL on a repeat instead of restarting the stack', () => {
+    toast(handles, 'still here');
+    vi.advanceTimersByTime(TOAST_TTL_MS - 50);
+    toast(handles, 'still here'); // repeat: collapses + pushes the deadline back
+    vi.advanceTimersByTime(TOAST_TTL_MS - 50);
+    expect(nodes()).toHaveLength(1);
+    expect(nodes()[0]!.classList.contains('hud-toast-leaving')).toBe(false);
+    vi.advanceTimersByTime(50); // the refreshed deadline elapses exactly
+    expect(nodes()[0]!.classList.contains('hud-toast-leaving')).toBe(true);
+    vi.advanceTimersByTime(400); // fade-out completes
+    expect(nodes()).toHaveLength(0);
+  });
+
+  it('starts a FRESH uncounted node when a repeat lands mid-fade', () => {
+    toast(handles, 'cycle');
+    vi.advanceTimersByTime(TOAST_TTL_MS + 50); // now leaving
+    toast(handles, 'cycle');
+    expect(nodes()).toHaveLength(2);
+    const fresh = nodes()[1]!;
+    expect(fresh.classList.contains('hud-toast-leaving')).toBe(false);
+    expect(badge(fresh)).toBeNull();
+    vi.advanceTimersByTime(400);
+    expect(nodes()).toEqual([fresh]);
+  });
+
+  it('dismissErrorToasts clears error nodes at once and spares info nodes', () => {
+    toast(handles, 'just so you know', 'info');
+    toast(handles, 'Cannot render plan: boom', 'error');
+    toast(handles, 'Cannot render plan: boom', 'error');
+    expect(nodes()).toHaveLength(2);
+    dismissErrorToasts(handles);
+    expect(nodes().map((n) => n.textContent)).toEqual(['just so you know']);
+    expect(nodes()[0]!.classList.contains('hud-toast-leaving')).toBe(false);
+    // The dismissal also forgets the message, so a later repeat is fresh.
+    toast(handles, 'Cannot render plan: boom', 'error');
+    expect(nodes()).toHaveLength(2);
+    expect(badge(nodes()[1]!)).toBeNull();
+  });
+});
+
+describe('empty-plan state affordances (issue #148)', () => {
+  let handles: HudHandles;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+  });
+
+  it('ships the centered message hidden, with the sanctioned testid and copy', () => {
+    expect(handles.emptyState.dataset.testid).toBe('hud-empty-state');
+    expect(handles.emptyState.textContent).toBe('Draw a room in the plan to see it here');
+    expect(handles.emptyState.hidden).toBe(true);
+    expect(document.querySelector('[data-testid="hud-empty-state"]')).toBe(handles.emptyState);
+  });
+
+  it('reveals and hides the message via setEmptyState', () => {
+    setEmptyState(handles, true);
+    expect(handles.emptyState.hidden).toBe(false);
+    setEmptyState(handles, false);
+    expect(handles.emptyState.hidden).toBe(true);
+  });
+
+  it('blocks the Walk toggle via setWalkDisabled (real disabled + aria)', () => {
+    setWalkDisabled(handles, true);
+    expect(handles.walkBtn.disabled).toBe(true);
+    expect(handles.walkBtn.getAttribute('aria-disabled')).toBe('true');
+    setWalkDisabled(handles, false);
+    expect(handles.walkBtn.disabled).toBe(false);
+    expect(handles.walkBtn.getAttribute('aria-disabled')).toBe('false');
   });
 });
 
