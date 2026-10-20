@@ -11,6 +11,33 @@ import { CAM_SCALE } from './fixtures/camConstants';
 
 type Cam = { originX: number; originY: number; scale: number };
 
+/**
+ * #144: a fresh profile boots into the first-run empty-state card, which
+ * floats over the canvas CENTRE and eats the pointer/keyboard interactions
+ * these navigation tests drive. The card's visibility rule is
+ * "empty plan AND Select armed" (glue.refreshEmptyState), so merely arming
+ * a tool and returning to Select would bring it BACK. Instead: draw one
+ * small room via the card's own Draw button — the plan stops being empty,
+ * the card is gone for good, and the tests' Select expectations hold.
+ */
+async function dismissFirstRunCard(page: Page): Promise<void> {
+  const card = page.getByTestId('empty-state-card');
+  if (!(await card.count())) return;
+  const box = await page.locator('.editor-canvas').boundingBox();
+  const ox = box!.x + box!.width * 0.25;
+  const oy = box!.y + box!.height * 0.25;
+  await page.getByTestId('empty-draw-room').click();
+  await expect(card).toBeHidden();
+  await page.mouse.move(ox, oy);
+  await page.mouse.down();
+  await page.mouse.move(ox + 60, oy + 40, { steps: 4 });
+  await page.mouse.up();
+  // The drawn room clears planIsEmpty ⇒ the card stays hidden even after
+  // re-arming Select.
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(card).toBeHidden();
+}
+
 async function getCam(page: Page): Promise<Cam> {
   return page.evaluate(
     () => (window as unknown as { __editorCam: () => Cam }).__editorCam(),
@@ -201,6 +228,7 @@ test('viewer HUD stays legible where the dark theme reaches the viewer page', as
 test('Space released mid-pan-drag finalizes the drag (no stranded pan)', async ({ page }) => {
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  await dismissFirstRunCard(page);
   await page.locator('.editor-canvas').click();
   const canvas = page.locator('.editor-canvas');
   const box = await canvasBox(page);
@@ -237,6 +265,7 @@ test('Space released mid-pan-drag finalizes the drag (no stranded pan)', async (
 test('an explicit Pan pick during a Space-hold survives the Space release', async ({ page }) => {
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  await dismissFirstRunCard(page);
   await page.locator('.editor-canvas').click();
   const btnPan = page.getByTestId('btn-pan');
   const btnSelect = page.getByRole('button', { name: 'Select', exact: true });
@@ -257,6 +286,7 @@ test('an explicit Pan pick during a Space-hold survives the Space release', asyn
 test('Pan tool: keyboard-focusable button arms pan; left-drag pans the camera', async ({ page }) => {
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  await dismissFirstRunCard(page);
   const btnPan = page.getByTestId('btn-pan');
   await expect(btnPan).toBeVisible();
 
@@ -281,6 +311,7 @@ test('Pan tool: keyboard-focusable button arms pan; left-drag pans the camera', 
 test('Space-hold temporarily arms the Pan tool and releasing restores the previous tool', async ({ page }) => {
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  await dismissFirstRunCard(page);
   await page.locator('.editor-canvas').click();
   const btnPan = page.getByTestId('btn-pan');
   const btnSelect = page.getByRole('button', { name: 'Select', exact: true });
@@ -300,6 +331,15 @@ test('Space-hold temporarily arms the Pan tool and releasing restores the previo
 test('"0" fits the empty plan and the seeded demo plan', async ({ page }) => {
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  // Unlike dismissFirstRunCard (which DRAWS a room and breaks this test's
+  // empty-plan premise), just arm Rectangle via the card's Draw button:
+  // the card hides while a drawing tool is armed, and "0"'s fit math does
+  // not care which tool is active.
+  const card = page.getByTestId('empty-state-card');
+  if (await card.count()) {
+    await page.getByTestId('empty-draw-room').click();
+    await expect(card).toBeHidden();
+  }
   await page.locator('.editor-canvas').click();
 
   // Empty plan boots neutral; "0" keeps it neutral (idempotent fit).

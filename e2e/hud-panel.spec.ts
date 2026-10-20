@@ -141,6 +141,36 @@ test.describe('docked HUD panel (issue #146)', () => {
     // Walk mode is where the persistent hint strip is shown.
     await page.getByTestId('hud-mode-segment-walk').click();
 
+    // Seating the walk rig is asynchronous (rig build + hint publish);
+    // wait for the strip to actually carry its hint before measuring.
+    await page.waitForFunction(
+      () => {
+        const hint = document.querySelector('.hud-strip .hud-hint');
+        return hint !== null && (hint.textContent ?? '').length > 0;
+      },
+      { timeout: 10_000 },
+    );
+
+    // Capture the strip geometry WHILE the walk rig is alive: an invalid
+    // plan tears the rig down (#148) and empties the strip, so the strip
+    // assertions must not depend on surviving the teardown.
+    const geomAlive = await page.evaluate(() => {
+      const box = (el: Element) => {
+        const b = el.getBoundingClientRect();
+        return { x: b.x, y: b.y, right: b.right, bottom: b.bottom, width: b.width, height: b.height };
+      };
+      const strip = document.querySelector('.hud-strip');
+      return {
+        strip: strip === null ? null : box(strip),
+        hint: strip === null ? null : (strip.querySelector('.hud-hint')?.textContent ?? null),
+      };
+    });
+    expect(geomAlive.strip).not.toBeNull();
+    const strip = geomAlive.strip!;
+    expect(strip.width).toBeGreaterThan(0);
+    expect(strip.height).toBeGreaterThan(0);
+    expect(['Click to walk', 'WASD to move · Esc to release']).toContain(geomAlive.hint);
+
     // Raise a toast through the LIVE error path: a plan whose wall
     // thickness violates the schema is rejected by the viewer's
     // validator. #148's de-duplication collapses the 250 ms re-toasts
@@ -164,33 +194,16 @@ test.describe('docked HUD panel (issue #146)', () => {
     const geom = await page.evaluate(() => {
       const box = (el: Element) => {
         const b = el.getBoundingClientRect();
-        return {
-          x: b.x,
-          y: b.y,
-          right: b.right,
-          bottom: b.bottom,
-          width: b.width,
-          height: b.height,
-        };
+        return { x: b.x, y: b.y, right: b.right, bottom: b.bottom, width: b.width, height: b.height };
       };
-      const strip = document.querySelector('.hud-strip');
       const stack = document.querySelector('.hud-toasts');
       return {
-        strip: strip === null ? null : box(strip),
-        hint: strip === null ? null : (strip.querySelector('.hud-hint')?.textContent ?? null),
         stack: stack === null ? null : box(stack),
         toasts: [...document.querySelectorAll('[data-testid="hud-toast"]')].map(box),
       };
     });
 
-    // The strip is a real, visible box carrying a walk hint.
-    expect(geom.strip).not.toBeNull();
-    const strip = geom.strip!;
-    expect(strip.width).toBeGreaterThan(0);
-    expect(strip.height).toBeGreaterThan(0);
-    expect(['Click to walk', 'WASD to move · Esc to release']).toContain(geom.hint);
-
-    // GEOMETRY PIN: no toast may intersect the strip.
+    // GEOMETRY PIN: no toast may intersect the strip's band.
     const overlaps = (a: { x: number; y: number; right: number; bottom: number }, b: typeof strip) =>
       a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
     const collisions = geom.toasts

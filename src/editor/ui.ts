@@ -101,6 +101,11 @@ export interface EditorDomRefs {
   inspectorDock: HTMLDivElement;
   /* Pkg 13.1 (issue #109): mini-3D inset — toggle (dock lives in glue). */
   btnMini3d: HTMLButtonElement;
+  /* Issue #144 (Pkg 15.1): first-run overlays. Both mounts live INSIDE
+   * canvasWrap (their positioning context) and deliberately OUTSIDE the
+   * toolbar — sibling #142 owns the toolbar/app-bar. */
+  emptyStateMount: HTMLDivElement;
+  planMenuMount: HTMLDivElement;
 }
 
 export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
@@ -782,7 +787,16 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const inspectorDock = document.createElement("div");
   inspectorDock.className = "editor-main-area";
 
-  canvasWrap.append(canvas, badge, msg);
+  // Issue #144 (Pkg 15.1): first-run mounts — absolute layers over the
+  // canvas (canvasWrap is position:relative). The layers are
+  // pointer-events:none so canvas gestures pass straight through; only
+  // the card and the Plans button re-enable pointer events (style.css).
+  const emptyStateMount = document.createElement("div");
+  emptyStateMount.className = "editor-firstrun-layer";
+  const planMenuMount = document.createElement("div");
+  planMenuMount.className = "editor-firstrun-layer";
+
+  canvasWrap.append(canvas, badge, msg, emptyStateMount, planMenuMount);
   inspectorDock.append(rail, canvasWrap);
   // The hidden import input must live IN the document for .click() to
   // summon the file picker; `hidden` keeps it out of layout + a11y tree.
@@ -810,6 +824,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     leanPopover, leanForm, leanSegFieldset, leanSlider, leanValue, btnClearLean,
     btnInspector, inspectorDock,
     btnMini3d,
+    emptyStateMount, planMenuMount,
   };
 }
 
