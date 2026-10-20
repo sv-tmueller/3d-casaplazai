@@ -716,12 +716,34 @@ body {
 
 /* Statusbar typography synced with the toolbar refresh. */
 .editor-statusbar {
+  /* pkg #142: three-zone row — hint | cursor (m) | area total. */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
   font-size: 12px;
   color: var(--text-muted);
   letter-spacing: 0.01em;
 }
 
+.editor-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Middle zone owns the slack so the total stays flush right. */
+.editor-status-coords {
+  flex: 1 1 auto;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
 .editor-status-total {
+  flex: none;
   color: var(--accent-ink);
 }
 

@@ -12,6 +12,8 @@ export interface EditorDomRefs {
   badge: HTMLDivElement;
   msg: HTMLDivElement;
   status: HTMLSpanElement;
+  /* pkg #142: middle status-bar zone — live cursor position in meters. */
+  statusCoords: HTMLSpanElement;
   statusTotal: HTMLSpanElement;
   btnExport: HTMLButtonElement;
   /* pkg 10.1 (issue #91): share/import/export-JSON trio beside Export. */
@@ -571,11 +573,15 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   statusBar.className = "editor-statusbar";
   const status = document.createElement("span");
   status.className = "editor-status";
+  // pkg #142: three-zone status bar — tool hint | cursor (m) | area total.
+  const statusCoords = document.createElement("span");
+  statusCoords.className = "editor-status-coords";
+  statusCoords.setAttribute("data-testid", "status-coords");
   const statusTotal = document.createElement("span");
   statusTotal.className = "editor-status-total";
   statusTotal.setAttribute("data-testid", "status-total");
   statusTotal.textContent = "Total: 0.0 m\u00B2";
-  statusBar.append(status, statusTotal);
+  statusBar.append(status, statusCoords, statusTotal);
 
   // Pkg 12.3 (issue #101): inspector dock — a flex ROW wrapping the
   // canvas wrapper with the panel mount as a SIBLING. The canvas sizes
@@ -592,7 +598,7 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   parent.appendChild(pane);
 
   return {
-    toolbar, canvas, badge, msg, status, statusTotal,
+    toolbar, canvas, badge, msg, status, statusCoords, statusTotal,
     btnExport, btnShare, btnImport, btnExportJson, importFileInput, btnHelp,
     btnSelect, btnRect, btnPoly, btnDoor, btnWindow, btnStamp, palette,
     btnStairs,
