@@ -189,3 +189,30 @@ test('"Clear measurements" also drops a pending anchor (issue #138)', async ({
   await page.keyboard.press('Escape');
   expect(await draft(page)).toBeNull();
 });
+
+test('pending anchor dies BEFORE the floor popover closes (issue #137)', async ({
+  page,
+}) => {
+  // Template pin for the ratified popover-trio Escape widening
+  // (underlay/floor/lean popovers, glue.ts): only the inspector-panel
+  // variant was e2e-covered; this locks the SAME precedence on a
+  // second popover — first Escape drops the draft and the popover
+  // SURVIVES, second Escape closes it. Twins by construction.
+  const a = await aim(page, 0, -5);
+  await page.mouse.click(a.x, a.y);
+  expect(await draft(page)).toEqual({ a: [0, -5] });
+
+  // Open the floor popover from its badge (rename/delete dialog).
+  await page.getByTestId('floor-badge').click();
+  const popover = page.getByTestId('floor-popover');
+  await expect(popover).toBeVisible();
+
+  // First Escape kills the anchor only; the popover stays open.
+  await page.keyboard.press('Escape');
+  expect(await draft(page)).toBeNull();
+  await expect(popover).toBeVisible();
+
+  // Second Escape closes the popover.
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+});
