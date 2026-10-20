@@ -117,6 +117,24 @@ This table is kept in sync with `src/editor/shortcuts.ts` by
 — edit the registry, rerun tests, paste the failing expectation. The
 in-app cheat sheet (**?**) renders from the same registry.
 
+## Accessibility
+
+- **Keyboard**: the canvas is Tab-focusable and shows a focus ring; the toolbar
+  popovers (Snap / Floor / Underlay / Lean) and the export dialog keep Tab
+  inside while open and hand focus back to the control that opened them.
+  A popover opened mid-draw (shortcut) never steals canvas focus, so Escape
+  keeps its draw-gesture precedence: the first press cancels the draft, the
+  second closes the popover and hands focus back.
+- **Screen readers**: inline notices announce politely (`role="status"`) and
+  errors announce assertively (`role="alert"`); the viewer's toast stack is a
+  polite live region, with error toasts raised to `role="alert"`.
+- **Reduce motion** (`prefers-reduced-motion: reduce`): the splash exit, the
+  viewer's mode-transition veil, toast fades and the idle camera drift all
+  stop. Nothing is removed functionally — the 3D view simply stops moving on
+  its own.
+- **Contrast**: the measurement-pill text and outline are pinned against every
+  editor backdrop by [`tests/unit/contrast.spec.ts`](tests/unit/contrast.spec.ts).
+
 Viewer keys: `Tab` toggles overview ⇄ walk; in walk mode use
 `WASD`/arrows, mouse-look, `Shift` sprint, `Esc` to release the mouse.
 

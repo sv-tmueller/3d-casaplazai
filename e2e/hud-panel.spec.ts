@@ -141,12 +141,13 @@ test.describe('docked HUD panel (issue #146)', () => {
     // Walk mode is where the persistent hint strip is shown.
     await page.getByTestId('hud-mode-segment-walk').click();
 
-    // Raise a stacked toast set through the LIVE error path: a plan whose
-    // wall thickness violates the schema is rejected by the viewer's
-    // validator, and while it stays invalid the 250 ms recompile poll
-    // re-toasts — the column grows past one entry by itself (measured up
-    // to 14 in a 3 s window). Even one entry is taller than the old
-    // strip's whole 52 px offset, so ≥3 is well past "realistic".
+    // Raise a toast through the LIVE error path: a plan whose wall
+    // thickness violates the schema is rejected by the viewer's
+    // validator. #148's de-duplication collapses the 250 ms re-toasts
+    // into ONE node with an ×N counter, so the stack never grows past
+    // one entry anymore — one tall toast is enough to prove the
+    // column-vs-strip geometry (even one entry is taller than the old
+    // strip's whole 52 px offset).
     const fs = await import('node:fs/promises');
     const raw = await fs.readFile('demo/demo-apartment.json', 'utf8');
     await page.evaluate((planJson) => {
@@ -156,7 +157,7 @@ test.describe('docked HUD panel (issue #146)', () => {
       (window as any).__casaplaza.loadPlan(plan);
     }, raw);
     await page.waitForFunction(
-      () => document.querySelectorAll('[data-testid="hud-toast"]').length >= 3,
+      () => document.querySelectorAll('[data-testid="hud-toast"]').length >= 1,
       { timeout: 10_000 },
     );
 

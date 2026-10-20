@@ -441,6 +441,10 @@ body {
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   overflow: hidden;
+  /* #168 fix-round-2: pinned light island — the group's own ink must
+     not inherit var(--text) from .hud-panel (dark flips it to #e5e7eb
+     on the light chips, 1.2:1). Buttons pin #475569 regardless. */
+  color: #475569;
 }
 
 .hud-segment-btn {
@@ -1103,10 +1107,15 @@ body {
   color: var(--text);
 }
 
+/* #168 fix-round-2 rule: the HUD is a fixed LIGHT island — surfaces with
+   pinned light backgrounds must not follow var(--text*) (dark flips the
+   ink to near-white on light chips, 1.2:1). The segment buttons keep
+   their pinned #475569 ink (rule at .hud-segment-btn above); only the
+   panel TITLE and collapse toggle ride the muted token — both sit on
+   the panel surface, whose background and ink follow the tokens
+   together (allowed: both-sides rule). */
 .hud-panel-title,
-.hud-field-label,
-.hud-collapse-toggle,
-.hud-segment-btn {
+.hud-collapse-toggle {
   color: var(--text-muted);
 }
 
@@ -1577,3 +1586,34 @@ html[data-theme="dark"] body {
    grab cursor; an in-flight drag shows grabbing. */
 .editor-canvas.pan-armed { cursor: grab; }
 .editor-canvas.pan-dragging { cursor: grabbing; }
+
+/* -------------------- pkg 155 (issue #155): reduced motion -------------------- */
+
+/*
+ * Motion pass: honour the OS-level "Reduce motion" preference. Scope is
+ * intentionally tiny — the three decorative animations the app ships
+ * (splash bar slide, mode-transition veil, toast fade-in) stop animating;
+ * every functional interaction is unchanged. Net-new block only: no
+ * existing token or rule is redefined (safe against #126's :root swap).
+ * The JS-side gates live in src/shared/reducedMotion.ts.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .loading-splash-bar::after {
+    animation: none;
+  }
+  .hud-fade {
+    transition: none;
+  }
+  .hud-toast {
+    transition: none;
+  }
+}
+
+/* Keyboard focus ring for the canvas (pkg 155). Pointer users see
+ * nothing new — `.editor-canvas` keeps its `outline: none`; Tab users
+ * get a 2px ring drawn INSIDE the canvas box so it never clips. The
+ * accent token is consumed READ-ONLY here (never redefined). */
+.editor-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

@@ -135,6 +135,31 @@ async function bootSun(page: Page, query = ''): Promise<void> {
   await page.waitForTimeout(900);
 }
 
+/**
+ * Fold #146's docked panel around a luminance CAPTURE only (it overlays
+ * the right half of the viewport — the probe band — and its constant
+ * white chips damp the deltas these specs assert). Via evaluate: no
+ * focus theft, the slider keyboard flows stay intact.
+ */
+async function withPanelFolded(page: Page, capture: () => Promise<number>): Promise<number> {
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="hud-collapse-toggle"]');
+    if (btn instanceof HTMLElement && btn.getAttribute('aria-expanded') !== 'false') {
+      btn.click();
+    }
+  });
+  await page.waitForTimeout(120);
+  const value = await capture();
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="hud-collapse-toggle"]');
+    if (btn instanceof HTMLElement && btn.getAttribute('aria-expanded') === 'false') {
+      btn.click();
+    }
+  });
+  await page.waitForTimeout(120);
+  return value;
+}
+
 /** Two flushed animation frames — a state change must be ON SCREEN. */
 async function flushFrames(page: Page): Promise<void> {
   await page.evaluate(
@@ -247,7 +272,9 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     const before = await sunStats(page);
     const genBefore = await atlasGenerations(page);
     // The lit plan body: the post-cycle overview frames it centre-right.
-    const planBefore = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+    const planBefore = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
 
     // Keyboard-driven (the mouseless mandate): 12:00 → 08:00.
     await setTimeByKeyboard(page, 8);
@@ -266,7 +293,9 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
       before.ambientIntensity ?? 0,
     );
 
-    const planAfter = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+    const planAfter = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
     // The lit plan must have RE-RENDERED: the shadow atlas has
     // autoUpdate OFF, so needsUpdate must fire or the frame's shading
     // would stay frozen while the light object moves. (The sky dome is
@@ -354,7 +383,9 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     );
     await waitSeatedWalk(page);
     const genBefore = await atlasGenerations(page);
-    const interiorBefore = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+    const interiorBefore = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
 
     await page.keyboard.press('Tab'); // → overview
     await expect(page.getByTestId('hud-mode-segment-walk')).toHaveAttribute(
@@ -374,7 +405,9 @@ test.describe.serial('sun time-of-day + north offset (issue #121)', () => {
     );
     await waitSeatedWalk(page);
 
-    const interiorAfter = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+    const interiorAfter = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
     // Calibrated: noon → 08:00 moves the seated interior mean by ~49
     // luma (162 → 113); the no-change re-seat control reads 0.000, so
     // 20 is a ~2.5x-margin floor for "light colour visibly tracks".

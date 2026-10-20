@@ -68,6 +68,32 @@ async function boot(page: Page, file: string): Promise<void> {
   await page.waitForTimeout(900);
 }
 
+/**
+ * #146's docked panel overlays the RIGHT HALF of the viewport — the
+ * same area the luminance probes sample (its constant white chips
+ * dilute deltas and shift baselines). Around a CAPTURE only: fold the
+ * panel via its public reflection (no focus theft — setTime's slider
+ * keyboard flow and AC2's toggles rely on the panel being live).
+ */
+async function withPanelFolded(page: Page, capture: () => Promise<number>): Promise<number> {
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="hud-collapse-toggle"]');
+    if (btn instanceof HTMLElement && btn.getAttribute('aria-expanded') !== 'false') {
+      btn.click();
+    }
+  });
+  await page.waitForTimeout(120);
+  const value = await capture();
+  await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="hud-collapse-toggle"]');
+    if (btn instanceof HTMLElement && btn.getAttribute('aria-expanded') === 'false') {
+      btn.click();
+    }
+  });
+  await page.waitForTimeout(120);
+  return value;
+}
+
 async function seatWalk(page: Page): Promise<void> {
   // Blur first: with a slider focused, Tab just walks the HUD instead of
   // toggling the mode (sun.spec's toOverview idiom, applied here).
@@ -124,6 +150,10 @@ test('AC1 walk: the ceiling is overhead and the top band is not sky', async ({
 test('AC2 overview: ceilings stay hidden through roofs and walls toggles', async ({
   page,
 }) => {
+  // WebGL-heavy suite: under full-farm parallel load the 30 s default
+  // timed out while the same run passed solo (frame settles slower when
+  // the GPU is contended). Same allowance as the AC3 dusk leg.
+  test.setTimeout(60_000);
   await boot(page, 'demo/demo-townhouse.json');
 
   let s = await stats(page);
@@ -178,7 +208,9 @@ test('AC3 noon: the pool is hard off and the picture is unchanged', async ({
   expect(s.interiorLightIntensity).toBe(0);
   expect(s.litRoomCount).toBe(0);
 
-  const noon = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+  const noon = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
   console.log(`AC3_NOON_INTERIOR ${noon.toFixed(2)}`);
   // Parked lights contribute nothing: the frame matches the pre-change
   // CP0 baseline (the walk spawn is deterministic, so this is zero-slack).
@@ -201,7 +233,9 @@ test('AC3 dusk: 22:00 interiors are legible and the fill adds light', async ({
   expect(s.litRoomCount).toBeGreaterThan(0);
   expect(s.litRoomCount).toBeLessThanOrEqual(4);
 
-  const night = await regionLuminance(page, 0.5, 0.15, 0.5, 0.4);
+  const night = await withPanelFolded(page, () =>
+    regionLuminance(page, 0.5, 0.15, 0.5, 0.4),
+  );
   const delta = night - CP0_NIGHT_INTERIOR;
   console.log(
     `AC3_NIGHT_INTERIOR ${night.toFixed(2)} ` +

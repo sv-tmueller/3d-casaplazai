@@ -96,6 +96,7 @@ import {
   type SegmentAddress,
 } from './inspectorPanel';
 import { flashMessage, type EditorDomRefs } from './ui';
+import { trapFocus, type FocusTrap } from './popoverFocus';
 import { paintScene, paintSelectedSegmentOverlay, stairsOfActiveFloor as activeFloorStairs } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
@@ -841,9 +842,19 @@ export function initEditorInteraction(
    * commits through the SAME store commands the popovers use — no new
    * commands, no forked validation (errors surface via flashMessage).
    */
+  /**
+   * Pkg 155 (issue #155): error flashes announce ASSERTIVELY (screen
+   * readers interrupt) while routine notices keep the default polite
+   * channel. Every error call site funnels through this adapter — the
+   * inspector's flash callback is error-only.
+   */
+  function flashError(text: string): void {
+    flashMessage(refs, text, undefined, 'assertive');
+  }
+
   inspector = mountInspectorPanel(
     (cmd) => store.dispatch(cmd as Parameters<typeof store.dispatch>[0]),
-    (msg) => flashMessage(refs, msg),
+    (msg) => flashError(msg),
   );
   refs.inspectorDock.appendChild(inspector.root);
 
@@ -976,9 +987,28 @@ export function initEditorInteraction(
     if (masterCb) masterCb.checked = snapSettings.master;
   };
 
+  /** Focus trap + invoker for the open Snap popover (pkg 155). */
+  let snapTrap: FocusTrap | null = null;
   const setSnapPopoverOpen = (open: boolean): void => {
     refs.snapPopover.hidden = !open;
     refs.btnSnap.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) {
+      // Pkg 155: Snap used to focus NOTHING on open — land on the first
+      // control (the pitch radios) so the popover is keyboard-usable.
+      // FIX ROUND (tester finding 1): NOT while a draw gesture is in
+      // flight. "S" opens this popover mid-draw; a focus move here puts
+      // the canvas Escape handler out of reach, so the #94 guard below
+      // never sees a cancelled draft and the rect COMMITS on release.
+      // The popover still opens; focus-on-open resumes for idle opens.
+      snapTrap = trapFocus(refs.snapPopover, refs.btnSnap, {
+        focusInitial: !drawGestureInProgress(),
+      });
+    } else {
+      // EVERY close path (button, outside pointerdown, Escape) funnels
+      // through here, so the invoker restore is unconditional.
+      snapTrap?.release();
+      snapTrap = null;
+    }
   };
 
   refs.btnSnap.addEventListener("click", () => {
@@ -998,8 +1028,9 @@ export function initEditorInteraction(
     }
   });
 
-  // Outside click closes the popover (first-popover discipline: dumb
-  // listeners, no focus trap).
+  // Outside click closes the popover (dumb listeners; pkg 155 SUPERSEDES
+  // the old "no focus trap" note — the trap lives on the popover ELEMENT
+  // and these paths just funnel into the setter that releases it).
   document.addEventListener("pointerdown", (ev) => {
     if (refs.snapPopover.hidden) return;
     if (refs.snapPopover.contains(ev.target as Node)) return;
@@ -1022,6 +1053,11 @@ export function initEditorInteraction(
       ) {
         ev.stopPropagation();
         setSnapPopoverOpen(false);
+        // FIX ROUND (tester finding 1): a keyboard dismissal hands focus
+        // back to the invoker. release() only restores while focus sat
+        // INSIDE the popover — never true for a popover opened mid-draw,
+        // where focus deliberately stayed on the canvas.
+        refs.btnSnap.focus();
       }
     },
     true,
@@ -1084,12 +1120,24 @@ export function initEditorInteraction(
     refs.underlayHide.checked = u?.hidden ?? false;
   }
 
+  /** Focus trap + invoker for the open Underlay popover (pkg 155). */
+  let underlayTrap: FocusTrap | null = null;
   const setUnderlayPopoverOpen = (open: boolean): void => {
     refs.underlayPopover.hidden = !open;
     refs.btnUnderlay.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
       syncUnderlayControls();
-      refs.underlayOpacity.focus();
+      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
+      // as Snap — the popover opens, the draw gesture keeps the keyboard.
+      if (!drawGestureInProgress()) refs.underlayOpacity.focus();
+      // Pkg 155: trap Tab + remember the invoker. focusInitial=false
+      // keeps the existing slider-first focus above authoritative.
+      underlayTrap = trapFocus(refs.underlayPopover, refs.btnUnderlay, {
+        focusInitial: false,
+      });
+    } else {
+      underlayTrap?.release();
+      underlayTrap = null;
     }
   };
 
@@ -1113,19 +1161,19 @@ export function initEditorInteraction(
       try {
         dataUrl = await readFileAsDataUrl(file);
       } catch {
-        flashMessage(refs, 'Could not read the selected image.');
+        flashError('Could not read the selected image.');
         return;
       }
       // Reject non-images defensively (the accept filter is advisory).
       if (!/^data:image\/(?:png|jpeg|webp);base64,/.test(dataUrl)) {
-        flashMessage(refs, 'Unsupported image type — use PNG, JPG, or WebP.');
+        flashError('Unsupported image type — use PNG, JPG, or WebP.');
         return;
       }
       const aspect = await imageSize(dataUrl);
       // Fit the larger side to UNDERLAY_FIT_M preserving aspect ratio;
       // degenerate (zero-dimension) decodes are refused.
       if (aspect.w === 0 || aspect.h === 0) {
-        flashMessage(refs, 'That image could not be decoded.');
+        flashError('That image could not be decoded.');
         return;
       }
       const k = UNDERLAY_FIT_M / Math.max(aspect.w, aspect.h);
@@ -1244,6 +1292,8 @@ export function initEditorInteraction(
     underlaySelected = false;
   }
 
+  /** Focus trap + invoker for the open Floor popover (pkg 155). */
+  let floorTrap: FocusTrap | null = null;
   const setFloorPopoverOpen = (open: boolean): void => {
     refs.floorPopover.hidden = !open;
     refs.floorBadge.setAttribute("aria-expanded", open ? "true" : "false");
@@ -1253,8 +1303,21 @@ export function initEditorInteraction(
         store.getState().data.floors[store.getState().activeFloorIdx]?.name ??
         "";
       refs.floorRenameInput.value = name;
-      refs.floorRenameInput.focus();
-      refs.floorRenameInput.select();
+      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
+      // as Snap (focus AND selection together — the field is not focused
+      // mid-gesture, so a lone selection would be invisible state).
+      if (!drawGestureInProgress()) {
+        refs.floorRenameInput.focus();
+        refs.floorRenameInput.select();
+      }
+      // Pkg 155: trap Tab; focusInitial=false keeps the rename field's
+      // focus AND selection (typing straight away) authoritative.
+      floorTrap = trapFocus(refs.floorPopover, refs.floorBadge, {
+        focusInitial: false,
+      });
+    } else {
+      floorTrap?.release();
+      floorTrap = null;
     }
   };
 
@@ -1262,7 +1325,7 @@ export function initEditorInteraction(
   refs.btnNextFloor.addEventListener("click", () => switchFloor(1));
   refs.btnAddFloor.addEventListener("click", () => {
     const res = store.dispatch({ type: "addFloor" });
-    if (!res.ok) flashMessage(refs, res.error);
+    if (!res.ok) flashError(res.error);
   });
 
   // The badge doubles as the popover toggle (aria-expanded + popup).
@@ -1277,7 +1340,7 @@ export function initEditorInteraction(
       name: refs.floorRenameInput.value,
     });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
       return;
     }
     setFloorPopoverOpen(false);
@@ -1285,7 +1348,7 @@ export function initEditorInteraction(
 
   refs.btnDeleteFloor.addEventListener("click", () => {
     const res = store.dispatch({ type: "deleteFloor" });
-    if (!res.ok) flashMessage(refs, res.error);
+    if (!res.ok) flashError(res.error);
     else setFloorPopoverOpen(false);
   });
 
@@ -1376,13 +1439,30 @@ export function initEditorInteraction(
     refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
   }
 
+  /** Focus trap + invoker for the open Lean popover (pkg 155). */
+  let leanTrap: FocusTrap | null = null;
   const setLeanPopoverOpen = (open: boolean): void => {
     refs.leanPopover.hidden = !open;
     if (open) {
+      // Pkg 155: no toolbar button opens this popover (the L shortcut
+      // does), so the invoker is whatever held focus a moment ago — the
+      // canvas in practice. Captured BEFORE the radio focus below.
+      const previous = document.activeElement;
+      const invoker =
+        previous instanceof HTMLElement && previous !== document.body
+          ? previous
+          : refs.canvas;
       const firstRadio = refs.leanSegFieldset.querySelector<HTMLInputElement>(
         'input[name="lean-seg"]',
       );
-      firstRadio?.focus();
+      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
+      // as Snap — the draw gesture keeps the keyboard.
+      if (!drawGestureInProgress()) firstRadio?.focus();
+      // focusInitial=false keeps the first-radio focus above.
+      leanTrap = trapFocus(refs.leanPopover, invoker, { focusInitial: false });
+    } else {
+      leanTrap?.release();
+      leanTrap = null;
     }
   };
 
@@ -1425,7 +1505,7 @@ export function initEditorInteraction(
             leanDeg,
           });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
       return;
     }
     setLeanPopoverOpen(false);
@@ -1443,7 +1523,7 @@ export function initEditorInteraction(
       segmentIndex: si,
     });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
       return;
     }
     setLeanPopoverOpen(false);
@@ -1775,14 +1855,14 @@ export function initEditorInteraction(
       try {
         text = await file.text();
       } catch {
-        flashMessage(refs, "Could not read the selected file.");
+        flashError("Could not read the selected file.");
         return;
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
       } catch {
-        flashMessage(refs, "Not a valid JSON file.");
+        flashError("Not a valid JSON file.");
         return;
       }
       // migrate + validate DIRECTLY (NOT normalizeIncoming — it silently
@@ -1795,7 +1875,7 @@ export function initEditorInteraction(
       }
       const validated = validateFloorplan(migrated.data);
       if (!validated.ok) {
-        flashMessage(refs, `Import failed: ${validated.errors[0].message}`);
+        flashError(`Import failed: ${validated.errors[0].message}`);
         return;
       }
       // Success: the loadPlan sequence from editor/main.ts — swap the
@@ -1825,7 +1905,7 @@ export function initEditorInteraction(
         type: 'deleteEntities',
         ids: [...multiSelected],
       });
-      if (!res.ok) flashMessage(refs, res.error);
+      if (!res.ok) flashError(res.error);
       multiSelected.clear();
       refreshInspector();
       repaint();
@@ -2171,7 +2251,7 @@ export function initEditorInteraction(
       defs.headHeight,
     );
     if (err !== null) {
-      flashMessage(refs, openingErrorMessage(err, kind));
+      flashError(openingErrorMessage(err, kind));
       return;
     }
     // pkg 7.2: the notice diffs the ACTIVE floor's opening rows.
@@ -2187,7 +2267,7 @@ export function initEditorInteraction(
       headHeight: defs.headHeight,
     });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
       return;
     }
     const notice = openingCommitNotice(
@@ -2309,7 +2389,7 @@ export function initEditorInteraction(
       stepCount: stair.stepCount,
     });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
     } else {
       flashMessage(
         refs,
@@ -2489,7 +2569,7 @@ export function initEditorInteraction(
           OPENING_DEFAULTS[tool].sillHeight,
           OPENING_DEFAULTS[tool].headHeight,
         );
-        flashMessage(refs, openingErrorMessage(code ?? "UNKNOWN", tool));
+        flashError(openingErrorMessage(code ?? "UNKNOWN", tool));
       } else {
         flashMessage(refs, `Move closer to a wall to place the ${tool}.`);
       }
@@ -2524,7 +2604,7 @@ export function initEditorInteraction(
         footprint: [def.footprint[0], def.footprint[1]],
       });
       if (!res.ok) {
-        flashMessage(refs, res.error);
+        flashError(res.error);
       } else if (outcome.verdict === "warn") {
         flashMessage(
           refs,
@@ -3111,7 +3191,7 @@ export function initEditorInteraction(
       dragOpening = null;
       if (d.engaged) {
         if (d.lastErr !== null) {
-          flashMessage(refs, openingErrorMessage(d.lastErr, d.kind));
+          flashError(openingErrorMessage(d.lastErr, d.kind));
         }
         store.endGesture();
         ghost = null;
@@ -3164,7 +3244,7 @@ export function initEditorInteraction(
         type: "drawRoom",
         polygon: finalizeRectangle(phase.corner1, worldPt),
       });
-      if (!res.ok) flashMessage(refs, res.error);
+      if (!res.ok) flashError(res.error);
       phase = { tag: "idle" };
       repaint();
       return;
@@ -3587,7 +3667,7 @@ export function initEditorInteraction(
     }
     const res = store.dispatch({ type: "drawRoom", polygon: pts });
     if (!res.ok) {
-      flashMessage(refs, res.error);
+      flashError(res.error);
     }
     phase = { tag: "idle" };
     repaint();
