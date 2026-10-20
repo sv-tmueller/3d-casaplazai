@@ -121,6 +121,25 @@ export interface AdaptedScene {
    * stair-free plans — the walk rig then behaves exactly as before.
    */
   stairs: StairWalkSurface[];
+  /**
+   * Interior fill-light spots (issue #152): one per room, in plan order.
+   * Each is the room polygon's area-weighted centroid at the room's
+   * ceiling underside, in world meters. The controller hangs its light
+   * pool on the nearest MAX_INTERIOR_LIGHTS of them; rooms beyond the
+   * cap keep the existing ambient dusk boost.
+   */
+  roomLights: RoomLightSpot[];
+}
+
+/**
+ * A room's interior fill-light anchor (issue #152): plain world
+ * coordinates, so both the adapter (which emits them) and the pure
+ * selection helper (sun.ts) can speak them without three imports.
+ */
+export interface RoomLightSpot {
+  x: number;
+  y: number;
+  z: number;
 }
 
 /**

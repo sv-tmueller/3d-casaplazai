@@ -64,6 +64,27 @@ export const SUN_INTENSITY = 2.1;
 export const AMBIENT_COLOR = 0xffffff;
 export const AMBIENT_INTENSITY = 0.25;
 
+/* ---------------------------- interior lights ----------------------------- */
+
+/**
+ * Interior fill lights (issue #152): a fixed pool of soft, shadowless
+ * point lights, one per room, sitting just under the room's ceiling.
+ * Dusk-only — `interiorFillIntensity` parks the pool at zero in
+ * daylight, so the noon picture stays byte-identical to pre-#152.
+ */
+/** Pool cap. Rooms beyond it fall back to the existing ambient dusk boost. */
+export const MAX_INTERIOR_LIGHTS = 4;
+/** Full-dusk intensity, candela (three's physical point-light units).
+ *  Tuned against the CP0 walk probe: the 22:00 interior reads 117.6 luma
+ *  pre-change, so the pool adds ~a quarter-stop of warm light, not a sun. */
+export const INTERIOR_LIGHT_MAX_INTENSITY = 2;
+/** Warm-white tone: a slight amber tilt, matching the dusk haze. */
+export const INTERIOR_LIGHT_COLOR = 0xfff1dd;
+/** Extra drop below the ceiling underside so the slab never clips the light. */
+export const INTERIOR_LIGHT_Z_OFFSET_M = 0.12;
+/** Re-pick the nearest-N rooms every Nth walk tick (assignment throttle). */
+export const INTERIOR_LIGHTS_INTERVAL_TICKS = 5;
+
 /* --------------------------------- shadows -------------------------------- */
 
 /** Shadow map resolution, squared texels (HIGH quality only). */

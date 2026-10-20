@@ -152,7 +152,10 @@ function boot(initial: FloorplanData): Harness {
     toasts: () => [...scope().querySelectorAll<HTMLElement>('.hud-toast')],
     emptyStateEl: () =>
       scope().querySelector<HTMLElement>('[data-testid="hud-empty-state"]'),
-    toggle: () => scope().querySelector<HTMLButtonElement>('.hud-toggle')!,
+    // #146 renamed the single Walk toggle into the Overview/Walk segment;
+    // the Walk SEGMENT is the disabled-while-empty control (#148).
+    toggle: () =>
+      scope().querySelector<HTMLButtonElement>('[data-testid="hud-mode-segment-walk"]')!,
     stats: () => {
       const win = window as unknown as {
         __viewerStats?: () => { emptyState?: boolean; meshCount?: number; wallOpacity?: number | null };

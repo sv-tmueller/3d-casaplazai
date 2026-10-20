@@ -152,3 +152,80 @@ describe('adaptScene — synthetic fixtures', () => {
     expect(rawWallCount).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe('adaptScene — interior fill-light spots (issue #152)', () => {
+  const townhouseRaw: FloorplanData = parseValidatedPlan(
+    migrate(
+      JSON.parse(
+        readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8'),
+      ),
+    ).data,
+  );
+
+  /** Every floor's rooms — the townhouse has two storeys. */
+  function roomsOnAllFloors(plan: FloorplanData): Map<string, Room> {
+    return new Map(
+      plan.floors.flatMap((floor) =>
+        floor.rooms.map((r) => [r.id, r] as const),
+      ),
+    );
+  }
+
+  /** Independent shoelace centroid: the adapter's spot must match it. */
+  function polygonCentroid(polygon: Room['polygon']): [number, number] {
+    let area2 = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < polygon.length; i += 1) {
+      const p1 = polygon[i]!;
+      const p2 = polygon[(i + 1) % polygon.length]!;
+      const cross = p1[0] * p2[1] - p2[0] * p1[1];
+      area2 += cross;
+      cx += (p1[0] + p2[0]) * cross;
+      cy += (p1[1] + p2[1]) * cross;
+    }
+    return [cx / (3 * area2), cy / (3 * area2)];
+  }
+
+  /** Underside of a ceiling buffer: its minimum z, meters. */
+  function ceilingUnderside(positions: Float32Array): number {
+    let min = Infinity;
+    for (let i = 2; i < positions.length; i += 3) {
+      min = Math.min(min, positions[i]!);
+    }
+    return min;
+  }
+  it('demo: one spot per room, at the polygon centroid under its ceiling', () => {
+    const compiled = compilePlan(demoRaw);
+    const adapted = adaptScene(compiled, roomsById(demoRaw));
+    const rooms = demoRaw.floors[0]!.rooms;
+
+    expect(adapted.roomLights).toHaveLength(rooms.length);
+    rooms.forEach((room, i) => {
+      const spot = adapted.roomLights[i]!;
+      const [cx, cy] = polygonCentroid(room.polygon);
+      expect(spot.x).toBeCloseTo(cx, 9);
+      expect(spot.y).toBeCloseTo(cy, 9);
+      const meshes = compiled.rooms.find((r) => r.roomId === room.id)!;
+      expect(spot.z).toBeCloseTo(ceilingUnderside(meshes.ceiling.positions), 9);
+      // Above head height, below the slab top: an actual ceiling light.
+      expect(spot.z).toBeGreaterThan(2);
+      expect(spot.z).toBeLessThan(3);
+    });
+  });
+
+  it('townhouse: seven spots across both storeys, lifted with the floor', () => {
+    const compiled = compilePlan(townhouseRaw);
+    const adapted = adaptScene(compiled, roomsOnAllFloors(townhouseRaw));
+    const groundCount = townhouseRaw.floors[0]!.rooms.length;
+
+    expect(adapted.roomLights).toHaveLength(
+      townhouseRaw.floors.flatMap((floor) => floor.rooms).length,
+    );
+    const ground = adapted.roomLights.slice(0, groundCount).map((s) => s.z);
+    const upper = adapted.roomLights.slice(groundCount).map((s) => s.z);
+    expect(upper.length).toBeGreaterThan(0);
+    // A storey apart: every upstairs spot sits above the ground ones.
+    expect(Math.min(...upper)).toBeGreaterThan(Math.max(...ground) + 2);
+  });
+});
