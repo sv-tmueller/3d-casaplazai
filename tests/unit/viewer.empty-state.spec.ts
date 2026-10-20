@@ -94,7 +94,7 @@ interface Harness {
   toasts: () => HTMLElement[];
   emptyStateEl: () => HTMLElement | null;
   toggle: () => HTMLButtonElement;
-  stats: () => { emptyState?: boolean };
+  stats: () => { emptyState?: boolean; meshCount?: number; wallOpacity?: number | null };
   dispose: () => void;
 }
 
@@ -155,7 +155,7 @@ function boot(initial: FloorplanData): Harness {
     toggle: () => scope().querySelector<HTMLButtonElement>('.hud-toggle')!,
     stats: () => {
       const win = window as unknown as {
-        __viewerStats?: () => { emptyState?: boolean };
+        __viewerStats?: () => { emptyState?: boolean; meshCount?: number; wallOpacity?: number | null };
       };
       return win.__viewerStats?.() ?? {};
     },
@@ -217,6 +217,10 @@ describe('viewer empty-plan state (issue #148)', () => {
     expect(h.toasts()).toHaveLength(0);
     expect(h.toggle().disabled).toBe(true);
     expect(h.stats().emptyState).toBe(true);
+    // The backdrop is scenery, not a plan: plan-parity probes must keep
+    // reading as "nothing composed" (e2e boot waits gate on meshCount).
+    expect(h.stats().meshCount).toBe(0);
+    expect(h.stats().wallOpacity).toBeNull();
     expect(h.app.currentSignature()).toBeNull();
   });
 

@@ -137,6 +137,31 @@ export function isEmptyPlan(plan: FloorplanData): boolean {
 }
 
 /**
+ * Not-composed readings for the plan-parity probes (issue #148). While
+ * the empty state is up the scene holds the sky/ground backdrop — scenery,
+ * NOT a plan — so `__viewerStats` reports exactly what it reported before
+ * any plan was composed: no meshes, no slots, null wall/roof, −1
+ * roughness. The e2e waits gate on `meshCount > 0`, so this keeps that
+ * predicate meaning "the real plan is on screen" instead of latching onto
+ * the backdrop at boot. Live-only channels (quality, frame median, sun
+ * pose, atlas generations) are never masked.
+ */
+const EMPTY_VIEWER_STATS = {
+  meshCount: 0,
+  slotCount: 0,
+  glassQuadCount: 0,
+  furnitureVolumeCount: 0,
+  roofTriangleCount: 0,
+  texturedSlotCount: 0,
+  glassRoughness: -1,
+  wallRoughness: -1,
+  roofOpacity: null,
+  roofVisible: null,
+  wallOpacity: null,
+  wallVisible: null,
+};
+
+/**
  * The viewer application controller. Instantiate once per page; call
  * dispose() on teardown.
  */
@@ -614,6 +639,18 @@ export class ViewerApp {
   private exitEmptyState(): boolean {
     if (!this.emptyStateActive) return false;
     this.emptyStateActive = false;
+
+    // The backdrop rig is display-only scenery, not the plan's camera.
+    // Tear it down (and drop the azimuth it carried), so the first real
+    // plan re-seats from the cold-boot path — otherwise the backdrop's
+    // plot-derived pose leaks into the plan's overview framing.
+    this.rig?.deactivate();
+    this.orbitCam = null;
+    this.walkCam = null;
+    this.rig = null;
+    this.phase = 'overview';
+    this.preservedAzimuth = undefined;
+
     setEmptyState(this.hud, false);
     setWalkDisabled(this.hud, false);
     reflectMode(this.hud, this.phase as ViewMode);
@@ -1032,6 +1069,9 @@ export class ViewerApp {
       // Empty-plan state (issue #148): true while the sky/ground
       // backdrop + prompt stand in for the scene (fresh-profile probe).
       emptyState: this.emptyStateActive,
+      // No plan composed (issue #148): applied LAST so the mask wins over
+      // the live reads above while the backdrop stands in for a plan.
+      ...(this.emptyStateActive ? EMPTY_VIEWER_STATS : {}),
       // Shadow-atlas generations (#121 fix round): without this, a
       // frozen refresh is only visible as a few-percent pixel delta —
       // far inside the screenshot noise. A deleted needsUpdate parks
