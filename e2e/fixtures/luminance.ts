@@ -1,7 +1,9 @@
 /**
  * Shared e2e luminance probe (issue #121): moved out of
  * e2e/viewer.spec.ts UNCHANGED so the sun spec and the issue-#86
- * lighting spec decode canvas PNGs with the same code.
+ * lighting spec decode canvas PNGs with the same code. The decode is
+ * split out (captureRegion) so the #152 ceilings spec can read the mean
+ * RGB too — hue, not just brightness, separates a lit ceiling from sky.
  */
 
 import type { Page } from '@playwright/test';
@@ -14,13 +16,25 @@ import { inflateSync } from 'node:zlib';
  * IOSurface canvases on several stacks, so the pixels must come from
  * the outside. The PNG is decoded with node:zlib (stdlib only).
  */
-export async function regionLuminance(
+/** Canvas RGB raster plus the clamped fractional probe rect. */
+interface CanvasRegion {
+  raster: Buffer;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Screenshot + zlib-decode the GL canvas, then clamp the probe rect. */
+async function captureRegion(
   page: Page,
   fx: number,
   fy: number,
   fw: number,
   fh: number,
-): Promise<number> {
+): Promise<CanvasRegion> {
   const shot = await page
     .locator('.viewer-gl-canvas')
     .screenshot({ type: 'png' });
@@ -80,18 +94,36 @@ export async function regionLuminance(
     prev = line;
   }
 
-  // Average Rec.601 luma over the requested fractional rect.
+  // Clamp the requested fractional rect to the decoded raster.
   const sx = Math.floor(w * fx);
   const sy = Math.floor(h * fy);
   const rw = Math.max(1, Math.floor(w * fw));
   const rh = Math.max(1, Math.floor(h * fh));
+  return { raster, width: w, height: h, x: sx, y: sy, w: rw, h: rh };
+}
+
+/**
+ * Mean perceptual luminance (0..255) over a fractional rect of the GL
+ * canvas (see the fixture header: the pixels come from outside the page).
+ */
+export async function regionLuminance(
+  page: Page,
+  fx: number,
+  fy: number,
+  fw: number,
+  fh: number,
+): Promise<number> {
+  const region = await captureRegion(page, fx, fy, fw, fh);
   let sum = 0;
   let px = 0;
-  for (let y = sy; y < Math.min(sy + rh, h); y++) {
-    for (let x = sx; x < Math.min(sx + rw, w); x++) {
-      const i = (y * w + x) * 3;
-      sum += 0.299 * raster[i] + 0.587 * raster[i + 1] + 0.114 * raster[i + 2];
-      px++;
+  for (let y = region.y; y < Math.min(region.y + region.h, region.height); y++) {
+    for (let x = region.x; x < Math.min(region.x + region.w, region.width); x++) {
+      const i = (y * region.width + x) * 3;
+      sum +=
+        0.299 * region.raster[i] +
+        0.587 * region.raster[i + 1] +
+        0.114 * region.raster[i + 2];
+      px += 1;
     }
   }
   return px > 0 ? sum / px : -1;
@@ -116,6 +148,11 @@ export async function regionLuminance(
  * motion or capture timing.
  */
 export async function regionCarriesCanvasPixels(
+ * Mean RGB channels (0..255) over the same rect (issue #152). The ceiling
+ * probe needs the hue, not just the brightness: sky reads b ≫ r through a
+ * hole in the roof, a lit ceiling reads neutral-to-warm.
+ */
+export async function regionMeanRgb(
   page: Page,
   fx: number,
   fy: number,
@@ -146,4 +183,22 @@ async function hideCanvas(page: Page, hidden: boolean): Promise<void> {
     }
   }, hidden);
   await page.waitForTimeout(150);
+): Promise<{ r: number; g: number; b: number }> {
+  const region = await captureRegion(page, fx, fy, fw, fh);
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let px = 0;
+  for (let y = region.y; y < Math.min(region.y + region.h, region.height); y++) {
+    for (let x = region.x; x < Math.min(region.x + region.w, region.width); x++) {
+      const i = (y * region.width + x) * 3;
+      r += region.raster[i];
+      g += region.raster[i + 1];
+      b += region.raster[i + 2];
+      px += 1;
+    }
+  }
+  return px > 0
+    ? { r: r / px, g: g / px, b: b / px }
+    : { r: -1, g: -1, b: -1 };
 }

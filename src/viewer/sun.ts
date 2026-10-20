@@ -24,13 +24,14 @@
 
 import {
   AMBIENT_DUSK_BOOST_MAX,
+  INTERIOR_LIGHT_MAX_INTENSITY,
   SUN_AZ_NOON_DEG,
   SUN_EL_NOON_RAD,
   SUN_NIGHT_ELEV_MIN_DEG,
   SUN_NIGHT_INTENSITY_FLOOR,
   SUN_PATH_RADIUS_M,
 } from './renderConstants';
-import type { SunSettings } from './types';
+import type { RoomLightSpot, SunSettings } from './types';
 
 /** Default sun settings — the pre-#121 noon perch. */
 export const DEFAULT_SUN_SETTINGS: SunSettings = {
@@ -137,4 +138,42 @@ export function sunState(settings: SunSettings): SunState {
     ambientFactor: 1 + AMBIENT_DUSK_BOOST_MAX * (1 - progress),
     duskBlend: 1 - progress,
   };
+}
+
+/* ------------------------------ interior fill ----------------------------- */
+
+/**
+ * Interior fill-light intensity for a dusk blend (issue #152): zero from
+ * sunrise through noon — the daylight shot renders exactly as before —
+ * ramping to the pool maximum as progress → 0 (full night). Pure.
+ */
+export function interiorFillIntensity(duskBlend: number): number {
+  const blend = clamp(duskBlend, 0, 1);
+  // Snap the daylight plateau (and any float dust) to a hard off: the
+  // pool's park condition is `<= 0`, and AC3 pins an exact zero at noon.
+  return blend <= 0.001 ? 0 : INTERIOR_LIGHT_MAX_INTENSITY * blend;
+}
+
+/**
+ * The nearest `maxCount` room spots to a walker eye, nearest first
+ * (issue #152). Distance is 3D on purpose: an upstairs walker must not
+ * light the room below it THROUGH the slab. Ties break on plan order,
+ * so a stationary eye re-picks the same rooms every throttled tick (no
+ * flicker between equally close rooms). Pure — no three, no state.
+ */
+export function selectNearestRoomLights(
+  spots: readonly RoomLightSpot[],
+  eye: RoomLightSpot,
+  maxCount: number,
+): RoomLightSpot[] {
+  return spots
+    .map((spot, index) => ({
+      spot,
+      index,
+      d2:
+        (spot.x - eye.x) ** 2 + (spot.y - eye.y) ** 2 + (spot.z - eye.z) ** 2,
+    }))
+    .sort((a, b) => a.d2 - b.d2 || a.index - b.index)
+    .slice(0, Math.max(0, maxCount))
+    .map((entry) => entry.spot);
 }

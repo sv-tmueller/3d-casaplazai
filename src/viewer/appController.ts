@@ -11,10 +11,12 @@
 
 import {
   PerspectiveCamera,
+  PointLight,
   Raycaster,
   Vector3,
   WebGLRenderer,
   type Camera,
+  type Group,
   type Mesh,
   type MeshStandardMaterial,
 } from 'three';
@@ -53,6 +55,10 @@ import { OrbitRig } from './orbitMode';
 import { setMaxAnisotropy } from './materials';
 import { isHighQuality } from './quality';
 import {
+  INTERIOR_LIGHT_COLOR,
+  INTERIOR_LIGHTS_INTERVAL_TICKS,
+  INTERIOR_LIGHT_Z_OFFSET_M,
+  MAX_INTERIOR_LIGHTS,
   ROOFS_FADE_MIN_OPACITY,
   ROOFS_FADE_RATE_PER_S,
   ROOFS_RAYCAST_FAR_M,
@@ -70,13 +76,16 @@ import {
 } from './sceneBuilder';
 import {
   DEFAULT_SUN_SETTINGS,
+  interiorFillIntensity,
   normalizeBearingDeg,
   normalizeSunSettings,
+  selectNearestRoomLights,
 } from './sun';
 import {
   RECOMPILE_DEBOUNCE_MS,
   type AdaptedScene,
   type CameraRig,
+  type RoomLightSpot,
   type SunSettings,
   type ViewMode,
 } from './types';
@@ -205,6 +214,22 @@ export class ViewerApp {
   /** Walls-transparency slider (issue #120): unbind + normalized state. */
   private unbindWallsAlpha: (() => void) | null = null;
   private wallsAlpha = 0;
+
+  /**
+   * Interior fill lights (issue #152): a FIXED pool of shadowless point
+   * lights, at most MAX_INTERIOR_LIGHTS of them, created once per scene
+   * build. Lights are only ever MOVED (position + intensity) — adding or
+   * removing one re-compiles every material in the scene.
+   */
+  private roomLightSpots: readonly RoomLightSpot[] = [];
+  private interiorLights: PointLight[] = [];
+  /** Dusk-derived pool level (0 while the sun is up); see paintSun. */
+  private interiorFillLevel = 0;
+  /** Pool lights currently carrying a room (stats + AC3 probe). */
+  private interiorAssigned = 0;
+  /** Forces the next walk frame to re-pick the nearest rooms. */
+  private interiorAssignDirty = true;
+  private interiorTick = 0;
 
   /** Sun/time-of-day settings (issue #121); defaults = the noon perch. */
   private sunSettings: SunSettings = { ...DEFAULT_SUN_SETTINGS };
@@ -412,6 +437,10 @@ export class ViewerApp {
       this.walkCam = this.makeWalkRig(adapted);
       this.rig = this.walkCam;
       this.phase = 'walk';
+      // Ceilings policy (#152): the walker is inside the building, so the
+      // slats overhead are visible again (fresh meshes arrive visible;
+      // this re-shows them after an overview spell).
+      this.setCeilingsVisible(true);
       showHint(this.hud, 'Click to walk');
       // Issue #30: prompt for entry; reticle comes up on lock.
       setWalkAffordances(this.hud, { overlay: true, reticle: false });
@@ -428,6 +457,10 @@ export class ViewerApp {
       this.orbitCam = this.makeOrbitRig(adapted);
       this.rig = this.orbitCam;
       this.phase = 'overview';
+      // Ceilings policy (#152): the dollhouse overview never shows the
+      // ceiling lid — roofs/upper-storey slabs are the overview lid, and
+      // hiding the slats is what lets the top-down camera see inside.
+      this.setCeilingsVisible(false);
       // Exiting walk lifts any autofade: overview spectators always see
       // the roofs at full opacity (manual-hide via the HUD still works).
       for (const mesh of this.roofMeshes()) {
@@ -685,6 +718,15 @@ export class ViewerApp {
     // and the scene honest after every rebuild (no schema coupling).
     this.setWallsAlpha(0);
 
+    // Interior fill lights (#152): the rebuild disposed the old pool with
+    // the old light group, so stand a fresh fixed-size pool up against the
+    // fresh spots. Fresh meshes also arrive VISIBLE, so the ceiling policy
+    // must be re-applied to them (issue #152) — and the fill level carries
+    // over from the sun settings that paintSun() just rewired.
+    this.roomLightSpots = adapted.roomLights;
+    this.rebuildInteriorLightPool(rebuilt.lightGroup);
+    this.setCeilingsVisible(this.phase === 'walk');
+
     // Reframe/refoot whatever rig is live against the new geometry.
     if (this.orbitCam) this.orbitCam.reframe(adapted);
     if (this.walkCam) this.respawnIfNeeded(adapted);
@@ -840,6 +882,125 @@ export class ViewerApp {
     }
   }
 
+  /* ------------------- ceilings visibility (issue #152) -------------------- */
+
+  /** Ceiling-slot meshes of the live scene (ONE merged mesh typically). */
+  private ceilingMeshes(): Mesh[] {
+    const roots = this.sceneRoot?.meshes ?? [];
+    return roots.filter((m) => m.userData.slot === 'ceiling');
+  }
+
+  /**
+   * Ceilings visibility policy (issue #152, sub-plan ruling): ceilings are
+   * visible IFF the walk phase is live. The overview hides them
+   * unconditionally — the issue's literal "hidden while roofs are hidden
+   * or walls are translucent" clause folds into that, because the roof
+   * planes (or the upper-storey floor slabs on roofs-free plans) already
+   * act as the overview lid, so the dollhouse reading survives every
+   * roofs/walls combination. Idempotent: safe after any rebuild.
+   */
+  private setCeilingsVisible(visible: boolean): void {
+    for (const mesh of this.ceilingMeshes()) mesh.visible = visible;
+  }
+
+  /** First ceiling-slot mesh's live visibility (e2e probe, #152). */
+  private ceilingProbe(): boolean | null {
+    const mesh = this.ceilingMeshes()[0];
+    return mesh ? mesh.visible : null;
+  }
+
+  /* -------------------- interior fill lights (issue #152) ------------------ */
+
+  /**
+   * Stand up the interior fill pool for a fresh scene build. Fixed size
+   * for the life of the scene — a light-count change re-compiles every
+   * material — so the pool holds at most MAX_INTERIOR_LIGHTS point lights
+   * and each one is only ever MOVED afterwards. The lights ride in the
+   * scene's light group, so the rebuild path disposes them with the rest
+   * of the rig and this runs again for the new scene.
+   */
+  private rebuildInteriorLightPool(group: Group): void {
+    this.interiorLights = [];
+    this.interiorAssigned = 0;
+    this.interiorAssignDirty = true;
+    const count = Math.min(MAX_INTERIOR_LIGHTS, this.roomLightSpots.length);
+    for (let i = 0; i < count; i += 1) {
+      // Shadowless and soft: a dusk fill, not a second sun. Intensity
+      // stays 0 until the first walk tick assigns it a room — and at noon
+      // the pool stays parked, so the daylight shot is untouched.
+      const light = new PointLight(INTERIOR_LIGHT_COLOR, 0);
+      light.name = `interior-fill-${i}`;
+      light.castShadow = false;
+      group.add(light);
+      this.interiorLights.push(light);
+    }
+  }
+
+  /**
+   * Fold the dusk blend into the pool level (issue #152). Zero from
+   * sunrise to sundown: nothing lights up until the sky starts to dim, so
+   * AC3's noon half reads the pre-change picture.
+   */
+  private applyInteriorFillLevel(duskBlend: number): void {
+    this.interiorFillLevel = interiorFillIntensity(duskBlend);
+    this.interiorAssignDirty = true;
+  }
+
+  /**
+   * Interior fill pump (#152), one call per rendered frame. Walk-only and
+   * throttled: overview (and daylight) parks the whole pool at zero, and
+   * while walking the pool re-picks the nearest MAX_INTERIOR_LIGHTS rooms
+   * every INTERIOR_LIGHTS_INTERVAL_TICKS frames. Selection is 3D, so an
+   * upstairs walker never lights the room below it through the slab;
+   * rooms beyond the cap keep the existing ambient dusk boost.
+   */
+  private updateInteriorLights(): void {
+    const pool = this.interiorLights;
+    if (pool.length === 0) return;
+
+    if (this.phase !== 'walk' || this.interiorFillLevel <= 0) {
+      // Parked: the dollhouse has no person-space interior, and the
+      // daylight half of the day needs no fill.
+      for (const light of pool) light.intensity = 0;
+      this.interiorAssigned = 0;
+      this.interiorAssignDirty = true;
+      return;
+    }
+
+    this.interiorTick += 1;
+    const due =
+      this.interiorAssignDirty ||
+      this.interiorTick % INTERIOR_LIGHTS_INTERVAL_TICKS === 0;
+    if (!due) return;
+    this.interiorAssignDirty = false;
+
+    const eye = this.walkCam?.eyePosition ?? { x: 0, y: 0, z: 0 };
+    const spots = selectNearestRoomLights(
+      this.roomLightSpots,
+      eye,
+      pool.length,
+    );
+    for (let i = 0; i < pool.length; i += 1) {
+      const light = pool[i]!;
+      const spot = spots[i];
+      if (spot === undefined) {
+        light.intensity = 0;
+        continue;
+      }
+      light.position.set(spot.x, spot.y, spot.z - INTERIOR_LIGHT_Z_OFFSET_M);
+      light.intensity = this.interiorFillLevel;
+    }
+    this.interiorAssigned = spots.length;
+  }
+
+  /** Max live pool intensity (e2e probe, #152). */
+  private interiorIntensity(): number {
+    return this.interiorLights.reduce(
+      (max, light) => Math.max(max, light.intensity),
+      0,
+    );
+  }
+
   /* --------------------- sun affordances (issue #121) ---------------------- */
 
   /**
@@ -868,6 +1029,10 @@ export class ViewerApp {
     if (!root) return;
     const state = applySunPose(root.lights, this.sunSettings, adapted.bounds);
     applySkyDusk(root.skyDome, state.duskBlend);
+    // Interior fill lights (#152): the pool level rides the same dusk
+    // blend the sky dome uses, so the fill fades in exactly as the sky
+    // dims. Zero while the sun is up — the daylight shot stays untouched.
+    this.applyInteriorFillLevel(state.duskBlend);
     if (this.hiQuality && this.renderer) {
       this.renderer.shadowMap.needsUpdate = true;
     }
@@ -943,6 +1108,7 @@ export class ViewerApp {
 
       this.rig?.update(dt);
       this.updateRoofAutofade(dt);
+      this.updateInteriorLights();
       if (this.perf.panel && dtMs > 0) this.perf.record(dtMs);
 
       const camera = this.liveCamera();
@@ -1062,6 +1228,20 @@ export class ViewerApp {
       // the plan carries no wall slot at all.
       wallOpacity: this.wallProbe()?.opacity ?? null,
       wallVisible: this.wallProbe()?.visible ?? null,
+      // Ceilings policy probes (#152): how many ceiling-slot meshes the
+      // build emitted, and the live visibility of the merged one (null
+      // only when the plan carries no ceiling slot at all).
+      ceilingMeshCount: this.ceilingMeshes().length,
+      ceilingVisible: this.ceilingProbe(),
+      // Interior fill probes (#152): the pool's live maximum intensity
+      // (0 while parked — overview, and the whole daylight half of the
+      // day) and how many rooms it currently lights (≤ MAX_INTERIOR_LIGHTS).
+      interiorLightIntensity: this.interiorIntensity(),
+      litRoomCount: this.interiorAssigned,
+      // Geometry budget (#152 AC4): adapter triangles, straight off the
+      // last accepted build. The fill-light work adds no geometry, so
+      // this pin is what says the triangle count did not move.
+      totalTriangleCount: this.lastGood?.adapted.triangleCount ?? 0,
       // Sun/time-of-day probes (#121): the LIVE directional-light pose
       // (bearing/elevation derived from position − target) plus the
       // current intensities — the AC1/AC2/AC3 e2e channel.

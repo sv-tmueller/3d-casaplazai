@@ -25,6 +25,7 @@ import type {
   CollisionBox,
   MaterialBucket,
   MaterialSlotId,
+  RoomLightSpot,
   StairWalkSurface,
 } from './types';
 
@@ -104,6 +105,51 @@ function avgCoordinate(positions: Float32Array, axis: number): number {
     sum += positions[i * 3 + axis];
   }
   return n === 0 ? 0 : sum / n;
+}
+
+/**
+ * Interior fill-light anchor for one room (issue #152), world meters.
+ *
+ * x/y are the area-weighted polygon centroid (shoelace; the schema pins
+ * rooms CCW, so the signed weights are positive) and z is the ceiling
+ * underside — the min-z of the room's ceiling buffer, which is the slab
+ * face the light hangs below. Degenerate inputs (no polygon, zero-area
+ * polygon, empty buffer) fall back to the ceiling-buffer coordinate mean,
+ * so the emitted spot is always finite and the plan order stays stable.
+ */
+function roomLightSpot(
+  ceiling: MeshBuffer,
+  polygon: Room['polygon'] | undefined,
+): RoomLightSpot {
+  const positions = ceiling.positions;
+  let minZ = Infinity;
+  for (let i = 2; i < positions.length; i += 3) {
+    minZ = Math.min(minZ, positions[i]!);
+  }
+  const z = Number.isFinite(minZ) ? minZ : 0;
+
+  if (polygon !== undefined && polygon.length >= 3) {
+    let area2 = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < polygon.length; i += 1) {
+      const [x1, y1] = polygon[i]!;
+      const [x2, y2] = polygon[(i + 1) % polygon.length]!;
+      const cross = x1 * y2 - x2 * y1;
+      area2 += cross;
+      cx += (x1 + x2) * cross;
+      cy += (y1 + y2) * cross;
+    }
+    if (area2 !== 0) {
+      return { x: cx / (3 * area2), y: cy / (3 * area2), z };
+    }
+  }
+
+  return {
+    x: avgCoordinate(positions, 0),
+    y: avgCoordinate(positions, 1),
+    z,
+  };
 }
 
 /* --------- coplanar wall-span overlap resolution (issue #45) ------------- */
@@ -309,14 +355,20 @@ export function adaptScene(
   const wallBufs: MeshBuffer[] = [];
   const ceilBufs: MeshBuffer[] = [];
   const floorByTex = new Map<MaterialSlotId, MeshBuffer[]>();
+  // Interior fill-light anchors (issue #152): one per room, emitted in
+  // the plan order this loop already walks — deterministic, which keeps
+  // the controller's distance tie-break stable.
+  const roomLights: RoomLightSpot[] = [];
 
   for (const roomMeshes of compiled.rooms) {
-    const tex = roomsById.get(roomMeshes.roomId)?.floorTexture ?? null;
+    const room = roomsById.get(roomMeshes.roomId);
+    const tex = room?.floorTexture ?? null;
     const slot: MaterialSlotId = tex ?? 'concrete';
     const arr = floorByTex.get(slot) ?? [];
     arr.push(roomMeshes.floor);
     floorByTex.set(slot, arr);
     ceilBufs.push(roomMeshes.ceiling);
+    roomLights.push(roomLightSpot(roomMeshes.ceiling, room?.polygon));
     wallBufs.push(...dedupeWalls(roomMeshes.walls));
   }
 
@@ -551,6 +603,7 @@ export function adaptScene(
     bounds: { minX, minY, maxX, maxY },
     activeFloorElevation,
     stairs,
+    roomLights,
   };
 }
 
