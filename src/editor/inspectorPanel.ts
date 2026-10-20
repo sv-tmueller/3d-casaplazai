@@ -149,7 +149,18 @@ function numberField(
   body.appendChild(wrap);
 
   let lastCommitted = value;
+  // FIX ROUND (issue #145, finding 2): a commit re-enters this panel
+  // SYNCHRONOUSLY — dispatch → notify → refreshInspector → render()
+  // rebuilds the body under the focused field, and Chrome fires one
+  // trailing `change` on the way out, BEFORE the latch below is set.
+  // That re-entrant run() then read a STALE lastCommitted and dispatched
+  // the SAME edit a second time: one user edit, two undo steps — and the
+  // extra snapshot was captured POST-edit, so the first Ctrl+Z looked
+  // like a no-op. Commits are synchronous, so nothing genuine can be
+  // in flight while one runs; the latch makes the re-entrant run a no-op.
+  let committing = false;
   const run = (): void => {
+    if (committing) return;
     const parsed = Number(input.value);
     if (!Number.isFinite(parsed)) {
       flash(parseError);
@@ -159,7 +170,12 @@ function numberField(
     // Equal-to-last skips the duplicate dispatch Enter+change would
     // otherwise produce (two undo steps for one edit).
     if (parsed === lastCommitted) return;
-    if (commit(parsed)) lastCommitted = parsed;
+    committing = true;
+    try {
+      if (commit(parsed)) lastCommitted = parsed;
+    } finally {
+      committing = false;
+    }
   };
   input.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') {
@@ -203,7 +219,13 @@ function textField(
   body.appendChild(wrap);
 
   let lastCommitted = value;
+  // Same re-entrancy latch as numberField (see the comment there): the
+  // commit's synchronous re-render fires a trailing `change` before the
+  // latch below is set, and the duplicate rename would burn TWO undo
+  // steps for one edit — with the extra snapshot captured POST-edit.
+  let committing = false;
   const run = (): void => {
+    if (committing) return;
     const next = input.value.trim();
     if (next === '') {
       flash(emptyError);
@@ -213,7 +235,12 @@ function textField(
     // Equal-to-last skips the duplicate dispatch Enter+change would
     // otherwise produce (two undo steps for one edit).
     if (next === lastCommitted) return;
-    if (commit(next)) lastCommitted = next;
+    committing = true;
+    try {
+      if (commit(next)) lastCommitted = next;
+    } finally {
+      committing = false;
+    }
   };
   input.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') {
