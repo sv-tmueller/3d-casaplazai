@@ -370,12 +370,29 @@ function vertexAverage(poly: Vec2[]): Vec2 {
 }
 
 /**
+ * Coincidence-match epsilon (clause (d) of roomsOverlap, issue #140):
+ * a vertex perturbed by up to this distance still counts as the SAME
+ * vertex of a coincident footprint. Aligned with the SAT-touch EPSILON
+ * convention (1e-9) rather than the picometre-scale OVERLAP_EPS below —
+ * a stacked twin with one vertex nudged by ≥1e-12 m (picometre jitter,
+ * unreachable through the UI today but cheap to forgive) previously
+ * escaped coincidence detection, and with clauses (a)-(c) blind to
+ * near-coincidence (everything sits ON the boundary — contact, not
+ * overlap) it leaked a phantom cross-storey row. RESIDUAL WINDOW,
+ * honestly: perturbations STRICTLY BETWEEN 1e-9 and whatever
+ * displacement (a)-(c) can see remain undetected at ANY finite epsilon
+ * — shrinking the window further trades false positives (distinct
+ * nearby rooms misread as twins) against a nanometre gap that no
+ * float-coordinate input path can produce.
+ */
+const COINCIDE_EPS = 1e-9;
+
+/**
  * Overlap-guard epsilon: a distance (or orientation determinant)
  * below this scale counts as ON the line — boundary CONTACT, not
- * interior overlap. Same 1e-12 order as denominatorZero; deliberately
- * NOT PAIR_TOLERANCE_M (a centimetre-scale guard would make boundary
- * contact indistinguishable from a wall genuinely drawn into the
- * neighbouring room).
+ * interior overlap. Deliberately NOT PAIR_TOLERANCE_M (a centimetre-
+ * scale guard would make boundary contact indistinguishable from a
+ * wall genuinely drawn into the neighbouring room).
  */
 const OVERLAP_EPS = 1e-12;
 
@@ -456,7 +473,9 @@ function segmentProbesInterior(p: Vec2, q: Vec2, poly: Vec2[]): boolean {
 /**
  * True when both polygons describe the same footprint: equal vertex
  * counts with a one-to-one correspondence of vertices within
- * OVERLAP_EPS (start vertex and winding are irrelevant).
+ * COINCIDE_EPS (issue #140: widened from OVERLAP_EPS so picometre-
+ * scale vertex jitter on a stacked twin still counts as coincidence;
+ * start vertex and winding are irrelevant).
  */
 function polygonsCoincide(polyA: Vec2[], polyB: Vec2[]): boolean {
   if (polyA.length !== polyB.length) return false;
@@ -466,8 +485,8 @@ function polygonsCoincide(polyA: Vec2[], polyB: Vec2[]): boolean {
     for (let j = 0; j < polyB.length; j += 1) {
       if (
         !matched[j] &&
-        Math.abs(v[0] - polyB[j][0]) <= OVERLAP_EPS &&
-        Math.abs(v[1] - polyB[j][1]) <= OVERLAP_EPS
+        Math.abs(v[0] - polyB[j][0]) <= COINCIDE_EPS &&
+        Math.abs(v[1] - polyB[j][1]) <= COINCIDE_EPS
       ) {
         matched[j] = true;
         hit = true;

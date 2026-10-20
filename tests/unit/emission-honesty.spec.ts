@@ -240,3 +240,108 @@ describe('#112 fix round: stacked coincident footprints (townhouse)', () => {
     expect(rows.map((r) => r.roomId).sort()).toEqual(['room-kitchen', 'room-living']);
   });
 });
+
+describe('#140: coincidence epsilon widened to 1e-9 (boundary pin)', () => {
+  // Clause (d) used OVERLAP_EPS (1e-12): a coincident stacked twin with
+  // one vertex perturbed by >=1e-12 m escaped coincidence detection and
+  // (clauses (a)-(c) being blind to near-coincidence — everything sits
+  // ON the boundary, contact not overlap) leaked a phantom cross-storey
+  // row. COINCIDE_EPS widens the match to 1e-9 (SAT-touch convention).
+  // Pin the boundary THROUGH the public derivePairRows channel: a
+  // 1e-10 perturbation (inside the new window, outside the old) purges
+  // the twin exactly like the exact-coincidence pins above.
+  //
+  // Residual window (documented on polygonsCoincide): perturbations
+  // strictly between 1e-9 and (a)-(c)-visibility remain undetected at
+  // any finite epsilon — geometrically unavoidable, and no float
+  // coordinate input path produces displacements that small.
+
+  // Fixture-derived (guard against drift): the twin copies
+  // room-living's footprint [[0,0],[5.2,0],[5.2,3.8],[0,3.8]]
+  // vertex-for-vertex; the nudge lands on vertex 2 (0.1 nm east).
+  const NUDGED_VERTEX_IDX = 2;
+  const NUDGE = 1e-10;
+
+  function perturbedTownhouse(): FloorplanData {
+    const plan = parseValidatedPlan(
+      migrate(
+        JSON.parse(
+          readFileSync(join(process.cwd(), 'demo', 'demo-townhouse.json'), 'utf8'),
+        ),
+      ).data!,
+    );
+    const upper = plan.floors
+      .flatMap((f) => f.rooms)
+      .find((r) => r.id === 'room-master-bedroom');
+    // Sanity: the fixture's twin starts EXACTLY coincident; clone the
+    // perturbation onto the upper twin's own vertices (same footprint
+    // as room-living modulo the nudge).
+    expect(upper).toBeDefined();
+    const living = plan.floors
+      .flatMap((f) => f.rooms)
+      .find((r) => r.id === 'room-living');
+    expect(living).toBeDefined();
+    // Perturbing the twin's own cloned vertices keeps the pin honest
+    // against fixture drift (no hand-typed coordinates involved).
+    upper!.polygon = upper!.polygon.map(
+      (v, i) =>
+        (i === NUDGED_VERTEX_IDX
+          ? ([v[0] + NUDGE, v[1]] as Vec2)
+          : ([v[0], v[1]] as Vec2)),
+    );
+    // Twin and living agreed exactly BEFORE the nudge — precondition.
+    expect(upper!.polygon.length).toBe(living!.polygon.length);
+    const maxDrift = Math.max(
+      ...upper!.polygon.map(
+        (v, i) =>
+          Math.max(
+            Math.abs(v[0] - living!.polygon[i][0]),
+            Math.abs(v[1] - living!.polygon[i][1]),
+          ),
+      ),
+    );
+    // Float rounding at 5.2 realizes the nudge as ~1.0000001e-10; any
+    // drift within 2e-10 satisfies the pin (still 5000x inside the
+    // 1e-9 window, and far outside the OLD 1e-12 one).
+    expect(maxDrift).toBeLessThanOrEqual(2 * NUDGE);
+    expect(maxDrift).toBeGreaterThan(0);
+    return plan;
+  }
+
+  it('a 1e-10 vertex perturbation still purges the stacked twin (2 rows)', () => {
+    const rows = derivePairRows(perturbedTownhouse(), {
+      roomId: 'room-kitchen',
+      segmentIndex: 3,
+      tCenter: 0.5,
+      width: 0.9,
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.roomId).sort()).toEqual([
+      'room-kitchen',
+      'room-living',
+    ]);
+  });
+
+  it('one commit through the store never grants the twin a fresh row', () => {
+    const store = new EditorStore(perturbedTownhouse());
+    const before = store
+      .getState()
+      .data.floors.map((f) => f.openings.length);
+    const res = store.dispatch({
+      type: 'addOpening',
+      roomId: 'room-kitchen',
+      segmentIndex: 3,
+      tCenter: 0.5,
+      ...DOOR,
+    });
+    expect(res.ok).toBe(true);
+    const fresh = store
+      .getState()
+      .data.floors.flatMap((f, i) => f.openings.slice(before[i]));
+    expect(fresh).toHaveLength(2);
+    expect(fresh.map((o) => o.roomId).sort()).toEqual([
+      'room-kitchen',
+      'room-living',
+    ]);
+  });
+});
