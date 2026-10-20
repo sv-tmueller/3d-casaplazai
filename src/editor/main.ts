@@ -17,6 +17,7 @@ import { AutosaveManager } from './autosave';
 import { hydrateFromAutosave, initEditorInteraction } from './glue';
 import { buildEditorUi, type EditorDomRefs } from './ui';
 import { EditorStore, emptyPlan } from './store';
+import { prefersReducedMotion } from '../shared/reducedMotion';
 import { normalizeIncoming, toLegacyWire } from './wire';
 
 declare global {
@@ -76,7 +77,14 @@ if (el instanceof HTMLElement) {
   // editor is live (CSS-transition exit, then drop from the DOM).
   const splash = document.getElementById('splash');
   if (splash) {
-    splash.classList.add('leaving');
-    window.setTimeout(() => splash.remove(), 400);
+    // Pkg 155 (issue #155): reduced motion means no slide-out ceremony —
+    // drop the splash synchronously instead of waiting on the 400 ms
+    // exit transition (style.css also kills the bar's keyframe).
+    if (prefersReducedMotion()) {
+      splash.remove();
+    } else {
+      splash.classList.add('leaving');
+      window.setTimeout(() => splash.remove(), 400);
+    }
   }
 }

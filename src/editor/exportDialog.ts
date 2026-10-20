@@ -4,6 +4,8 @@
  * caller. No dependencies beyond the DOM.
  */
 
+import { trapFocus } from './popoverFocus';
+
 export interface ExportChoice {
   format: 'png' | 'jpeg';
   scale: 1 | 2 | 3;
@@ -113,7 +115,13 @@ export function openExportDialog(
     root.appendChild(panel);
     document.body.appendChild(root);
 
+    // Pkg 155 (issue #155): real modal keyboard behaviour — focus lands
+    // on the first control, Tab cycles inside the panel, and both exit
+    // paths below hand focus back to the invoking toolbar button.
+    const trap = trapFocus(panel, anchor);
+
     const dismiss = (): void => {
+      trap.release();
       root.remove();
       document.removeEventListener('keydown', onKey, true);
       openInstance = null;
@@ -131,6 +139,7 @@ export function openExportDialog(
     });
     btnCancel.addEventListener('click', dismiss);
     btnOk.addEventListener('click', () => {
+      trap.release();
       root.remove();
       document.removeEventListener('keydown', onKey, true);
       openInstance = null;

@@ -13,6 +13,7 @@
  */
 
 import type { FrameStats, SunSettings, ViewMode } from './types';
+import { prefersReducedMotion } from '../shared/reducedMotion';
 
 /** Toast lifetime before dismissal, ms. */
 export const TOAST_TTL_MS = 4200;
@@ -412,6 +413,10 @@ export function buildHud(
 
   const fade = el('div', 'hud-fade', 'hud-fade');
   const toasts = el('div', 'hud-toasts', 'hud-toasts');
+  // Pkg 155 (issue #155): the stack is a polite live region; error
+  // toasts override it per message with role="alert" (see toast()).
+  toasts.setAttribute('role', 'status');
+  toasts.setAttribute('aria-live', 'polite');
 
   // #146 fix round: ONE bottom-anchored column for the transient toast
   // stack and the persistent hint strip. The strip pins to the bottom
@@ -737,6 +742,9 @@ export function reflectSunSettings(
  * the camera jump between overview/walk reads as intentional.
  */
 export function playFade(handles: HudHandles): Promise<void> {
+  // Pkg 155 (issue #155): reduced motion means no veil flicker — resolve
+  // synchronously so swapModes (appController.ts) proceeds immediately.
+  if (prefersReducedMotion()) return Promise.resolve();
   return new Promise((resolve) => {
     handles.fade.classList.add('hud-fade-active');
     window.setTimeout(() => {
@@ -834,6 +842,9 @@ export function toast(
   el.className = `hud-toast hud-toast-${variant}`;
   el.dataset.testid = 'hud-toast';
   el.dataset.variant = variant;
+  // Pkg 155: errors interrupt (role="alert" implies assertive); info
+  // rides the stack's polite channel.
+  el.setAttribute('role', variant === 'error' ? 'alert' : 'status');
   el.textContent = message;
   handles.toasts.appendChild(el);
   const entry: LiveToast = { node: el, count: 1, badge: null, timer: null };

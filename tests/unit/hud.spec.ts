@@ -24,6 +24,7 @@ import {
   onBindSunNorth,
   onBindSunTime,
   onBindWallsAlpha,
+  playFade,
   reflectCollapsed,
   reflectFloorName,
   reflectMode,
@@ -787,5 +788,88 @@ describe('walk hint strip (#146)', () => {
     const kids = [...(column as Element).children];
     expect(kids.indexOf(handles.toasts)).toBeGreaterThanOrEqual(0);
     expect(kids.indexOf(handles.toasts)).toBeLessThan(kids.indexOf(strip as Element));
+  });
+});
+
+
+describe('live regions + reduced motion (pkg 155)', () => {
+  let handles: HudHandles;
+
+  /** Fresh MediaQueryList stub per call (the helper reads it live). */
+  const stubReducedMotion = (reduced: boolean): void => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: reduced && query.includes('prefers-reduced-motion'),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  };
+
+  const hadOwnMatchMedia = Object.prototype.hasOwnProperty.call(window, 'matchMedia');
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    handles = buildHud(document.body);
+  });
+
+  afterEach(() => {
+    if (hadOwnMatchMedia) {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        writable: true,
+        value: originalMatchMedia,
+      });
+    } else {
+      delete (window as { matchMedia?: unknown }).matchMedia;
+    }
+    vi.useRealTimers();
+  });
+
+  it('marks the toast stack as a polite live region', () => {
+    expect(handles.toasts.getAttribute('role')).toBe('status');
+    expect(handles.toasts.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('announces error toasts assertively, info toasts politely', () => {
+    toast(handles, 'Render failed', 'error');
+    toast(handles, 'Mode switched');
+    const [err, info] = Array.from(
+      handles.toasts.querySelectorAll<HTMLElement>('[data-testid="hud-toast"]'),
+    );
+    expect(err.getAttribute('role')).toBe('alert');
+    expect(info.getAttribute('role')).toBe('status');
+  });
+
+  it('resolves playFade immediately under reduced motion (no veil, no timer)', async () => {
+    stubReducedMotion(true);
+    vi.useFakeTimers();
+    let settled = false;
+    void playFade(handles).then(() => {
+      settled = true;
+    });
+    await Promise.resolve(); // microtask flush only — no timer advanced
+    expect(settled).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(handles.fade.classList.contains('hud-fade-active')).toBe(false);
+  });
+
+  it('still plays the veil when motion is allowed (control)', async () => {
+    stubReducedMotion(false);
+    vi.useFakeTimers();
+    const done = playFade(handles);
+    expect(handles.fade.classList.contains('hud-fade-active')).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.runAllTimersAsync();
+    await done;
+    expect(handles.fade.classList.contains('hud-fade-active')).toBe(false);
   });
 });

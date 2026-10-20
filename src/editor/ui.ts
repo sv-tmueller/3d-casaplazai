@@ -753,6 +753,11 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const msg = document.createElement("div");
   msg.className = "inline-msg";
   msg.hidden = true;
+  // Pkg 155 (issue #155): the flash container is a live region. The
+  // default level is polite ("status"); error flashes flip it to
+  // "alert" via flashMessage's `level` param.
+  msg.setAttribute("role", "status");
+  msg.setAttribute("aria-live", "polite");
 
   const statusBar = document.createElement("div");
   statusBar.className = "editor-statusbar";
@@ -808,12 +813,21 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   };
 }
 
+/** Announcement priority for the flash live region (pkg 155). */
+export type FlashLevel = 'polite' | 'assertive';
+
 /** Show an ephemeral inline message (auto-clears after ms). */
 export function flashMessage(
   refs: EditorDomRefs,
   text: string,
   ttlMs = 3200,
+  level: FlashLevel = 'polite',
 ): void {
+  // Pkg 155 (issue #155): set the level BEFORE the text so the message
+  // is announced at the right priority (role follows: alert == assertive,
+  // status == polite). Container-level, so no per-message DOM forks.
+  refs.msg.setAttribute('role', level === 'assertive' ? 'alert' : 'status');
+  refs.msg.setAttribute('aria-live', level);
   refs.msg.textContent = text;
   refs.msg.hidden = false;
   window.setTimeout(() => {

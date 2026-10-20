@@ -16,6 +16,7 @@ import {
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 import { IDLE_SPIN_DELAY_MS, IDLE_SPIN_RATE } from './types';
+import { prefersReducedMotion } from '../shared/reducedMotion';
 import type { AdaptedScene, CameraRig, ViewMode } from './types';
 
 /** Vertical margin fraction reserved above/below the plan when framing. */
@@ -161,7 +162,12 @@ export class OrbitRig implements CameraRig {
   /** Advance damping + idle spin. */
   public update(_dt: number): void {
     const sinceInput = performance.now() - this.lastInputAt;
-    const idleReady = sinceInput >= IDLE_SPIN_DELAY_MS;
+    // Pkg 155 (issue #155): a user who asked for reduced motion gets NO
+    // idle drift at all — the ramp below decays to zero and never
+    // restarts. Damping and every direct interaction stay untouched.
+    // (Checked per frame: the query is a live MediaQueryList read.)
+    const idleReady =
+      !prefersReducedMotion() && sinceInput >= IDLE_SPIN_DELAY_MS;
     const rampDelta = idleReady ? SPIN_RAMP_HZ : -SPIN_RAMP_HZ * 3;
     this.spinLevel = Math.min(
       1,

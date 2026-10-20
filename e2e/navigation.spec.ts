@@ -131,7 +131,9 @@ test('dark theme tokenizes the chrome panels (Inspector / Help modal / Export di
   await expect(page.locator('.help-modal-panel')).toBeHidden();
 
   // Export dialog (anchored panel over the canvas).
-  await page.getByRole('button', { name: 'Export' }).click();
+  // #142 folded Export into the File popover; open it first.
+  await page.getByTestId('btn-file').click();
+  await page.getByTestId('btn-export').click();
   await expect(page.locator('.export-dialog-panel')).toBeVisible();
   await expectDarkSurface(page, '.export-dialog-panel');
   await expectTextOnSurface(page, '.export-fieldset legend', '.export-dialog-panel');
@@ -369,7 +371,9 @@ test('theme toggle sets data-theme, persists across reload, darkens the canvas, 
 
   // Export stays white by construction (export.ts paints on its own
   // #ffffff canvas with the light palette; the dark theme never leaks).
-  await page.getByRole('button', { name: 'Export' }).click();
+  // #142 folded Export into the File popover; open it first.
+  await page.getByTestId('btn-file').click();
+  await page.getByTestId('btn-export').click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByTestId('export-confirm').click();
   const download = await downloadPromise;

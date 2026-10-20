@@ -22,9 +22,26 @@ import {
 } from '../model/measure';
 
 const BADGE_FONT = '600 11px sans-serif';
-const BADGE_TEXT_COLOR = '#1e3a5f';
-const BADGE_BG = 'rgba(255, 255, 255, 0.82)';
-const BADGE_BORDER = '#93c5fd';
+/**
+ * Pkg 155 (issue #155): pill palette, EXPORTED so the contrast spec can
+ * compute WCAG ratios against the real constants instead of copies.
+ *
+ * Premise correction (ratified in batch #160): the pill TEXT was never
+ * the failure — #1e3a5f on the 0.82-alpha white fill measures 9.4-11.4:1
+ * over every backdrop (canvas, grid, all four floor patterns + their
+ * finish passes). The BORDER was: #93c5fd scores 1.53:1 against the grid
+ * minor lines, far below the 3:1 non-text minimum.
+ *
+ * The replacement is the pill INK itself (#1e3a5f, same value as
+ * BADGE_TEXT_COLOR). The plan's example #2563eb was tried first and
+ * measured 2.15:1 vs the wood pattern / 1.73:1 vs carpet — it only
+ * clears 3:1 on the light editor surfaces. #1e3a5f is the lightest blue
+ * that clears 3:1 against EVERY backdrop base (min 3.84:1 on carpet);
+ * tests/unit/contrast.spec.ts pins those numbers.
+ */
+export const BADGE_TEXT_COLOR = '#1e3a5f';
+export const BADGE_BG = 'rgba(255, 255, 255, 0.82)';
+export const BADGE_BORDER = '#1e3a5f';
 const PAD_X = 5;
 const PAD_Y = 3;
 
