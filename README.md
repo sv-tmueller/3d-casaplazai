@@ -91,15 +91,22 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | Ctrl+Z           | Undo                                                 |
 | Ctrl+Shift+Z     | Redo                                                 |
 | Ctrl+Y           | Redo                                                 |
-| R                | Rotate selected furniture 90°                        |
+| V                | Arm the Select tool                                  |
+| R                | Arm Rectangle (rotates selected furniture 90° while one is selected) |
+| P                | Arm the Polygon tool                                 |
+| D                | Arm the Door tool                                    |
+| W                | Arm the Window tool                                  |
+| F                | Arm the Furnish (stamp) tool                         |
+| T                | Arm the Stairs tool                                  |
+| M                | Arm the Measure tool                                 |
 | S                | Toggle the Snapping settings popover                 |
 | L                | Set the selected room’s wall lean (roof)             |
-| I                | Toggle the selection inspector panel                  |
-| 3                | Toggle the 3D inset preview                           |
+| I                | Toggle the selection inspector panel                 |
+| 3                | Toggle the 3D inset preview                          |
 | PageUp / [       | Switch to the floor below                            |
-| PageDown / ]     | Switch to the floor above                           |
+| PageDown / ]     | Switch to the floor above                            |
 | Del / Backspace  | Delete selected room, opening, or furniture          |
-| Alt+Drag / Middle-Drag | Pan the canvas                                 |
+| Alt+Drag / Middle-Drag | Pan the canvas                                       |
 | Wheel            | Zoom at cursor                                       |
 <!-- END SHORTCUTS -->
 
