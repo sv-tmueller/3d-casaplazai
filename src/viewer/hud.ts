@@ -401,8 +401,8 @@ export function buildHud(
 
   // ---- Bottom-center hint strip (#146) ----------------------------
   // Moved out of the control panel: the walking hints belong to the
-  // stage, not to the dock. Toasts keep the bottom-center column; the
-  // strip is offset above them in CSS.
+  // stage, not to the dock. Strip and toasts share one bottom-anchored
+  // column (see .hud-bottom) so the two can never collide.
   const strip = el('div', 'hud-strip');
   const hint = el('span', 'hud-hint', 'hud-hint');
   hint.textContent = '';
@@ -411,7 +411,17 @@ export function buildHud(
   const fade = el('div', 'hud-fade', 'hud-fade');
   const toasts = el('div', 'hud-toasts', 'hud-toasts');
 
-  root.append(panel, strip, fade, toasts);
+  // #146 fix round: ONE bottom-anchored column for the transient toast
+  // stack and the persistent hint strip. The strip pins to the bottom
+  // edge and the toasts grow UPWARD above it, so no stack height can
+  // reach the hint — a fixed offset cannot do this (the toast count is
+  // unbounded: a plan that keeps failing re-toasts on every recompile
+  // poll, measured up to 14 stacked). The strip is LAST in the DOM, so
+  // it also paints above the toasts instead of being obscured by them.
+  const bottom = el('div', 'hud-bottom', 'hud-bottom');
+  bottom.append(toasts, strip);
+
+  root.append(panel, fade, bottom);
 
   // Walk-entry affordances (issue #30): a prominent click prompt and a
   // subtle reticle, both hidden by default; setWalkAffordances toggles.

@@ -388,14 +388,32 @@ body {
   grid-row: 1;
 }
 
-/* Bottom-center hint strip (#146): belongs to the stage, NOT the dock.
-   Offset above the toast column (toasts sit at bottom: 10px). */
-.hud-strip {
+/* Bottom-center play column (#146 fix round): the hint strip and the
+   toast stack share ONE bottom-anchored flex column. The strip pins to
+   the bottom edge and toasts grow upward above it, so no stack height
+   can collide with the hint (the old fixed bottom: 52px offset collided
+   with the very first wrapped 78px toast — 91x19px overlap). The strip
+   comes last in the DOM, so it also paints above the toasts. */
+.hud-bottom {
   position: absolute;
-  bottom: 52px;
+  bottom: 10px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   pointer-events: none;
+}
+
+.hud-strip {
+  pointer-events: none;
+}
+
+/* An empty hint collapses the strip entirely, so it cannot pad the
+   column (and lift the toast stack off its bottom anchor) in overview. */
+.hud-strip:has(.hud-hint:empty) {
+  display: none;
 }
 
 .hud-hint {
@@ -423,11 +441,10 @@ body {
   opacity: 0.85;
 }
 
+/* In-flow inside .hud-bottom (#146 fix round): the stack grows upward
+   ABOVE the bottom-pinned strip instead of anchoring itself to the pane
+   edge, which is what used to let it reach the hint. */
 .hud-toasts {
-  position: absolute;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   gap: 6px;

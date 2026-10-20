@@ -9,7 +9,7 @@
 import { expect, test, type Page } from '@playwright/test';
 // Shared luminance probe (issue #121): the PNG decoder extracted from
 // this file, now imported by e2e/sun.spec.ts too — unchanged behavior.
-import { canvasIsLive, regionLuminance } from './fixtures/luminance';
+import { regionCarriesCanvasPixels, regionLuminance } from './fixtures/luminance';
 
 /** Derived door-center waypoints (world XY, meters) for demo-apartment.json. */
 // Issue #18 furniture-aware route (verified-clean 8 hops; the old direct
@@ -378,6 +378,36 @@ async function bootHouse(page: Page, query = ''): Promise<void> {
   );
 }
 
+/**
+ * Seat the overview rig before luminance sampling (#146 fix round).
+ *
+ * The post-boot rig does not tick until a Walk→Overview cycle (issue
+ * #141's seating gap): sampled cold, the composited canvas carries no
+ * drawn pixels and both probe rects read the pane's CSS backdrop, which
+ * silently inverted the sky-vs-plan ordering assertion. Mirrors
+ * e2e/sun.spec.ts ensureRenderedOverview — Tab into walk, Tab back — but
+ * without that helper's swallowed seam timeout: the assertions below
+ * depend on the seating having happened, so a failure here must surface
+ * at its cause.
+ */
+async function seatOverviewRig(page: Page): Promise<void> {
+  const walkSegment = page.getByTestId('hud-mode-segment-walk');
+  await page.keyboard.press('Tab'); // → walk
+  await expect(walkSegment).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(900);
+  await page.keyboard.press('Tab'); // → overview (seats the orbit rig)
+  await expect(walkSegment).toHaveAttribute('aria-pressed', 'false');
+  await page.waitForFunction(
+    () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cam = (window as any).__viewerCam?.();
+      return cam !== null && cam !== undefined;
+    },
+    { timeout: 10_000 },
+  );
+  await page.waitForTimeout(900); // let the seated rig paint a few frames
+}
+
 
 test.describe.serial('lighting + roof affordances (issue #86)', () => {
   // (a) Parametrized over BOTH quality presets: the perf overlay must
@@ -411,23 +441,28 @@ test.describe.serial('lighting + roof affordances (issue #86)', () => {
     // The probe captures from the COMPOSITOR (outside the page), so no
     // special renderer flags are needed — plain production boot.
     await bootHouse(page);
-    await page.waitForTimeout(900); // first frames flush
 
-    // ROOT CAUSE (issue #146): the composited canvas can carry NO GL
-    // pixels at all — on headless ANGLE/OpenGL stacks the viewer's GL
-    // pipeline is idle (no clear, no draws, fully transparent surface;
-    // see canvasIsLive), so every reading below is the pane's CSS
-    // backdrop plus whatever HUD chrome overlaps the sample rects. This
-    // probe only ever passed because the PRE-redesign HUD toolbar sat
-    // inside the EXTERIOR rect; the redesigned HUD deliberately moved
-    // chrome to the top-right, the backdrop-only margin collapsed
-    // (208.563 vs 208.657) and the vacuity surfaced. Guard loudly here
-    // instead of asserting chrome noise; the sky-vs-plan assertions
-    // below stay untouched for stacks where the canvas really renders.
-    const live = await canvasIsLive(page);
+    // #146 fix round: SEAT the overview rig before sampling. Sampled at
+    // boot the GL pipeline had not drawn yet (issue #141's seating gap),
+    // so BOTH rects below read the pane's CSS backdrop (measured 208.563
+    // vs 208.657) and the ordering assertion inverted; a liveness guard
+    // then skipped the test, leaving the AC unpinned. After the
+    // Walk→Overview cycle the readings are real render output — the lit
+    // plan lands in the interior rect (measured 181.5), the corner keeps
+    // the bright sky (~208.6) — and the assertions below run live.
+    await seatOverviewRig(page);
+
+    // Guard, evaluated POST-seating: the canvas must carry its OWN pixels
+    // in the interior rect — hiding it has to change what the compositor
+    // shows there. Skip only when that is genuinely false (a stack whose
+    // GL surface stays transparent even while seated), never as a proxy
+    // for "the view was not seated": an unseated rig still contributes
+    // some canvas pixels, so that regression now surfaces as a hard
+    // assertion failure instead of a silent skip.
+    const live = await regionCarriesCanvasPixels(page, 0.35, 0.35, 0.3, 0.3);
     test.skip(
       !live,
-      'composited canvas carries no GL pixels on this stack (see canvasIsLive) — sky-vs-plan contrast is unobservable here',
+      'composited canvas carries no GL pixels in the interior rect even after seating — sky-vs-plan contrast is unobservable on this stack',
     );
 
     // The overview ortho camera looks straight DOWN at the framed

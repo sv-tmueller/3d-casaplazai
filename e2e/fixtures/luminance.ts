@@ -98,24 +98,52 @@ export async function regionLuminance(
 }
 
 /**
- * True when the composited canvas carries LIVE GL pixels. A rendering
- * viewer repaints every frame (the overview rig is an idle turntable), so
- * two captures of the same canvas a few hundred ms apart differ. Where the
- * GL pipeline is idle (observed on headless macOS/ANGLE: no clear, no
- * draws, a fully transparent surface) the canvas contributes no pixels and
- * the pair is byte-identical — the pane's CSS backdrop shows through.
+ * True when the composited canvas carries its OWN pixels over the given
+ * FRACTIONAL rect of the canvas (fx/fy/fw/fh, e.g. the luminance probe's
+ * interior rect). Proved by contribution: hiding the canvas must change
+ * the composited pixels inside that rect. Where the GL pipeline is idle
+ * (observed on headless macOS/ANGLE: no clear, no draws, a transparent
+ * surface) the canvas contributes nothing and the pane's CSS backdrop
+ * shows through — this is how the luminance probe detects that its
+ * sample rects would measure the backdrop, not the render.
  *
- * The pair is clipped to the canvas's bottom-left corner, which both HUD
- * layouts leave chrome-free, so DOM updates can neither fake liveness nor
- * contaminate the comparison. See the luminance probe's guard in
- * viewer.spec.ts (issue #146 root cause) for why this exists.
+ * #146 fix round: this replaces a capture-pair diff clipped to the
+ * canvas's bottom-left corner. That corner is a TRANSPARENT MARGIN on
+ * this stack (the plan does not reach it), so the pair stayed
+ * byte-identical even with a seated rig painting and the guard skipped
+ * the (b) assertion vacuously. Contribution is measured where the probe
+ * actually samples, and it is deterministic — no dependence on turntable
+ * motion or capture timing.
  */
-export async function canvasIsLive(page: Page, settleMs = 500): Promise<boolean> {
+export async function regionCarriesCanvasPixels(
+  page: Page,
+  fx: number,
+  fy: number,
+  fw: number,
+  fh: number,
+): Promise<boolean> {
   const box = await page.locator('.viewer-gl-canvas').boundingBox();
   if (!box) throw new Error('viewer-gl-canvas has no box — the viewer did not mount');
-  const clip = { x: box.x + 6, y: box.y + box.height - 68, width: 58, height: 58 };
-  const before = await page.screenshot({ clip });
-  await page.waitForTimeout(settleMs);
-  const after = await page.screenshot({ clip });
-  return !before.equals(after);
+  const clip = {
+    x: Math.round(box.x + box.width * fx),
+    y: Math.round(box.y + box.height * fy),
+    width: Math.max(1, Math.round(box.width * fw)),
+    height: Math.max(1, Math.round(box.height * fh)),
+  };
+  const withCanvas = await page.screenshot({ clip });
+  await hideCanvas(page, true);
+  const withoutCanvas = await page.screenshot({ clip });
+  await hideCanvas(page, false);
+  return !withCanvas.equals(withoutCanvas);
+}
+
+/** Toggle `visibility: hidden` on the GL canvas (contribution probe only). */
+async function hideCanvas(page: Page, hidden: boolean): Promise<void> {
+  await page.evaluate((hide) => {
+    const canvas = document.querySelector('.viewer-gl-canvas');
+    if (canvas instanceof HTMLElement) {
+      canvas.style.visibility = hide ? 'hidden' : '';
+    }
+  }, hidden);
+  await page.waitForTimeout(150);
 }

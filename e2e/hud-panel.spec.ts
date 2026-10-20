@@ -128,4 +128,77 @@ test.describe('docked HUD panel (issue #146)', () => {
     await walls.press('Home');
     await expect(page.getByTestId('hud-walls-alpha-label')).toHaveText('0%');
   });
+
+  // Fix round for #146: the pre-fix strip (fixed `bottom: 52px`) was
+  // beaten by the FIRST wrapped toast — 78 px tall — so the toast stack
+  // (painted above it, DOM order) obscured the WASD/Esc hint. The pin
+  // below measures REAL compositor boxes with a REAL stacked toast set,
+  // so it fails on the old geometry and holds for any stack height.
+  test('hint strip never collides with the toast stack', async ({ page }) => {
+    test.setTimeout(60_000);
+    await boot(page);
+
+    // Walk mode is where the persistent hint strip is shown.
+    await page.getByTestId('hud-mode-segment-walk').click();
+
+    // Raise a stacked toast set through the LIVE error path: a plan whose
+    // wall thickness violates the schema is rejected by the viewer's
+    // validator, and while it stays invalid the 250 ms recompile poll
+    // re-toasts — the column grows past one entry by itself (measured up
+    // to 14 in a 3 s window). Even one entry is taller than the old
+    // strip's whole 52 px offset, so ≥3 is well past "realistic".
+    const fs = await import('node:fs/promises');
+    const raw = await fs.readFile('demo/demo-apartment.json', 'utf8');
+    await page.evaluate((planJson) => {
+      const plan = JSON.parse(planJson) as { wallThickness: number };
+      plan.wallThickness = -1; // positive-finite rule → schema rejection
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__casaplaza.loadPlan(plan);
+    }, raw);
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-testid="hud-toast"]').length >= 3,
+      { timeout: 10_000 },
+    );
+
+    const geom = await page.evaluate(() => {
+      const box = (el: Element) => {
+        const b = el.getBoundingClientRect();
+        return {
+          x: b.x,
+          y: b.y,
+          right: b.right,
+          bottom: b.bottom,
+          width: b.width,
+          height: b.height,
+        };
+      };
+      const strip = document.querySelector('.hud-strip');
+      const stack = document.querySelector('.hud-toasts');
+      return {
+        strip: strip === null ? null : box(strip),
+        hint: strip === null ? null : (strip.querySelector('.hud-hint')?.textContent ?? null),
+        stack: stack === null ? null : box(stack),
+        toasts: [...document.querySelectorAll('[data-testid="hud-toast"]')].map(box),
+      };
+    });
+
+    // The strip is a real, visible box carrying a walk hint.
+    expect(geom.strip).not.toBeNull();
+    const strip = geom.strip!;
+    expect(strip.width).toBeGreaterThan(0);
+    expect(strip.height).toBeGreaterThan(0);
+    expect(['Click to walk', 'WASD to move · Esc to release']).toContain(geom.hint);
+
+    // GEOMETRY PIN: no toast may intersect the strip.
+    const overlaps = (a: { x: number; y: number; right: number; bottom: number }, b: typeof strip) =>
+      a.x < b.right && b.x < a.right && a.y < b.bottom && b.y < a.bottom;
+    const collisions = geom.toasts
+      .filter((t) => overlaps(t, strip))
+      .map((t) => ({ strip, toast: t }));
+    expect(collisions).toEqual([]);
+
+    // ...and the column sits clear ABOVE the strip (8 px layout gap).
+    expect(geom.stack).not.toBeNull();
+    expect(strip.y - geom.stack!.bottom).toBeGreaterThan(1);
+  });
 });

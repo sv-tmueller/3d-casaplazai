@@ -646,4 +646,22 @@ describe('walk hint strip (#146)', () => {
     showHint(handles, '');
     expect(handles.hint.textContent).toBe('');
   });
+
+  // Fix round for #146: the strip and the toast stack share ONE
+  // bottom-anchored column, with the strip LAST — layout keeps the toast
+  // stack (which grows upward) from ever reaching the hint, and DOM
+  // order keeps the strip painted above the toasts. The compositor
+  // geometry itself is pinned in e2e/hud-panel.spec.ts ('hint strip
+  // never collides with the toast stack'); this pins the structure.
+  it('shares one bottom column with the toast stack, and comes last', () => {
+    const column = document.querySelector('[data-testid="hud-bottom"]');
+    const strip = handles.hint.closest('.hud-strip');
+    expect(column).not.toBeNull();
+    expect(strip).not.toBeNull();
+    expect(handles.toasts.parentElement).toBe(column);
+    expect((strip as Element).parentElement).toBe(column);
+    const kids = [...(column as Element).children];
+    expect(kids.indexOf(handles.toasts)).toBeGreaterThanOrEqual(0);
+    expect(kids.indexOf(handles.toasts)).toBeLessThan(kids.indexOf(strip as Element));
+  });
 });
