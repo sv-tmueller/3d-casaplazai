@@ -479,13 +479,30 @@ export class WalkRig implements CameraRig {
 
   /** Bind WASD/arrow intents + shift sprint; released keys decay out. */
   private bindKeys(): void {
+    // Issue #134: a focused HUD control (walls-transparency or sun
+    // sliders) must KEEP its arrow keys — the walker must not race the
+    // slider it sits under. Same INPUT-target guard the Tab path
+    // (appController.onTabKey) already honours; without it every
+    // HANDLED_CODE preventDefault swallowed the keystroke before the
+    // native range input could act on it.
+    const typingIntoField = (ev: KeyboardEvent): boolean => {
+      const tgt = ev.target as HTMLElement | null;
+      return Boolean(
+        tgt &&
+          (tgt.tagName === 'INPUT' ||
+            tgt.tagName === 'TEXTAREA' ||
+            tgt.isContentEditable),
+      );
+    };
     const onKeyDown = (ev: KeyboardEvent): void => {
       if (!HANDLED_CODES.has(ev.code)) return;
+      if (typingIntoField(ev)) return; // #134: let the control have it
       ev.preventDefault();
       this.handleKey(ev.code, true);
     };
     const onKeyUp = (ev: KeyboardEvent): void => {
       if (!HANDLED_CODES.has(ev.code)) return;
+      if (typingIntoField(ev)) return; // symmetric with keydown (#134)
       this.handleKey(ev.code, false);
     };
 
