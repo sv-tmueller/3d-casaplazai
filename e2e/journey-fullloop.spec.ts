@@ -166,6 +166,8 @@ test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden tota
   // ---- 6. Back in the editor: export the plan as PNG ----
   await page.goto('/');
   await page.locator('.editor-canvas').waitFor();
+  // pkg #142: Export image lives in the File menu — open it first.
+  await page.getByTestId('btn-file').click();
   await page.getByRole('button', { name: 'Export' }).click();
   // Dialog: pick PNG scale 2 (defaults should suffice; assert dialog UI).
   await expect(page.locator('[data-testid="export-dialog"]')).toBeVisible();
