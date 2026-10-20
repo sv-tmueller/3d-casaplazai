@@ -66,7 +66,15 @@ test.describe.serial('townhouse two-storey load-smoke (issue #76)', () => {
       () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cam = (window as any).__viewerCam?.();
-        return typeof cam === 'object' && cam !== null && cam.eyeY > 0;
+        // Walk-only diagnostics (discX) prove the walk rig took over: the
+        // orbit rig also reports eyeY > 0 (its hover height) and would
+        // otherwise unblock this gate mid-fade (#148 seat-on-arrival).
+        return (
+          typeof cam === 'object' &&
+          cam !== null &&
+          typeof cam.discX === 'number' &&
+          cam.eyeY > 0
+        );
       },
       { timeout: 15_000 },
     );
