@@ -166,3 +166,26 @@ test('Dimensions toggle hides annotations without deleting them', async ({ page 
   await page.getByTestId('btn-dimensions').click();
   expect(await dimsVisible(page)).toBe(true);
 });
+
+test('"Clear measurements" also drops a pending anchor (issue #138)', async ({
+  page,
+}) => {
+  // Arm a pending anchor, then invoke Clear measurements: the draft
+  // must die with the annotations — no Escape needed. Without the fix
+  // the stale anchor ate one Escape press under the guarded popovers.
+  const a = await aim(page, 0, -5);
+  await page.mouse.click(a.x, a.y);
+  expect(await draft(page)).toEqual({ a: [0, -5] });
+
+  await page.getByTestId('btn-clear-measurements').click();
+
+  expect(await draft(page)).toBeNull();
+  expect(await measurements(page)).toEqual([]);
+
+  // And the Escape path is free again: clicking once re-anchors,
+  // Escape drops it (behaviour unchanged post-clear).
+  const b = await aim(page, 1, -5);
+  await page.mouse.click(b.x, b.y);
+  await page.keyboard.press('Escape');
+  expect(await draft(page)).toBeNull();
+});

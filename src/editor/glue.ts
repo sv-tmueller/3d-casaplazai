@@ -1423,8 +1423,12 @@ export function initEditorInteraction(
   refs.btnStairs.addEventListener("click", () => setActiveTool("stairs"));
   refs.btnAddMeasure.addEventListener("click", () => setActiveTool("measure"));
   // Issue #66: wipe all annotations (persists immediately).
+  // Issue #138: the pending anchor dies WITH them — a stale draft
+  // otherwise ate one Escape press under the guarded popovers
+  // (user-visible as "popover ignored Esc once").
   refs.btnClearMeasure.addEventListener("click", () => {
     measurements = [];
+    measureDraft = null;
     saveMeasurements(window.localStorage, measurements);
     repaint();
   });
