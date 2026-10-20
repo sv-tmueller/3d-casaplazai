@@ -16,6 +16,7 @@ import {
 import type { Pt } from './geom';
 import { itemCorners } from './model/furniture';
 import { DEFAULT_SNAP_PITCH_M } from './model/settings';
+import { DEFAULT_THEME, type ThemePreference } from './model/theme';
 import { underlayCorners, type UnderlayState } from './model/underlay';
 import { groupedPairs, pointAtT, roomSegments, segmentNormal } from './model/openings';
 import { getFloorPattern } from './render/floorPatterns';
@@ -25,9 +26,27 @@ export interface SegHighlight {
   segIndex: number;
 }
 
-const BG = '#fafafa';
-const GRID_MINOR = '#ececec';
-const GRID_MAJOR = '#dedede';
+/**
+ * Issue #126 (Pkg 14.x): light/dark canvas palettes. `paintScene` picks
+ * one via its trailing (append-only) `theme` param; the default keeps the
+ * frozen light look, so pre-#126 callers and tests paint unchanged and the
+ * export painter (which omits the param) stays white by construction.
+ */
+export type CanvasPalette = Readonly<{
+  bg: string;
+  gridMinor: string;
+  gridMajor: string;
+}>;
+export const LIGHT_PALETTE: CanvasPalette = Object.freeze({
+  bg: '#fafafa',
+  gridMinor: '#ececec',
+  gridMajor: '#dedede',
+});
+export const DARK_PALETTE: CanvasPalette = Object.freeze({
+  bg: '#111827',
+  gridMinor: '#1f2937',
+  gridMajor: '#374151',
+});
 const ROOM_FILL = 'rgba(147, 197, 253, 0.28)';
 const ROOM_STROKE = '#2563eb';
 const SELECTED_STROKE = '#d97706';
@@ -63,9 +82,13 @@ export function paintScene(
   // paint unchanged.
   marquee: { start: Pt; cur: Pt } | null = null,
   multiSelectedIds: string[] = [],
+  // Issue #126: canvas theme (trailing optional, append-only precedent).
+  // The export painter deliberately omits it — exports stay white.
+  theme: ThemePreference = DEFAULT_THEME,
 ): void {
+  const palette = theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
   ctx.clearRect(0, 0, cssW, cssH);
-  ctx.fillStyle = BG;
+  ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, cssW, cssH);
 
   // pkg 12.1 (issue #99): the blueprint image paints FIRST — below the
@@ -73,7 +96,7 @@ export function paintScene(
   // entirely when hidden keeps the canvas bit-identical to pre-#99.
   if (underlay && !underlay.hidden) drawUnderlay(ctx, cam, underlay, underlayImg, underlaySelected);
 
-  drawGrid(ctx, cssW, cssH, cam, gridPitch);
+  drawGrid(ctx, cssW, cssH, cam, gridPitch, palette);
 
   for (const room of flatRooms(plan)) {
     drawRoomShape(
@@ -232,6 +255,8 @@ function drawGrid(
   cssH: number,
   cam: Camera,
   pitch: number,
+  /** Issue #126: ink pair for the active theme (defaults to light). */
+  ink: CanvasPalette = LIGHT_PALETTE,
 ): void {
   if (cam.scale < 6) return; // too zoomed out for meaningful grid
   const stepMinor = pitch * cam.scale;
@@ -242,7 +267,7 @@ function drawGrid(
   ctx.lineWidth = 1;
   for (let x = ox; x < cssW; x += stepMinor) {
     const isMajor = nearMultiple(x - ox, stepMajor, stepMinor);
-    ctx.strokeStyle = isMajor ? GRID_MAJOR : GRID_MINOR;
+    ctx.strokeStyle = isMajor ? ink.gridMajor : ink.gridMinor;
     ctx.beginPath();
     ctx.moveTo(roundHalf(x), 0);
     ctx.lineTo(roundHalf(x), cssH);
@@ -250,7 +275,7 @@ function drawGrid(
   }
   for (let y = oy; y < cssH; y += stepMinor) {
     const isMajor = nearMultiple(y - oy, stepMajor, stepMinor);
-    ctx.strokeStyle = isMajor ? GRID_MAJOR : GRID_MINOR;
+    ctx.strokeStyle = isMajor ? ink.gridMajor : ink.gridMinor;
     ctx.beginPath();
     ctx.moveTo(0, roundHalf(y));
     ctx.lineTo(cssW, roundHalf(y));

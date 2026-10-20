@@ -403,7 +403,12 @@ export type MeasureToolMode = 'measure';
  * #66 MeasureToolMode precedent) so earlier tool wiring stays untouched.
  */
 export type StairsToolMode = 'stairs';
-export type AnyToolMode = ToolMode | Pkg3ToolMode | MeasureToolMode | StairsToolMode;
+/**
+ * Issue #126 (Pkg 14.x): dedicated Pan tool mode. Appended to the union
+ * (never reordered) so earlier tool wiring stays untouched.
+ */
+export type PanToolMode = 'pan';
+export type AnyToolMode = ToolMode | Pkg3ToolMode | MeasureToolMode | StairsToolMode | PanToolMode;
 
 export interface GhostPreview {
   kind: 'door' | 'window' | 'stamp' | 'stairs';

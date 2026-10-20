@@ -87,6 +87,16 @@ export const SHORTCUTS: ShortcutEntry[] = [
     surface: 'editor',
   },
   {
+    keys: '0',
+    action: 'Fit the whole plan in the viewport',
+    surface: 'editor',
+  },
+  {
+    keys: 'Space (hold)',
+    action: 'Temporarily switch to the Pan tool',
+    surface: 'editor',
+  },
+  {
     keys: 'Alt+Drag / Middle-Drag',
     action: 'Pan the canvas',
     surface: 'editor',
