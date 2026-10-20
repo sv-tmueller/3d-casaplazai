@@ -106,6 +106,19 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
 
   // Issue #7: every tool button advertises its purpose via tooltip +
   // aria-label sourced from the TOOL_HINTS registry.
+  // Issue #143: the tool's single-key hotkey rides the tooltip — the
+  // TOOL_HINTS sentences stay untouched (status bar + #142 own those).
+  // Behavior side of the same contract: TOOL_HOTKEYS in glue.ts.
+  const HINT_HOTKEYS: Record<string, string> = {
+    select: "V",
+    rectangle: "R",
+    polygon: "P",
+    door: "D",
+    window: "W",
+    stamp: "F",
+    stairs: "T",
+    measure: "M",
+  };
   const mkHintedBtn = (
     label: string,
     hintKey: string,
@@ -118,7 +131,8 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
       // Hint lives in `title` ONLY: an aria-label would REPLACE the
       // button's accessible name (breaking getByRole('button', {name})
       // locators in e2e specs and for screen-reader users).
-      b.title = hint;
+      const key = HINT_HOTKEYS[hintKey];
+      b.title = key ? `${hint} (${key})` : hint;
     }
     return b;
   };
