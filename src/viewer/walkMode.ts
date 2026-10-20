@@ -275,7 +275,8 @@ export class WalkRig implements CameraRig {
   /**
    * Current walking-surface z, meters (issue #80). Formerly the
    * READ-ONLY activeFloorElevation (issue #76); now seeded at spawn
-   * (lowest floor) and re-resolved EVERY FRAME by resolveGroundZ:
+   * (lowest floor, or the teleport target storey — issue #147) and
+   * re-resolved EVERY FRAME by resolveGroundZ:
    * inside a stair's hole rect the walker rides the ramp
    * zLower + clamp(progress)·rise, otherwise the highest reachable
    * storey plane. Falls (ground below curZ) integrate downward at
@@ -283,6 +284,14 @@ export class WalkRig implements CameraRig {
    * upper storey lands on the treads.
    */
   private curZ: number;
+
+  /**
+   * Last non-degenerate plan-space heading (issue #147 CP2), seeded at
+   * construction and refreshed by the headingYaw getter. Only read when
+   * the camera's forward vector is pointlessly vertical (flat ≈ 0),
+   * which the pitch limit prevents in practice.
+   */
+  private lastHeadingYaw: number;
 
   /** Stair surfaces for the grounding resolver ([] = stair-free plan). */
   private readonly stairs: readonly StairWalkSurface[];
@@ -315,6 +324,10 @@ export class WalkRig implements CameraRig {
    * @param spawnX plan-space spawn/disc x
    * @param spawnY plan-space spawn/disc y
    * @param yawRad initial facing yaw around plan +Z (radians)
+   * @param spawnElevation storey plane to spawn on, meters (issue #147
+   *   CP2): the upper-floor teleport needs the walker to START on the
+   *   target storey instead of dropping to the adapted ground floor.
+   *   Omitted ⇒ adapted.activeFloorElevation (the historical spawn).
    */
   public constructor(
     canvas: HTMLCanvasElement,
@@ -322,11 +335,13 @@ export class WalkRig implements CameraRig {
     spawnX: number,
     spawnY: number,
     yawRad: number,
+    spawnElevation?: number,
   ) {
     this.posX = spawnX;
     this.posY = spawnY;
-    this.baseFloorZ = adapted.activeFloorElevation;
+    this.baseFloorZ = spawnElevation ?? adapted.activeFloorElevation;
     this.curZ = this.baseFloorZ;
+    this.lastHeadingYaw = yawRad;
     this.stairs = adapted.stairs;
     this.collisions = adapted.collisions;
 
@@ -412,6 +427,38 @@ export class WalkRig implements CameraRig {
    */
   public get eyePosition(): { x: number; y: number; z: number } {
     return { x: this.posX, y: this.posY, z: this.curZ + EYE_HEIGHT };
+  }
+
+  /**
+   * Current walking-surface z (issue #147 CP2): feet plane, i.e. the
+   * storey plane or stair ramp under the disc. The 2D pane attributes
+   * the walker to a floor from this, so it must be the FEET z — not
+   * eyePosition.z, which is EYE_HEIGHT above the storey and would
+   * mis-attribute a walker on the ground floor of a 2.7m storey.
+   */
+  public get currentZ(): number {
+    return this.curZ;
+  }
+
+  /**
+   * Runtime heading yaw in PLAN space (radians, CCW from +X, north =
+   * π/2): the camera's forward vector flattened to plan XY. The inverse
+   * of seedYaw, so `headingYaw` reads back what setYaw was given. Used
+   * by the walker-telemetry publication (issue #147) to orient the 2D
+   * glyph's wedge — reading the quaternion (rather than tracking a
+   * second yaw variable through applyLook) keeps a single source of
+   * truth for the look direction.
+   */
+  public get headingYaw(): number {
+    const forward = this.camera.getWorldDirection(FWD_SCRATCH);
+    const flat = Math.hypot(forward.x, forward.y);
+    // Pitch is limited well short of straight up/down, so `flat` is
+    // never degenerate in practice; if it ever were, the last known
+    // heading is a better answer than atan2(0, 0) = 0.
+    if (flat > 1e-6) {
+      this.lastHeadingYaw = Math.atan2(forward.y, forward.x);
+    }
+    return this.lastHeadingYaw;
   }
 
   /** Current smoothed plan-space velocity (diagnostic/e2e seam). */

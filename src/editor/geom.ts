@@ -5,6 +5,11 @@
 
 export type Pt = [number, number];
 
+// Issue #147 CP1: the shared point-in-polygon predicate (src/geom owns
+// it; the viewer consumes the same implementation — see the re-export
+// at pointInPolygon below).
+import { pointInRing } from '../geom';
+
 export function vecAdd(a: Pt, b: Pt): Pt {
   return [a[0] + b[0], a[1] + b[1]];
 }
@@ -119,19 +124,20 @@ export function projectPointOntoSegment(pt: Pt, a: Pt, b: Pt): Pt {
   return [a[0] + t * dx, a[1] + t * dy];
 }
 
-/** Ray-casting point-in-polygon test (works for concave rings). */
+/**
+ * Ray-casting point-in-polygon test (works for concave rings).
+ *
+ * Issue #147 CP1: DELEGATES to src/geom's shared pointInRing — the
+ * viewer needs the same predicate (room readout) and may not import
+ * editor code (layering law). This wrapper keeps every historical call
+ * site and spec unchanged while one implementation serves both panes.
+ */
 export function pointInPolygon(pt: Pt, poly: Pt[]): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i, i += 1) {
-    const [xi, yi] = poly[i];
-    const [xj, yj] = poly[j];
-    const intersects =
-      yi > pt[1] !== yj > pt[1] &&
-      pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi;
-    if (intersects) inside = !inside;
-  }
-  return inside;
+  return pointInRing(pt[0], pt[1], poly);
 }
+
+/** Issue #147 CP1: the shared predicate, re-exported for editor callers. */
+export { pointInRing } from '../geom';
 
 /** Convex hull (Andrew monotone chain), CCW output, no collinear points. */
 export function convexHull(points: Pt[]): Pt[] {

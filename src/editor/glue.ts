@@ -120,6 +120,14 @@ import {
 import { compassAngleBetween, polarEndpoint } from "./model/angles";
 import { mountDimFields, type DimFields } from "./typeInDims";
 import type { Mini3DInset } from "./mini3d";
+import {
+  getPose,
+  hasViewerSubscriber,
+  sendCommand,
+  subscribePose,
+  type WalkerPose,
+} from "../shared/walkerLink";
+import { drawPlaceAim, drawWalkerGlyph } from "./render/walkerGlyph";
 
 const POLYGON_MIN_POINTS = 3;
 const CLOSE_HIT_RADIUS_PX = 10; // click-near-start closes the polygon
@@ -323,6 +331,33 @@ export function initEditorInteraction(
   let bulkDragIds: string[] | null = null;
   /** Issue #110: pointer travel (screen px) before a marquee band engages. */
   const MARQUEE_ENGAGE_PX = 3;
+
+  // Issue #147 CP4: the mirrored walker pose published by the viewer pane
+  // (null = no live walker, including the retraction when walk mode ends).
+  // GLUE-LOCAL on the #61/#110 candidate precedent — no store slice, no
+  // InteractionPhase variant; it is display state, not plan content.
+  let walkerPose: WalkerPose | null = null;
+  /**
+   * Coalesced repaint handle for pose ticks. The pose can arrive every
+   * viewer frame; the editor repaints at most once per animation frame
+   * (same discipline as mini3d's requestRender).
+   */
+  let walkerGlyphRaf: number | null = null;
+  /** Issue #147 CP4: "C" armed the place-camera gesture. */
+  let placeCameraArmed = false;
+  /** In-flight place-camera aim (screen px a→b), null when not dragging. */
+  let placeDrag: { from: Pt; to: Pt } | null = null;
+  /**
+   * Issue #147 CP4: last pose floorIdx the editor FOLLOWED (edge trigger
+   * for the cross-storey floor switch — see the subscribePose block).
+   */
+  let lastPoseFloorIdx: number | null = null;
+  /**
+   * Issue #147 CP4: screen-px travel before a place click is read as an
+   * aim (the drag sets the walker's heading; a bare click keeps the
+   * current one). Mirrors the opening/stair thresholds.
+   */
+  const PLACE_DRAG_MIN_PX = 8;
 
   // pkg 13.4 (issue #118): staircase draft + the "no floor above" offer.
   // The draft rides the phase machine (drawingStair); the offer element +
@@ -536,6 +571,17 @@ export function initEditorInteraction(
     // Deliberately ABSENT from the export path below — these are
     // gesture-live affordances, not plan content.
     paintAngleReadouts(ctx, cam, view, phase, hoverSeg, dimensionsVisible);
+
+    // Issue #147 CP4: walk-nav overlays — the in-flight place-camera aim
+    // band first (it belongs UNDER the glyph), then the mirrored walker.
+    // Same purity rule as the angle readouts above: LIVE canvas only,
+    // never the export painter / share-link payload.
+    if (placeDrag !== null) {
+      drawPlaceAim(ctx, placeDrag.from, placeDrag.to);
+    }
+    if (walkerPose !== null && walkerPose.floorIdx === activeFloorIdx) {
+      drawWalkerGlyph(ctx, cam, walkerPose);
+    }
   }
 
   function snapToleranceWorld(): number {
@@ -549,6 +595,94 @@ export function initEditorInteraction(
    */
   function handleToleranceWorld(): number {
     return HANDLE_HIT_PX / cam.scale;
+  }
+
+  /* ------------------ walk-nav: glyph + place camera (#147 CP4) ------------------ */
+
+  /**
+   * Coalesced repaint for pose ticks: the viewer can publish every
+   * frame, so the editor learns of a pose change immediately but
+   * repaints at most once per animation frame (the mini3d requestRender
+   * discipline). Timer fallback covers stub/happy-dom environments.
+   */
+  function requestWalkerGlyphRepaint(): void {
+    if (walkerGlyphRaf !== null) return;
+    const schedule =
+      typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (cb: FrameRequestCallback): number =>
+            window.setTimeout(() => cb(0), 16);
+    walkerGlyphRaf = schedule(() => {
+      walkerGlyphRaf = null;
+      repaint();
+    });
+  }
+
+  /**
+   * Arm/disarm the place-camera gesture. Arming needs a live viewer
+   * subscriber — the standalone editor has no 3D pane to place a camera
+   * into, and a silently-dead "C" would be a lie; answer honestly.
+   */
+  function setPlaceCameraArmed(armed: boolean): void {
+    if (armed && !hasViewerSubscriber()) {
+      flashMessage(refs, "Place camera needs the 3D pane \u2014 open /viewer.");
+      return;
+    }
+    placeCameraArmed = armed;
+    placeDrag = null;
+    ghost = null;
+    flashMessage(
+      refs,
+      armed
+        ? "Place camera: click a room to move the walker \u2014 drag to aim, Esc cancels."
+        : "Place camera cancelled.",
+    );
+    repaint();
+  }
+
+  /**
+   * Commit an armed place-camera gesture. The press point becomes the
+   * walker's plan position — required to land inside a room on the
+   * ACTIVE floor, because the command carries that floorIdx and a point
+   * outside every room would drop the walker into the fences. The drag
+   * direction becomes the heading once travel clears
+   * PLACE_DRAG_MIN_PX; a bare click keeps the walker's current heading
+   * (read off the last published pose). An invalid click stays armed so
+   * the user can simply click again.
+   */
+  function commitPlaceCamera(drag: { from: Pt; to: Pt }): void {
+    const world = screenToWorld(cam, drag.from);
+    const st = store.getState();
+    const room = flatRooms(activeFloorPlan(st)).find((r) =>
+      pointInPolygonGeom(world, r.polygon),
+    );
+    if (!room) {
+      flashMessage(
+        refs,
+        "Place camera: click inside a room (Esc cancels).",
+      );
+      repaint();
+      return;
+    }
+    const travelPx = Math.hypot(
+      drag.to[0] - drag.from[0],
+      drag.to[1] - drag.from[1],
+    );
+    let yaw = getPose()?.yawRad ?? 0;
+    if (travelPx >= PLACE_DRAG_MIN_PX) {
+      const end = screenToWorld(cam, drag.to);
+      yaw = Math.atan2(end[1] - world[1], end[0] - world[0]);
+    }
+    sendCommand({
+      kind: "place",
+      x: world[0],
+      y: world[1],
+      yaw,
+      floorIdx: st.activeFloorIdx,
+    });
+    placeCameraArmed = false;
+    flashMessage(refs, `Camera placed in ${room.name}.`);
+    repaint();
   }
 
   /**
@@ -2126,6 +2260,67 @@ export function initEditorInteraction(
       })),
     );
 
+  // Issue #147 CP4: mirror the viewer's walker pose — the editor's half
+  // of the walk-nav link, and the substrate for both the glyph and the
+  // place-camera commit (which reads the last pose for "keep heading").
+  //
+  // The active floor FOLLOWS the walker across storeys (a go-to-room
+  // teleport upstairs must bring that storey into view or the walker
+  // appears to vanish) — but EDGE-triggered on the pose's floorIdx, not
+  // on every tick: a viewer publishing per frame must not pin the
+  // editor's floor and make manual browsing impossible.
+  subscribePose((pose) => {
+    walkerPose = pose;
+    if (pose === null) {
+      lastPoseFloorIdx = null;
+    } else {
+      const floorCount = store.getState().data.floors.length;
+      const clamped = Math.min(
+        Math.max(pose.floorIdx, 0),
+        Math.max(floorCount - 1, 0),
+      );
+      if (clamped !== lastPoseFloorIdx) {
+        lastPoseFloorIdx = clamped;
+        if (clamped !== store.getState().activeFloorIdx) {
+          store.dispatch({ type: "setActiveFloor", index: clamped });
+        }
+      }
+    }
+    requestWalkerGlyphRepaint();
+  });
+
+  // Issue #147 CP4 read-only seam (the __editorCam precedent): the
+  // mirrored glyph state + place-camera arming — canvas-drawn and
+  // partially off-DOM, so e2e asserts through here.
+  (
+    window as unknown as {
+      __walkerGlyph?: () => {
+        visible: boolean;
+        armed: boolean;
+        hasViewer: boolean;
+        pose: WalkerPose | null;
+        screenX: number | null;
+        screenY: number | null;
+      };
+    }
+  ).__walkerGlyph = () => {
+    const st = store.getState();
+    const visible =
+      walkerPose !== null && walkerPose.floorIdx === st.activeFloorIdx;
+    const screen =
+      walkerPose === null
+        ? null
+        : worldToScreen(cam, [walkerPose.x, walkerPose.y]);
+    return {
+      visible,
+      armed: placeCameraArmed,
+      hasViewer: hasViewerSubscriber(),
+      pose: walkerPose === null ? null : { ...walkerPose },
+      screenX: screen === null ? null : screen[0],
+      screenY: screen === null ? null : screen[1],
+    };
+  };
+
   // pkg 12.1 (issue #99) read-only seams (same __editorHandles
   // precedent): e2e aims corner grabs through the screen-space handle
   // centers and asserts the active floor's underlay state.
@@ -2498,6 +2693,15 @@ export function initEditorInteraction(
       return;
     }
     if (ev.button !== 0) return;
+
+    // Issue #147 CP4: an armed place-camera press owns the gesture — it
+    // never becomes a tool interaction or a deselect.
+    if (placeCameraArmed) {
+      placeDrag = { from: evPos(ev), to: evPos(ev) };
+      canvas.setPointerCapture(ev.pointerId);
+      repaint();
+      return;
+    }
 
     const worldPt = evWorld(ev);
 
@@ -2888,6 +3092,18 @@ export function initEditorInteraction(
     // handler — no extra listener, no extra frame cost.
     refs.statusCoords.textContent = `${worldPt[0].toFixed(2)}, ${worldPt[1].toFixed(2)} m`;
 
+    // Issue #147 CP4: an in-flight place-camera aim owns the pointer. A
+    // buttonless move (release missed the window pre-capture) disarms.
+    if (placeDrag !== null) {
+      if ((ev.buttons & 1) === 0) {
+        placeDrag = null;
+        return;
+      }
+      placeDrag.to = evPos(ev);
+      repaint();
+      return;
+    }
+
     // pkg 12.1 (issue #99): an in-flight underlay corner resize owns
     // the pointer (plain capture, no store gesture — the underlay is
     // non-undoable editor state). Frames stream from the CAPTURED base
@@ -3158,6 +3374,15 @@ export function initEditorInteraction(
   }
 
   canvas.addEventListener('pointerup', (ev) => {
+    // Issue #147 CP4: release an in-flight place-camera aim → commit it.
+    // Checked FIRST: arming claims the press before any other candidate
+    // could be created, so nothing else can be in flight.
+    if (placeDrag !== null) {
+      const drag = placeDrag;
+      placeDrag = null;
+      commitPlaceCamera(drag);
+      return;
+    }
     // Issue #110: release an armed marquee. Below the threshold this is
     // the plain empty-space click — pointerdown already deselected, so
     // disarm quietly (today's behavior byte-identical). Engaged: sweep
@@ -3319,6 +3544,14 @@ export function initEditorInteraction(
         repaint();
         return;
       }
+      // Issue #147 CP4: an armed place-camera (or its in-flight aim) dies
+      // next — prepend-only insertion, the strand below is untouched.
+      if (placeDrag !== null || placeCameraArmed) {
+        placeDrag = null;
+        placeCameraArmed = false;
+        repaint();
+        return;
+      }
       // Multi-set clear precedes the in-flight rescues: Escape with an
       // armed set (but no band) drops the selection first; a SECOND
       // Escape resumes the strand.
@@ -3417,6 +3650,23 @@ export function initEditorInteraction(
     // bubbles up to it, so R keeps rotating the selected furniture with
     // canvas focus AND arms Rectangle with nothing selected — deleting
     // the old branch here is what keeps R from double-firing.
+    //
+    // Issue #147 CP4: "C" arms the place-camera gesture — click a room
+    // to move the 3D walker there, drag to aim it. Needs the viewer
+    // (hasViewerSubscriber check inside setPlaceCameraArmed) and refuses
+    // mid-gesture like the other letter keys; pressing "C" again
+    // disarms. Registered in shortcuts.ts (sheet + README sync duty).
+    if (
+      (ev.key === "c" || ev.key === "C") &&
+      !ev.ctrlKey &&
+      !ev.metaKey &&
+      !ev.altKey
+    ) {
+      if (drawGestureInProgress()) return;
+      ev.preventDefault();
+      setPlaceCameraArmed(!placeCameraArmed);
+      return;
+    }
     // Issue #68: "S" toggles the snap-settings popover. Registered in
     // shortcuts.ts (feeds the "?" help modal + README sync spec).
     if (
