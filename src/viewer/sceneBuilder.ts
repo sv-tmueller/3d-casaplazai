@@ -306,6 +306,33 @@ void main() {
 }
 
 /**
+ * Neutral plot half-extent, meters (issue #148): a finite, non-degenerate
+ * square so the empty backdrop still has a valid orbit frame and a valid
+ * shadow frustum — double its HALF (12 m) is the framed plot.
+ */
+export const EMPTY_PLOT_HALF_EXTENT_M = 6;
+
+/**
+ * Geometry-free scene description for the empty-plan state (issue #148):
+ * the sky/ground backdrop IS the normal builder fed with zero buckets, so
+ * the dome, lighting and shadow-frustum fitting all keep working while
+ * the plan has no rooms, and the day/night + sun controls stay live.
+ * Lives here (not in the controller) so there is exactly one definition
+ * of what a viewer scene is.
+ */
+export function emptyAdaptedScene(): AdaptedScene {
+  const half = EMPTY_PLOT_HALF_EXTENT_M;
+  return {
+    buckets: [],
+    collisions: [],
+    triangleCount: 0,
+    bounds: { minX: -half, minY: -half, maxX: half, maxY: half },
+    activeFloorElevation: 0,
+    stairs: [],
+  };
+}
+
+/**
  * Assemble the full static scene from an adapted scene. Every populated
  * slot becomes ONE merged mesh; lights ride in their own group so a
  * rebuild disposes geometry/materials/light targets atomically.

@@ -77,6 +77,8 @@ export interface HudHandles {
   walkOverlay: HTMLDivElement;
   /** Subtle center reticle shown while pointer-locked in walk mode. */
   walkReticle: HTMLDivElement;
+  /** Centered empty-plan prompt (issue #148); hidden unless room-less. */
+  emptyState: HTMLDivElement;
   /** Time-of-day slider (issue #121): hours 0…24, keyboard-native. */
   sunTimeInput: HTMLInputElement;
   /** Clock readout beside the time slider (#146), e.g. "14:30". */
@@ -433,6 +435,17 @@ export function buildHud(
   walkReticle.hidden = true;
 
   root.append(walkOverlay, walkReticle);
+
+  // Empty-plan prompt (issue #148): while the plan has no rooms the
+  // viewer stands the scene down to a sky/ground backdrop and shows
+  // this centered line instead of toasting a validator failure.
+  const emptyState = document.createElement('div');
+  emptyState.className = 'hud-empty-state';
+  emptyState.dataset.testid = 'hud-empty-state';
+  emptyState.textContent = 'Draw a room in the plan to see it here';
+  emptyState.hidden = true;
+  root.append(emptyState);
+
   hostPane.appendChild(root);
 
   const handles: HudHandles = {
@@ -453,6 +466,7 @@ export function buildHud(
     perfPanel: null,
     walkOverlay,
     walkReticle,
+    emptyState,
     sunTimeInput,
     sunTimeLabel,
     sunNorthInput,
@@ -479,6 +493,26 @@ export function setWalkAffordances(
 ): void {
   handles.walkOverlay.hidden = !state.overlay;
   handles.walkReticle.hidden = !state.reticle;
+}
+
+/**
+ * Reveal/hide the empty-plan prompt (issue #148). */
+export function setEmptyState(handles: HudHandles, visible: boolean): void {
+  handles.emptyState.hidden = !visible;
+}
+
+/**
+ * Park the Walk toggle while the plan has no rooms to walk in (issue
+ * #148): the real `disabled` attribute stops the click, aria-disabled
+ * announces why to assistive tech, and the class carries the styling.
+ */
+export function setWalkDisabled(handles: HudHandles, disabled: boolean): void {
+  // #146 replaced the single Walk toggle with the Overview/Walk segment;
+  // the Walk SEGMENT button is what gets parked when there is nothing to
+  // walk in (issue #148).
+  handles.walkBtn.disabled = disabled;
+  handles.walkBtn.setAttribute('aria-disabled', String(disabled));
+  handles.walkBtn.classList.toggle('hud-toggle-disabled', disabled);
 }
 
 /**
@@ -712,21 +746,115 @@ export function playFade(handles: HudHandles): Promise<void> {
   });
 }
 
-/** Raise one toast; auto-dismisses after TTL. Errors styled distinctly. */
+/** Leaving-fade removal delay (ms); must match .hud-toast transition. */
+const TOAST_LEAVE_MS = 350;
+
+/** One live toast node plus its de-dupe bookkeeping (issue #148). */
+interface LiveToast {
+  node: HTMLDivElement;
+  count: number;
+  badge: HTMLSpanElement | null;
+  timer: number | null;
+}
+
+/**
+ * Live toasts per HUD, keyed by variant+message (issue #148): an
+ * identical repeat collapses onto the node already on screen instead of
+ * stacking a duplicate every poll. WeakMap — the registry dies with its
+ * HUD (unit tests build many).
+ */
+const liveToasts = new WeakMap<HudHandles, Map<string, LiveToast>>();
+
+/** De-dupe key: variant and message are both significant. */
+function toastKey(variant: string, message: string): string {
+  return `${variant}\u0000${message}`;
+}
+
+function toastRegistry(handles: HudHandles): Map<string, LiveToast> {
+  let registry = liveToasts.get(handles);
+  if (!registry) {
+    registry = new Map();
+    liveToasts.set(handles, registry);
+  }
+  return registry;
+}
+
+/** Render/refresh the optional ×N badge (count 1 keeps the node bare). */
+function renderToastCount(live: LiveToast): void {
+  if (live.count < 2) return;
+  const badge = document.createElement('span');
+  badge.className = 'hud-toast-count';
+  badge.dataset.testid = 'hud-toast-count';
+  badge.textContent = `×${live.count}`;
+  if (live.badge) live.badge.replaceWith(badge);
+  else live.node.appendChild(badge);
+  live.badge = badge;
+}
+
+/** Arm (or re-arm) the TTL → leaving-fade → removal chain. */
+function armToastDismissal(
+  handles: HudHandles,
+  live: LiveToast,
+  key: string,
+): number {
+  return window.setTimeout(() => {
+    live.timer = null;
+    // On its way out: forget the entry so a repeat during the fade
+    // starts a FRESH node instead of resurrecting a dying one.
+    const registry = liveToasts.get(handles);
+    if (registry?.get(key) === live) registry.delete(key);
+    live.node.classList.add('hud-toast-leaving');
+    window.setTimeout(() => live.node.remove(), TOAST_LEAVE_MS);
+  }, TOAST_TTL_MS);
+}
+
+/**
+ * Raise one toast; auto-dismisses after TTL. Errors styled distinctly.
+ * An identical (variant+message) repeat is NOT a second node (issue
+ * #148): it resets the dismissal timer and steps the ×N badge, so a
+ * failure that recurs on every poll reads as one incident rather than a
+ * toast storm.
+ */
 export function toast(
   handles: HudHandles,
   message: string,
   variant: 'info' | 'error' = 'info',
 ): void {
-  const node = document.createElement('div');
-  node.className = `hud-toast hud-toast-${variant}`;
-  node.dataset.testid = 'hud-toast';
-  node.textContent = message;
-  handles.toasts.appendChild(node);
-  window.setTimeout(() => {
-    node.classList.add('hud-toast-leaving');
-    window.setTimeout(() => node.remove(), 350);
-  }, TOAST_TTL_MS);
+  const key = toastKey(variant, message);
+  const registry = toastRegistry(handles);
+  const live = registry.get(key);
+  if (live) {
+    if (live.timer !== null) window.clearTimeout(live.timer);
+    live.timer = armToastDismissal(handles, live, key);
+    live.count += 1;
+    renderToastCount(live);
+    return;
+  }
+  const el = document.createElement('div');
+  el.className = `hud-toast hud-toast-${variant}`;
+  el.dataset.testid = 'hud-toast';
+  el.dataset.variant = variant;
+  el.textContent = message;
+  handles.toasts.appendChild(el);
+  const entry: LiveToast = { node: el, count: 1, badge: null, timer: null };
+  registry.set(key, entry);
+  entry.timer = armToastDismissal(handles, entry, key);
+}
+
+/**
+ * Drop every live ERROR toast immediately (issue #148): the plan became
+ * valid again, so the failure it announced is stale. Info toasts carry
+ * standing guidance and survive.
+ */
+export function dismissErrorToasts(handles: HudHandles): void {
+  const registry = liveToasts.get(handles);
+  if (!registry) return;
+  for (const [key, live] of [...registry]) {
+    if (live.node.dataset.variant !== 'error') continue;
+    if (live.timer !== null) window.clearTimeout(live.timer);
+    registry.delete(key);
+    live.node.remove();
+  }
 }
 
 /** Cap concurrent toasts (drop oldest beyond this many). */
@@ -824,6 +952,14 @@ function nth(sorted: readonly number[], i: number): number {
 
 /** Remove every HUD node (dispose chain leaf). */
 export function destroyHud(handles: HudHandles): void {
+  const registry = liveToasts.get(handles);
+  if (registry) {
+    for (const live of registry.values()) {
+      if (live.timer !== null) window.clearTimeout(live.timer);
+    }
+    registry.clear();
+    liveToasts.delete(handles);
+  }
   handles.perfPanel?.remove();
   handles.root.remove();
 }

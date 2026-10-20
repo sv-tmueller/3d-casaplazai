@@ -122,10 +122,20 @@ export class OrbitRig implements CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
-  /** Current orbit azimuth in degrees (restore seam for mode swaps). */
+  /**
+   * Current orbit azimuth in degrees (restore seam for mode swaps).
+   *
+   * Reads the camera's UP vector — the exact quantity `placeCamera`
+   * writes (`up = (sin az, cos az, 0)`) — so getter and setter are
+   * inverses. The previous form read the camera→target offset, which is
+   * degenerate for this top-down rig: the offset is almost entirely z
+   * (hover 120) while off.y is floating-point dust, so the reader
+   * snapped between 0 and ±180 depending on the sign of the drift, and
+   * the walk-exit restore applied a bogus 180° flip to the plan.
+   */
   public get azimuthDegrees(): number {
-    const off = this.camera.position.clone().sub(this.controls.target);
-    return (Math.atan2(off.y, off.x) * 180) / Math.PI;
+    const up = this.camera.up;
+    return (Math.atan2(up.x, up.y) * 180) / Math.PI;
   }
 
   /** Pan/zoom the camera so the given plan fills the viewport. */
