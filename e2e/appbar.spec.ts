@@ -62,6 +62,16 @@ test.describe('toolbar IA (#142)', () => {
     // --- status bar: three zones --------------------------------------
     // The middle zone is EMPTY until the pointer is over the canvas (the
     // pointermove cursor meter, CP2) — drive it, then read it.
+    // --- status bar: hovering the canvas publishes cursor coords --------
+    // (pkg #144: the first-run empty-state card sits over the canvas
+    // center on a fresh profile and eats the hover; arming a drawing
+    // tool via the card's own Draw button steps it aside, so the hover
+    // reaches the canvas instead of the card.)
+    const card = page.getByTestId('empty-state-card');
+    if (await card.count()) {
+      await page.getByTestId('empty-draw-room').click();
+      await expect(card).toBeHidden();
+    }
     const cb = (await page.locator('.editor-canvas').boundingBox())!;
     await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
     await expect(page.locator('.editor-status')).toBeVisible();

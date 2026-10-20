@@ -501,6 +501,9 @@ test.describe.serial('single-key tool hotkeys (issue #143)', () => {
     const drop = await aim(page, 1.8, -2.0);
     await page.mouse.click(drop.x, drop.y);
 
+    // pkg #142 folded Export into the File popover; open it first so
+    // btn-export is actionable (hotkeys-under-dialog guard still tested).
+    await page.getByTestId('btn-file').click();
     await page.getByTestId('btn-export').click();
     const dialog = page.getByTestId('export-dialog');
     await expect(dialog).toBeVisible();
