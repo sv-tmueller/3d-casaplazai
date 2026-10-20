@@ -314,6 +314,21 @@ export function initEditorInteraction(
   // pkg 3 (issue #4):
   let stampType: string = "bed";
   let ghost: GhostPreview | null = null;
+  /*
+   * Issue #139 (ghost throttle): memo for updateStairGhost — at most
+   * one validateGeometry per distinct snapped cursor cell. Declared
+   * NEXT TO `ghost` (well before the store subscriber that clears it)
+   * so a notify firing mid-init never trips the TDZ.
+   */
+  let stairGhostCache: {
+    anchor: Pt;
+    cursorCell: string;
+    roomId: string;
+    stair: Staircase | null;
+    valid: boolean;
+  } | null = null;
+  /** Issue #139 seam: full verdict computations since boot. */
+  let stairVerdictComputations = 0;
   let hoverSeg: { roomId: string; segIndex: number } | null = null;
   let draggingFurnitureId: string | null = null;
   // Issue #61: opening drag candidate (null = no opening drag in flight).
@@ -894,6 +909,10 @@ export function initEditorInteraction(
 
   store.subscribe((_s) => {
     if (_s === undefined) return;
+    // Issue #139: any store notify invalidates the stair-ghost memo —
+    // reducers mutate `data` IN PLACE, so identity checks cannot detect
+    // revisions. Cleared here, wholesale, on every notify.
+    stairGhostCache = null;
     // Ratified decision (a) on issue #75: the autosave slot carries RAW
     // v2 data (hydration migrates-at-the-door, so both shapes load).
     // Renaming the KEY would orphan every existing save — key stays.
@@ -2201,6 +2220,11 @@ export function initEditorInteraction(
   // Issue #53 read-only seam: screen-space resize-handle centres of the
   // currently-selected room (empty when nothing is selected). Same
   // precedent as __editorCam — lets e2e assert handle count + aim grabs.
+  // Issue #139 read-only seam: full stair-verdict computations (the
+  // throttle pin divides by distinct snapped cells visited).
+  (window as unknown as { __editorStairVerdicts?: () => number })
+    .__editorStairVerdicts = () => stairVerdictComputations;
+
   (window as unknown as { __editorHandles?: () => Pt[] }).__editorHandles =
     () => {
       const st = store.getState();
@@ -2543,6 +2567,11 @@ export function initEditorInteraction(
         : data.floors,
       stairs: [...data.stairs, stair],
     };
+    // Issue #139: test seam — counts FULL verdict computations (the
+    // validateGeometry call below), letting the throttle pin assert
+    // at-most-one-per-snapped-cell. Read-only exposure via
+    // __editorStairVerdicts (same precedent as __editorHandles).
+    stairVerdictComputations += 1;
     try {
       validateGeometry(candidate);
       return { ok: true, noArrival };
@@ -2551,10 +2580,43 @@ export function initEditorInteraction(
     }
   }
 
-  /** Live ghost for the in-flight stair drag: green/red via the verdict. */
+  /**
+   * Live ghost for the in-flight stair drag: green/red via the verdict.
+   *
+   * Issue #139 (ghost throttle): this runs on EVERY pointermove and
+   * stairCandidateVerdict() costs a full validateGeometry() on a fresh
+   * candidate copy — O(plan) at pointer-event frequency. Memoize on the
+   * snapped cursor CELL: the verdict depends only on (anchor, cursor,
+   * roomId, plan revision), and both inputs are snapped, so a verdict
+   * computed for one cell is valid for every pointermove inside it —
+   * AT MOST ONE validateGeometry per distinct cell, and consecutive
+   * pointermoves inside the same cell cost nothing. The cache is
+   * invalidated wholesale when the plan data changes identity (any
+   * store mutation replaces the data object) or the draft restarts.
+   */
   function updateStairGhost(draft: { anchor: Pt; cursor: Pt; roomId: string }): void {
+    const cursorCell = `${draft.cursor[0]},${draft.cursor[1]}`;
+    const cached = stairGhostCache;
+    if (
+      cached !== null &&
+      cached.anchor[0] === draft.anchor[0] &&
+      cached.anchor[1] === draft.anchor[1] &&
+      cached.cursorCell === cursorCell &&
+      cached.roomId === draft.roomId
+    ) {
+      ghost = cached.stair === null ? null : { kind: 'stairs', stair: cached.stair, valid: cached.valid };
+      return;
+    }
     const stair = stairDraftCandidate(draft);
-    ghost = stair === null ? null : { kind: 'stairs', stair, valid: stairCandidateVerdict(stair).ok };
+    const valid = stair === null ? false : stairCandidateVerdict(stair).ok;
+    stairGhostCache = {
+      anchor: [draft.anchor[0], draft.anchor[1]],
+      cursorCell,
+      roomId: draft.roomId,
+      stair: stair === null ? null : { ...stair },
+      valid,
+    };
+    ghost = stair === null ? null : { kind: 'stairs', stair, valid };
   }
 
   function destroyStairOffer(): void {
@@ -2897,9 +2959,23 @@ export function initEditorInteraction(
       draggingFurnitureId = grabbed.id;
       // Issue #110: a member of an armed multi-set drags the WHOLE set
       // (bulk move rides the existing gesture collapse — one undo step).
+      // Issue #139: stairs are EXCLUDED from the bulk-drag set — there
+      // is no moveStair yet, so riding them along would silently strand
+      // the flight outside its host; leaving them behind without a word
+      // was the original dishonesty. Visible hint, once per drag.
+      const stairIds = new Set(
+        activeFloorStairs(store.getState().data).map((s) => s.id),
+      );
+      const rideAlong = [...multiSelected].filter((id) => !stairIds.has(id));
+      if (rideAlong.length !== multiSelected.size) {
+        flashMessage(
+          refs,
+          "Staircases stay put in a bulk drag — move or redraw them individually.",
+        );
+      }
       bulkDragIds =
         multiSelected.size > 1 && multiSelected.has(grabbed.id)
-          ? [...multiSelected]
+          ? rideAlong
           : null;
       store.beginGesture();
       phase = { tag: "draggingFurniture", furnitureId: grabbed.id };

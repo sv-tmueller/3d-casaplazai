@@ -102,6 +102,12 @@ export const SHORTCUTS: ShortcutEntry[] = [
     surface: 'editor',
   },
   {
+    keys: 'Drag on empty space',
+    action:
+      'Marquee multi-select (bulk delete; bulk DRAG moves rooms and furniture — staircases stay put)',
+    surface: 'editor',
+  },
+  {
     keys: 'Alt+Drag / Middle-Drag',
     action: 'Pan the canvas',
     surface: 'editor',

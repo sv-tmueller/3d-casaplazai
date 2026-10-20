@@ -109,6 +109,7 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | Del / Backspace  | Delete selected room, opening, or furniture          |
 | 0                | Fit the whole plan in the viewport                   |
 | Space (hold)     | Temporarily switch to the Pan tool                    |
+| Drag on empty space | Marquee multi-select (bulk delete; bulk DRAG moves rooms and furniture — staircases stay put) |
 | Alt+Drag / Middle-Drag | Pan the canvas                                 |
 | Wheel            | Zoom at cursor                                       |
 <!-- END SHORTCUTS -->
