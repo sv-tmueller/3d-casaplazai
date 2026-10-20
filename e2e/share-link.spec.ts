@@ -69,7 +69,10 @@ test.describe.serial('share-link round-trip (issue #91)', () => {
       (window as any).__casaplaza.loadPlan(JSON.parse(planJson));
     }, raw);
 
-    // MOUSELESS SHARE: Tab to the button, activate with Enter.
+    // MOUSELESS SHARE: open the File menu first (pkg #142 — a closed menu
+    // is `hidden`, so its items are not focusable), Tab to the item,
+    // activate with Enter.
+    await page.getByTestId('btn-file').click();
     await tabToTestId(page, 'btn-share');
     await page.keyboard.press('Enter');
     await expect(page.locator('.inline-msg')).toContainText('Share link copied');

@@ -217,6 +217,9 @@ test.describe.serial('floor texture picker (issue #119)', () => {
     // SHARE-LINK LEG: mouseless share (Tab to the button, Enter), then a
     // fresh recipient context with no state but the URL.
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    // pkg #142: Share is a File-menu item now; the menu must be OPEN for
+    // its items to be Tab-reachable (closed menu = `hidden`).
+    await page.getByTestId('btn-file').click();
     for (let i = 0; i < 40; i += 1) {
       await page.keyboard.press('Tab');
       const focused = await page.evaluate(
