@@ -135,10 +135,15 @@ test.describe.serial('floor texture picker (issue #119)', () => {
 
     const plain = await sampleRegion(page, 2.5, -2);
 
-    // MOUSELESS: Tab from the panel root lands on Close, then on the
-    // group's CHECKED radio (a radio group is a single tab stop).
+    // MOUSELESS: Tab from the panel root lands on Close, then walks the
+    // room Name field (added by pkg #145 in renderRoom, so it sits
+    // between the heading control and the material group — DOM order =
+    // Tab order), then on the group's CHECKED radio (a radio group is a
+    // single tab stop).
     await page.keyboard.press('Tab');
     await expect(page.getByTestId('btn-close-inspector')).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.getByTestId('insp-room-name')).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(page.getByTestId('insp-tex-none')).toBeFocused();
 
@@ -304,6 +309,9 @@ test.describe.serial('floor texture picker (issue #119)', () => {
     await openPanelOn(page, 2.5, -2);
     await expect(page.getByTestId('insp-tex-none')).toBeChecked();
 
+    // Tab walk from the panel root: Close → room Name field (pkg #145)
+    // → the group's CHECKED radio, then ArrowRight picks.
+    await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     await page.keyboard.press('Tab');
     await page.keyboard.press('ArrowRight');

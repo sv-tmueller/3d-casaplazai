@@ -161,7 +161,17 @@ export type Command =
    * pick is exactly one undo step. First writer of the dormant
    * Room.floorTexture field (drawRoom has hardcoded null since pkg 2).
    */
-  | { type: 'setRoomFloorTexture'; roomId: string; texture: FloorTexture };
+  | { type: 'setRoomFloorTexture'; roomId: string; texture: FloorTexture }
+  /* ---- pkg #145 (issue #145): inspector room rename + plan wall settings ---- */
+  /**
+   * Rename a room; the name is trimmed and an empty result is rejected
+   * (mirrors renameFloor). Ordinary mutating command — one undo step.
+   */
+  | { type: 'renameRoom'; roomId: string; name: string }
+  /** Plan-global clear interior height (metres); UI bounds EDITOR_WALL_HEIGHT_*. */
+  | { type: 'setWallHeight'; value: number }
+  /** Plan-global wall thickness (metres); UI bounds EDITOR_WALL_THICKNESS_*. */
+  | { type: 'setWallThickness'; value: number };
 
 export type DispatchResult =
   | { ok: true }
@@ -747,6 +757,61 @@ function reduceSetRoomFloorTexture(
   return { ok: true };
 }
 
+/* ------- pkg #145 (issue #145): room rename + plan wall settings -------- */
+
+/**
+ * Inclusive UI bounds for the plan-global wall settings. The schema
+ * validator only demands positive finite numbers (validate.ts), so every
+ * value the inspector admits is validatable by construction; the bounds
+ * keep the panel inside the range the editor can meaningfully express.
+ */
+export const EDITOR_WALL_HEIGHT_MIN = 2.0;
+export const EDITOR_WALL_HEIGHT_MAX = 6.0;
+export const EDITOR_WALL_THICKNESS_MIN = 0.05;
+export const EDITOR_WALL_THICKNESS_MAX = 0.6;
+
+function reduceRenameRoom(
+  st: EditorState,
+  cmd: { roomId: string; name: string },
+): DispatchResult {
+  const room = activeFloor(st).rooms.find((r) => r.id === cmd.roomId);
+  if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
+  const name = cmd.name.trim();
+  if (name === '') return { ok: false, error: 'room name cannot be empty' };
+  room.name = name;
+  return { ok: true };
+}
+
+function reduceSetWallHeight(st: EditorState, cmd: { value: number }): DispatchResult {
+  if (
+    !Number.isFinite(cmd.value) ||
+    cmd.value < EDITOR_WALL_HEIGHT_MIN ||
+    cmd.value > EDITOR_WALL_HEIGHT_MAX
+  ) {
+    return {
+      ok: false,
+      error: `wall height must lie in [${EDITOR_WALL_HEIGHT_MIN}, ${EDITOR_WALL_HEIGHT_MAX}]`,
+    };
+  }
+  st.data.wallHeight = cmd.value;
+  return { ok: true };
+}
+
+function reduceSetWallThickness(st: EditorState, cmd: { value: number }): DispatchResult {
+  if (
+    !Number.isFinite(cmd.value) ||
+    cmd.value < EDITOR_WALL_THICKNESS_MIN ||
+    cmd.value > EDITOR_WALL_THICKNESS_MAX
+  ) {
+    return {
+      ok: false,
+      error: `wall thickness must lie in [${EDITOR_WALL_THICKNESS_MIN}, ${EDITOR_WALL_THICKNESS_MAX}]`,
+    };
+  }
+  st.data.wallThickness = cmd.value;
+  return { ok: true };
+}
+
 /* ------------------- pkg 8.1 roof reducers (issue #83) -------------------- */
 
 /** Maximum lean from horizontal the editor will express, degrees. */
@@ -1195,6 +1260,13 @@ export class EditorStore {
       /* ---- pkg 14.4 addition (issue #119) ---- */
       case 'setRoomFloorTexture':
         return reduceSetRoomFloorTexture(this._state, cmd);
+      /* ---- pkg #145 (issue #145) additions ---- */
+      case 'renameRoom':
+        return reduceRenameRoom(this._state, cmd);
+      case 'setWallHeight':
+        return reduceSetWallHeight(this._state, cmd);
+      case 'setWallThickness':
+        return reduceSetWallThickness(this._state, cmd);
     }
   }
 

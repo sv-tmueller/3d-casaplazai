@@ -846,3 +846,93 @@ describe('setRoomFloorTexture (issue #119)', () => {
     expect(store.canUndo()).toBe(false);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Issue #145: inspector room rename + plan wall settings              *
+ * ------------------------------------------------------------------ */
+
+describe('renameRoom (issue #145)', () => {
+  it('renames the addressed room only, trimming whitespace', () => {
+    const store = newStore();
+    const res = store.dispatch({
+      type: 'renameRoom',
+      roomId: 'living',
+      name: '  Lounge  ',
+    });
+    expect(res.ok).toBe(true);
+    const rooms = store.getState().data.floors[0].rooms;
+    expect(rooms.find((r) => r.id === 'living')!.name).toBe('Lounge');
+    expect(rooms.find((r) => r.id === 'kitchen')!.name).toBe('Kitchen');
+  });
+
+  it('rejects an empty (or whitespace-only) name without mutating or snapshotting', () => {
+    const store = newStore();
+    const res = store.dispatch({ type: 'renameRoom', roomId: 'living', name: '   ' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('room name cannot be empty');
+    expect(store.getState().data.floors[0].rooms[0]!.name).toBe('Living');
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('refuses an unknown room without mutating or snapshotting', () => {
+    const store = newStore();
+    const res = store.dispatch({ type: 'renameRoom', roomId: 'ghost', name: 'Nope' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('unknown room');
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('is exactly one undo step', () => {
+    const store = newStore();
+    store.dispatch({ type: 'renameRoom', roomId: 'living', name: 'Lounge' });
+    expect(store.undo()).toBe(true);
+    expect(store.getState().data.floors[0].rooms[0]!.name).toBe('Living');
+    expect(store.canUndo()).toBe(false);
+  });
+});
+
+describe('setWallHeight / setWallThickness (issue #145)', () => {
+  it('sets plan-global values, each edit exactly one undo step', () => {
+    const store = newStore();
+    expect(store.dispatch({ type: 'setWallHeight', value: 3.2 }).ok).toBe(true);
+    expect(store.dispatch({ type: 'setWallThickness', value: 0.3 }).ok).toBe(true);
+    expect(store.getState().data.wallHeight).toBeCloseTo(3.2, 6);
+    expect(store.getState().data.wallThickness).toBeCloseTo(0.3, 6);
+    // Undo unwinds ONE edit at a time (thickness first, then height).
+    expect(store.undo()).toBe(true);
+    expect(store.getState().data.wallThickness).toBeCloseTo(0.24, 6);
+    expect(store.getState().data.wallHeight).toBeCloseTo(3.2, 6);
+    expect(store.undo()).toBe(true);
+    expect(store.getState().data.wallHeight).toBeCloseTo(2.7, 6);
+    expect(store.canUndo()).toBe(false);
+  });
+
+  it('accepts the inclusive UI bounds', () => {
+    const store = newStore();
+    for (const value of [2.0, 6.0]) {
+      expect(store.dispatch({ type: 'setWallHeight', value }).ok).toBe(true);
+    }
+    for (const value of [0.05, 0.6]) {
+      expect(store.dispatch({ type: 'setWallThickness', value }).ok).toBe(true);
+    }
+    expect(store.getState().data.wallHeight).toBe(6.0);
+    expect(store.getState().data.wallThickness).toBe(0.6);
+  });
+
+  it('rejects out-of-range / non-finite values without mutating or snapshotting', () => {
+    const store = newStore();
+    for (const value of [1.9, 6.1, 0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const res = store.dispatch({ type: 'setWallHeight', value });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toContain('wall height');
+    }
+    for (const value of [0.04, 0.61, 0, -0.1, Number.NaN]) {
+      const res = store.dispatch({ type: 'setWallThickness', value });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toContain('wall thickness');
+    }
+    expect(store.getState().data.wallHeight).toBeCloseTo(2.7, 6);
+    expect(store.getState().data.wallThickness).toBeCloseTo(0.24, 6);
+    expect(store.canUndo()).toBe(false);
+  });
+});

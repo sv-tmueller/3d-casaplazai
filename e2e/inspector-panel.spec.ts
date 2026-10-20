@@ -295,3 +295,149 @@ test.describe.serial('inspector opening case (issue #101)', () => {
     expect(errors).toEqual([]);
   });
 });
+
+/* ------------- pkg #145 (issue #145): renames + plan settings -------------- */
+
+type LegacyWire = {
+  wallHeight: number;
+  wallThickness: number;
+  rooms: { id: string; name: string }[];
+};
+
+/** Frozen v1 wire via the __casaplaza bridge (renames assert here). */
+async function legacyWire(page: Page): Promise<LegacyWire> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return page.evaluate(() => (window as any).__casaplaza.getData());
+}
+
+/** Ensure nothing is selected, then open the panel from the toggle. */
+async function openEmptyPanel(page: Page): Promise<void> {
+  await page.locator('.editor-canvas').focus();
+  await page.keyboard.press('Escape');
+  await page.getByTestId('btn-inspector').click();
+  await expect(page.getByTestId('inspector-panel')).toBeVisible();
+}
+
+/** Interior click selects the studio room; keyboard 'i' opens the panel. */
+async function openRoomPanel(page: Page): Promise<void> {
+  const p = await aim(page, 2.5, -2);
+  await page.mouse.click(p.x, p.y);
+  await page.locator('.editor-canvas').focus();
+  await page.keyboard.press('i');
+  await expect(page.getByTestId('inspector-panel')).toBeVisible();
+}
+
+test.describe.serial('inspector renames + plan settings (issue #145)', () => {
+  test.beforeEach(async ({ page }) => {
+    await loadStudio(page);
+  });
+
+  test('room rename retitles the section; ONE Ctrl+Z restores the old name', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(String(err)));
+
+    await openRoomPanel(page);
+    const panel = page.getByTestId('inspector-panel');
+    const name = page.getByTestId('insp-room-name');
+    await expect(name).toHaveValue('Studio');
+
+    await name.fill('Loft');
+    await page.keyboard.press('Enter');
+
+    // One commit: the wire renames and the panel's room title follows
+    // (canvas badge + PNG export read room.name live on repaint).
+    expect((await legacyWire(page)).rooms[0].name).toBe('Loft');
+    await expect(panel.locator('.inspector-section-title').first()).toHaveText(
+      'Loft',
+    );
+    // The panel SURVIVES the commit (additive surface, focus retained).
+    await expect(name).toBeFocused();
+
+    // ONE undo step reverts the rename (Enter+change must not double-dip).
+    await page.locator('.editor-canvas').press('Control+z');
+    expect((await legacyWire(page)).rooms[0].name).toBe('Studio');
+    await expect(panel.locator('.inspector-section-title').first()).toHaveText(
+      'Studio',
+    );
+    await expect(name).toHaveValue('Studio');
+
+    expect(errors).toEqual([]);
+  });
+
+  test('empty room name flashes and restores the last committed value', async ({
+    page,
+  }) => {
+    await openRoomPanel(page);
+    const name = page.getByTestId('insp-room-name');
+    await name.fill('');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.inline-msg')).toContainText(
+      'Room name cannot be empty',
+    );
+    // Field snaps back to the last committed name; the store is untouched.
+    await expect(name).toHaveValue('Studio');
+    expect((await legacyWire(page)).rooms[0].name).toBe('Studio');
+  });
+
+  test('no selection: Plan + Floor sections append below the summary', async ({
+    page,
+  }) => {
+    await openEmptyPanel(page);
+    const panel = page.getByTestId('inspector-panel');
+
+    // The pinned #101 summary stays (additive surface, not a rewrite).
+    await expect(panel.getByText('Livable area')).toBeVisible();
+    await expect(panel.getByText('12.0 m²')).toBeVisible();
+
+    // Plan-level wall settings, seeded from the loaded wire.
+    await expect(panel.getByText('Plan', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('insp-wall-height')).toHaveValue('2.7');
+    await expect(page.getByTestId('insp-wall-thickness')).toHaveValue('0.24');
+
+    // Floor section: rename field + read-only elevation row.
+    await expect(panel.getByText('Floor', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('insp-floor-name')).toHaveValue('Ground');
+    await expect(panel.getByText('Elevation')).toBeVisible();
+    await expect(panel.getByText('0.00 m')).toBeVisible();
+  });
+
+  test('plan wall settings + floor rename commit from the panel', async ({
+    page,
+  }) => {
+    await openEmptyPanel(page);
+
+    const height = page.getByTestId('insp-wall-height');
+    await height.fill('3.2');
+    await page.keyboard.press('Enter');
+    expect((await legacyWire(page)).wallHeight).toBeCloseTo(3.2, 5);
+
+    const thick = page.getByTestId('insp-wall-thickness');
+    await thick.fill('0.3');
+    await page.keyboard.press('Enter');
+    expect((await legacyWire(page)).wallThickness).toBeCloseTo(0.3, 5);
+
+    // Floor rename through the panel re-labels the toolbar floor badge.
+    const floorName = page.getByTestId('insp-floor-name');
+    await floorName.fill('Loft');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('floor-badge')).toHaveText('Loft · Level 1');
+  });
+
+  test('out-of-range wall height flashes and leaves the plan untouched', async ({
+    page,
+  }) => {
+    await openEmptyPanel(page);
+
+    const height = page.getByTestId('insp-wall-height');
+    await height.fill('99');
+    await page.keyboard.press('Enter');
+
+    await expect(page.locator('.inline-msg')).toContainText(
+      'wall height must lie in [2, 6]',
+    );
+    expect((await legacyWire(page)).wallHeight).toBeCloseTo(2.7, 5);
+  });
+});
