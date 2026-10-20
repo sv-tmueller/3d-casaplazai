@@ -23,6 +23,7 @@
  */
 
 import type {
+  Floor,
   FloorplanData,
   FloorTexture,
   FurnitureItem,
@@ -49,7 +50,7 @@ export interface SegmentAddress {
  * live for the selected room.
  */
 export type SelectionDescriptor =
-  | { kind: 'none' }
+  | { kind: 'none'; floor: Floor }
   | { kind: 'wall'; room: Room; segIndex: number }
   | { kind: 'opening'; opening: Opening; room: Room }
   | { kind: 'room'; room: Room }
@@ -172,6 +173,60 @@ function numberField(
   return input;
 }
 
+/**
+ * Text field with a labelled input — the string analog of numberField.
+ * Commits via `commit(raw.trim())` on Enter or change/blur; an empty
+ * (post-trim) value bounces through `flash` and restores the last
+ * committed text, so the panel never dispatches a rejected write.
+ * `commit` returns whether the command took; a failed commit leaves the
+ * field as typed (the flash explains why) but does NOT latch the value,
+ * so a corrected retry commits cleanly.
+ */
+function textField(
+  body: HTMLElement,
+  labelText: string,
+  testid: string,
+  value: string,
+  commit: (parsed: string) => boolean,
+  flash: (msg: string) => void,
+  emptyError: string,
+): HTMLInputElement {
+  const wrap = document.createElement('label');
+  wrap.className = 'inspector-field';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = value;
+  input.dataset.testid = testid;
+  // Textual label keeps the accessible name stable for getByRole.
+  input.setAttribute('aria-label', labelText);
+  wrap.append(document.createTextNode(labelText), input);
+  body.appendChild(wrap);
+
+  let lastCommitted = value;
+  const run = (): void => {
+    const next = input.value.trim();
+    if (next === '') {
+      flash(emptyError);
+      input.value = lastCommitted;
+      return;
+    }
+    // Equal-to-last skips the duplicate dispatch Enter+change would
+    // otherwise produce (two undo steps for one edit).
+    if (next === lastCommitted) return;
+    if (commit(next)) lastCommitted = next;
+  };
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      run();
+    }
+  });
+  // change (not input): commit on blur only after the user settles —
+  // mirrors numberField.
+  input.addEventListener('change', run);
+  return input;
+}
+
 export interface InspectorPanel {
   /** Root element (append into the editor layout). */
   readonly root: HTMLElement;
@@ -256,7 +311,7 @@ export function mountInspectorPanel(
       body.replaceChildren();
 
       if (desc.kind === 'none') {
-        renderNone(body, plan);
+        renderNone(body, plan, desc.floor, dispatch, flash);
       } else if (desc.kind === 'wall') {
         renderWall(body, desc.room, desc.segIndex, dispatch, flash);
       } else if (desc.kind === 'opening') {
@@ -321,7 +376,13 @@ export function mountInspectorPanel(
 
 /* -------------------------- no-selection summary -------------------------- */
 
-function renderNone(body: HTMLElement, plan: FloorplanData): void {
+function renderNone(
+  body: HTMLElement,
+  plan: FloorplanData,
+  floor: Floor,
+  dispatch: PanelDispatch,
+  flash: (msg: string) => void,
+): void {
   sectionTitle(body, 'Nothing selected');
   const dl = document.createElement('dl');
   dl.className = 'inspector-summary';
@@ -341,6 +402,67 @@ function renderNone(body: HTMLElement, plan: FloorplanData): void {
   );
   kvRow(dl, 'Livable area', `${total.toFixed(1)} m\u00B2`);
   body.appendChild(dl);
+
+  // pkg #145 (issue #145): plan + floor settings, APPENDED below the
+  // summary (the pinned "no selection shows the plan summary" e2e keeps
+  // passing — the summary stays, this is additive surface).
+  sectionTitle(body, 'Plan');
+  numberField(
+    body,
+    'Wall height (m)',
+    'insp-wall-height',
+    plan.wallHeight,
+    (value) => {
+      const res = dispatch({ type: 'setWallHeight', value });
+      if (!res.ok) {
+        flash(res.error);
+        return false;
+      }
+      return true;
+    },
+    flash,
+    'Wall height must be a number.',
+    '0.1',
+  );
+  numberField(
+    body,
+    'Wall thickness (m)',
+    'insp-wall-thickness',
+    plan.wallThickness,
+    (value) => {
+      const res = dispatch({ type: 'setWallThickness', value });
+      if (!res.ok) {
+        flash(res.error);
+        return false;
+      }
+      return true;
+    },
+    flash,
+    'Wall thickness must be a number.',
+    '0.01',
+  );
+
+  sectionTitle(body, 'Floor');
+  textField(
+    body,
+    'Name',
+    'insp-floor-name',
+    floor.name,
+    (name) => {
+      const res = dispatch({ type: 'renameFloor', name });
+      if (!res.ok) {
+        flash(res.error);
+        return false;
+      }
+      return true;
+    },
+    flash,
+    'Floor name cannot be empty.',
+  );
+  const floorDl = document.createElement('dl');
+  floorDl.className = 'inspector-summary';
+  kvRow(floorDl, 'Elevation', `${floor.elevation.toFixed(2)} m`);
+  body.appendChild(floorDl);
 }
 
 /* --------------- pkg 13.2 (issue #110): multi-select aggregate -------------- */
@@ -581,6 +703,25 @@ function renderRoom(
   flash: (msg: string) => void,
 ): void {
   sectionTitle(body, room.name);
+  // pkg #145 (issue #145): rename in place — the section title above, the
+  // canvas badge and the PNG export all read room.name live, so one store
+  // commit re-labels every surface on the next render/repaint.
+  textField(
+    body,
+    'Name',
+    'insp-room-name',
+    room.name,
+    (name) => {
+      const res = dispatch({ type: 'renameRoom', roomId: room.id, name });
+      if (!res.ok) {
+        flash(res.error);
+        return false;
+      }
+      return true;
+    },
+    flash,
+    'Room name cannot be empty.',
+  );
   const dl = document.createElement('dl');
   dl.className = 'inspector-summary';
   // Livable area REUSES measures.ts (shoelace stays owned by geom.ts —

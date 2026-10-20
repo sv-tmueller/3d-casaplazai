@@ -638,7 +638,10 @@ export function initEditorInteraction(
     }
     const st = store.getState();
     const sel = st.selectedId;
-    if (sel === null) return { kind: "none" };
+    // pkg #145 (issue #145): the no-selection descriptor carries the active
+    // Floor — the panel's Plan/Floor settings sections render under it.
+    const activeFl = st.data.floors[st.activeFloorIdx];
+    if (sel === null) return { kind: "none", floor: activeFl };
     const view = activeFloorPlan(st);
     const room = flatRooms(view).find((r) => r.id === sel);
     if (room) {
@@ -657,7 +660,7 @@ export function initEditorInteraction(
       const host = flatRooms(view).find((r) => r.id === opening.roomId);
       // Host room always exists (deleteRoom cascades openings), but a
       // defensive bail beats constructing a fake Room.
-      if (!host) return { kind: "none" };
+      if (!host) return { kind: "none", floor: activeFl };
       return { kind: "opening", opening, room: host };
     }
     const item = flatFurniture(view).find((f) => f.id === sel);
@@ -666,7 +669,7 @@ export function initEditorInteraction(
     // flight departs the ACTIVE floor (its host room is visible here).
     const stair = activeFloorStairs(view).find((s) => s.id === sel);
     if (stair) return { kind: "stair", stair };
-    return { kind: "none" };
+    return { kind: "none", floor: activeFl };
   }
 
   /** Re-render the inspector IF it is open (cheap no-op collapsed). */
