@@ -146,7 +146,7 @@ export function safeHudStorage(): Storage | null {
  */
 export function loadHudState(storage: Storage | null): HudPersistedState {
   if (!storage) return defaultHudState();
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = storage.getItem(HUD_STATE_STORAGE_KEY);
   } catch {

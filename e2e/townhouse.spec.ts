@@ -60,7 +60,8 @@ test.describe.serial('townhouse two-storey load-smoke (issue #76)', () => {
     page.on('pageerror', (err) => errors.push(String(err)));
 
     await bootTownhouse(page);
-    await page.getByTestId('hud-mode-toggle').click();
+    // #146: the mode segment's Walk button is the entry control.
+    await page.getByTestId('hud-mode-segment-walk').click();
     await page.waitForFunction(
       () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

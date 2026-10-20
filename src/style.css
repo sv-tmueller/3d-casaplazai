@@ -242,30 +242,160 @@ body {
   z-index: 3;
 }
 
-.hud-bar {
+/* Docked control panel (#146): labelled, grouped, collapsible; pinned
+   top-right of the 3D pane. Clears the toast stack (bottom-center), the
+   walk reticle (dead-center) and the ?perf=1 panel (bottom-right). */
+.hud-panel {
   position: absolute;
   top: 8px;
-  left: 8px;
+  right: 8px;
+  width: 216px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  pointer-events: auto;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+  font-size: 12px;
+  color: #0f172a;
+}
+
+.hud-panel-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  pointer-events: auto;
+  justify-content: space-between;
 }
 
-.hud-toggle {
-  padding: 4px 12px;
+.hud-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  letter-spacing: 0.02em;
+}
+
+.hud-collapse-toggle {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  color: #475569;
+}
+
+.hud-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+/* Collapsed: the chevron points sideways; the body is hidden by the
+   [hidden] attribute (explicit display:none below beats the flex). */
+.hud-panel-collapsed .hud-chevron {
+  transform: rotate(-90deg);
+}
+
+/* Mode segment (#146): always visible — even collapsed — so the two
+   top-level modes stay one click from anywhere. The active segment
+   carries .hud-segment-active + aria-pressed (reflectMode). */
+.hud-segment {
+  display: flex;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.92);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
+  overflow: hidden;
 }
 
-.hud-btn-walking {
+.hud-segment-btn {
+  flex: 1;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.hud-segment-btn + .hud-segment-btn {
+  border-left: 1px solid #cbd5e1;
+}
+
+.hud-segment-active {
   background: #dbeafe;
-  border-color: #2563eb;
   color: #1d4ed8;
+}
+
+.hud-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-panel-body[hidden] {
+  display: none;
+}
+
+.hud-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.hud-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+/* One field row: visible label + live readout on top, the native range
+   input underneath (full width). The compass rides the readout row. */
+.hud-field {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 2px 6px;
+}
+
+.hud-field-label {
+  grid-column: 1;
+  grid-row: 1;
+  color: #334155;
+}
+
+.hud-field-value {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+
+.hud-field > input[type='range'] {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+}
+
+.hud-field > .hud-compass {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+/* Bottom-center hint strip (#146): belongs to the stage, NOT the dock.
+   Offset above the toast column (toasts sit at bottom: 10px). */
+.hud-strip {
+  position: absolute;
+  bottom: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .hud-hint {
@@ -274,6 +404,10 @@ body {
   background: rgba(255, 255, 255, 0.75);
   border-radius: 999px;
   padding: 2px 10px;
+}
+
+.hud-hint:empty {
+  display: none;
 }
 
 .hud-fade {
@@ -339,15 +473,8 @@ body {
 
 /* --------------------- sun controls (issue #121) -------------------------- */
 
-.hud-sun-cluster {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.92);
-}
+/* Sun group (#146): chrome now comes from .hud-group; only the slider
+   widths remain slider-specific (the field grid stretches them). */
 
 .hud-sun-time {
   width: 96px;
@@ -725,7 +852,9 @@ body {
   color: var(--accent-ink);
 }
 
-/* Viewer HUD adopts the shared tokens (CSS-only; hud.ts untouched). */
+/* Viewer HUD adopts the shared tokens (CSS-only; hud.ts untouched).
+   #146: the flat bar's chrome moves onto the docked panel and its mode
+   segment; .hud-toggle stays the roof-button vocabulary. */
 .hud-toggle {
   padding: 5px 12px;
   border: 1px solid var(--border);
@@ -740,10 +869,40 @@ body {
   border-color: #94a3b8;
 }
 
-.hud-btn-walking {
+.hud-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+}
+
+.hud-panel-title,
+.hud-field-label,
+.hud-collapse-toggle,
+.hud-segment-btn {
+  color: var(--text-muted);
+}
+
+.hud-segment,
+.hud-segment-btn + .hud-segment-btn {
+  border-color: var(--border);
+}
+
+.hud-segment-btn {
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.hud-segment-btn:hover {
+  background: var(--border-soft);
+}
+
+.hud-segment-active {
   background: var(--accent-soft);
-  border-color: var(--accent);
   color: var(--accent-ink);
+}
+
+.hud-group {
+  border-top-color: var(--border-soft);
 }
 
 /* Walls-transparency slider (issue #120): native range restyled to the
