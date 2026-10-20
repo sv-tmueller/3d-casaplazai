@@ -96,3 +96,26 @@ export async function regionLuminance(
   }
   return px > 0 ? sum / px : -1;
 }
+
+/**
+ * True when the composited canvas carries LIVE GL pixels. A rendering
+ * viewer repaints every frame (the overview rig is an idle turntable), so
+ * two captures of the same canvas a few hundred ms apart differ. Where the
+ * GL pipeline is idle (observed on headless macOS/ANGLE: no clear, no
+ * draws, a fully transparent surface) the canvas contributes no pixels and
+ * the pair is byte-identical — the pane's CSS backdrop shows through.
+ *
+ * The pair is clipped to the canvas's bottom-left corner, which both HUD
+ * layouts leave chrome-free, so DOM updates can neither fake liveness nor
+ * contaminate the comparison. See the luminance probe's guard in
+ * viewer.spec.ts (issue #146 root cause) for why this exists.
+ */
+export async function canvasIsLive(page: Page, settleMs = 500): Promise<boolean> {
+  const box = await page.locator('.viewer-gl-canvas').boundingBox();
+  if (!box) throw new Error('viewer-gl-canvas has no box — the viewer did not mount');
+  const clip = { x: box.x + 6, y: box.y + box.height - 68, width: 58, height: 58 };
+  const before = await page.screenshot({ clip });
+  await page.waitForTimeout(settleMs);
+  const after = await page.screenshot({ clip });
+  return !before.equals(after);
+}

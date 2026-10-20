@@ -9,7 +9,7 @@
 import { expect, test, type Page } from '@playwright/test';
 // Shared luminance probe (issue #121): the PNG decoder extracted from
 // this file, now imported by e2e/sun.spec.ts too — unchanged behavior.
-import { regionLuminance } from './fixtures/luminance';
+import { canvasIsLive, regionLuminance } from './fixtures/luminance';
 
 /** Derived door-center waypoints (world XY, meters) for demo-apartment.json. */
 // Issue #18 furniture-aware route (verified-clean 8 hops; the old direct
@@ -412,6 +412,24 @@ test.describe.serial('lighting + roof affordances (issue #86)', () => {
     // special renderer flags are needed — plain production boot.
     await bootHouse(page);
     await page.waitForTimeout(900); // first frames flush
+
+    // ROOT CAUSE (issue #146): the composited canvas can carry NO GL
+    // pixels at all — on headless ANGLE/OpenGL stacks the viewer's GL
+    // pipeline is idle (no clear, no draws, fully transparent surface;
+    // see canvasIsLive), so every reading below is the pane's CSS
+    // backdrop plus whatever HUD chrome overlaps the sample rects. This
+    // probe only ever passed because the PRE-redesign HUD toolbar sat
+    // inside the EXTERIOR rect; the redesigned HUD deliberately moved
+    // chrome to the top-right, the backdrop-only margin collapsed
+    // (208.563 vs 208.657) and the vacuity surfaced. Guard loudly here
+    // instead of asserting chrome noise; the sky-vs-plan assertions
+    // below stay untouched for stacks where the canvas really renders.
+    const live = await canvasIsLive(page);
+    test.skip(
+      !live,
+      'composited canvas carries no GL pixels on this stack (see canvasIsLive) — sky-vs-plan contrast is unobservable here',
+    );
+
     // The overview ortho camera looks straight DOWN at the framed
     // plan, so: the CENTER of the canvas is the lit interior; the
     // CORNER margins are open sky (gradient dome or solid backdrop).
