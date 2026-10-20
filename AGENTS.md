@@ -26,6 +26,12 @@ npm run verify        # lint + typecheck + test  <- the gate
 Clean-clone gate: `npm install && npm run verify` must exit 0.
 Playwright browsers: `npx playwright install chromium` (once per machine).
 
+Parallel worktrees: e2e ports are assigned per worktree via `E2E_PORT`
+(main=4199, wt-editor=4201, wt-viewer=4202, wt-fixes=4203), so sessions
+running `npm run e2e` side by side never collide. Cut worktrees with
+`git worktree add ../casaplazai-<slug> main`, run `npm install` inside
+each, and rebase onto freshly merged main before opening a PR.
+
 ## Branch naming
 
 Feature branches: `feat/<issue-number>-<short-slug>`
