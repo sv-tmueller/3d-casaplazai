@@ -60,8 +60,14 @@ test.describe('toolbar IA (#142)', () => {
     await expect(fileMenu).toBeHidden();
 
     // --- status bar: three zones --------------------------------------
+    // The middle zone is EMPTY until the pointer is over the canvas (the
+    // pointermove cursor meter, CP2) — drive it, then read it.
+    const cb = (await page.locator('.editor-canvas').boundingBox())!;
+    await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2);
     await expect(page.locator('.editor-status')).toBeVisible();
-    await expect(page.getByTestId('status-coords')).toBeVisible();
+    await expect(page.getByTestId('status-coords')).toHaveText(
+      /^-?\d+\.\d{2}, -?\d+\.\d{2} m$/,
+    );
     await expect(page.getByTestId('status-total')).toContainText('Total:');
   });
 });

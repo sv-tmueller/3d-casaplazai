@@ -136,10 +136,9 @@ body {
   font-size: 12.5px;
 }
 
-/* pkg #142: palette + Measure flyouts hang beside the rail (the palette
-   keeps glue's `refs.palette.hidden` as its visibility truth). */
-.editor-palette,
-.measure-flyout {
+/* pkg #142: the palette flyout hangs beside the rail (glue's
+   `refs.palette.hidden` stays its visibility truth). */
+.editor-palette {
   position: absolute;
   left: calc(100% + 8px);
   top: 0;
@@ -159,13 +158,25 @@ body {
   display: none;
 }
 
+/* pkg #142: the Measure clear control is an IN-RAIL sub-row (stacked
+   under the Measure button) instead of a floating flyout — a flyout
+   beside the rail sits over the canvas where annotation labels get
+   clicked and would swallow those clicks. */
+.rail-measure {
+  flex-direction: column;
+}
+
+.measure-flyout {
+  display: flex;
+  padding-top: 4px;
+}
+
 .measure-flyout[hidden] {
   display: none;
 }
 
-/* Measure flyout mirrors the palette pattern with zero glue wiring: it
-   shows while the Measure tool is armed (glue's tool loop sets
-   aria-pressed on the button that precedes it in the same anchor). */
+/* Revealed while Measure is armed (glue's tool loop sets aria-pressed on
+   the button that precedes it in the same anchor). */
 .editor-measure[aria-pressed='true'] ~ .measure-flyout {
   display: flex;
 }

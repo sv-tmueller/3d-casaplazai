@@ -292,11 +292,13 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   btnSnap.setAttribute("aria-expanded", "false");
   btnSnap.setAttribute("aria-haspopup", "dialog");
   btnSnap.setAttribute("data-testid", "btn-snap");
-  // Issue #66: wipe-all for measure annotations — lives in the Measure
-  // tool's flyout now (pkg #142 judgment call: the flyout copies the
-  // palette pattern; Inspector placement would couple it to the
-  // selection kind in glue.ts).
-  const btnClearMeasure = mkBtn("Clear measurements", "editor-clear-measure");
+  // Issue #66: wipe-all for measure annotations — lives with the Measure
+  // tool in the rail (pkg #142 judgment call; see the sub-row note below
+  // on why it is NOT a floating flyout). aria-label keeps the full
+  // accessible name while the visible chip stays short enough for the
+  // rail's width.
+  const btnClearMeasure = mkBtn("Clear", "editor-clear-measure");
+  btnClearMeasure.setAttribute("aria-label", "Clear measurements");
   btnClearMeasure.title = "Remove every dimension annotation.";
   btnClearMeasure.setAttribute("data-testid", "btn-clear-measurements");
 
@@ -384,6 +386,10 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
   const underlayAnchor = mkAnchor(btnUnderlay);
   const floorAnchor = mkAnchor(floorBadge, "floor-anchor");
   const fileAnchor = mkAnchor(btnFile, "file-anchor");
+  // The menu LIVES inside its anchor so one `.pop-anchor` rule positions
+  // it; an orphaned node would never render (and would strand the four
+  // file actions out of the document).
+  fileAnchor.appendChild(fileMenu);
 
   /* ---------- pkg #142: app bar assembly ---------- */
 
@@ -433,15 +439,20 @@ export function buildEditorUi(parent: HTMLElement): EditorDomRefs {
     palette.appendChild(chip);
   }
 
-  // Measure flyout: holds the clear button, revealed by CSS only while
+  // Measure sub-row: holds the clear button, revealed by CSS only while
   // the Measure tool is armed (`aria-pressed="true"`, set by glue's tool
-  // loop) — zero glue wiring, same shape as the palette flyout.
+  // loop) — zero glue wiring. It sits INLINE inside the rail's width, not
+  // as a floating flyout beside it: an always-armed overlay there covers
+  // the canvas exactly where annotation labels get clicked and swallows
+  // those clicks (caught by e2e measure.spec's label-click flow). Class
+  // and testid keep the draft's `flyout` wording.
   const measureFlyout = document.createElement("div");
   measureFlyout.className = "measure-flyout";
   measureFlyout.setAttribute("data-testid", "measure-flyout");
   measureFlyout.hidden = true;
   measureFlyout.appendChild(btnClearMeasure);
   const measureAnchor = mkAnchor(btnMeasure, "measure-anchor");
+  measureAnchor.classList.add("rail-measure");
   measureAnchor.appendChild(measureFlyout);
 
   rail.append(
