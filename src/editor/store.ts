@@ -9,6 +9,7 @@
  */
 import type { FloorplanData, Floor, FloorTexture, Opening, Room, Staircase, Vec2 } from '../shared/schema';
 import { FLOOR_TEXTURES, flatFurniture, flatOpenings, flatRooms } from '../shared/schema';
+import { stairFootprint } from '../geom';
 import { signedArea, vecAdd, vecEq } from './geom';
 import type { UnderlayState } from './model/underlay';
 import { PLAN_EXTENT_LIMIT_M } from './model/constants';
@@ -321,10 +322,61 @@ function reduceDrawRoom(st: EditorState, cmd: { polygon: Pt[]; name?: string }):
   return { ok: true };
 }
 
+/*
+ * Issue #139 (stranding guard): a room transform must not move/reshape a
+ * host room out from under its stair. The stranded flight fails the next
+ * compile with UnknownStairRoomError/containment violations and NO inline
+ * rejection — the delete paths got the cascade fix; transforms get the
+ * REJECT posture instead (mirroring the #107 sane-extent guard): the
+ * reducer refuses the frame, the drag keeps the last valid pose, and the
+ * Result plumbing surfaces the reason (typed inspector fields flash
+ * res.error; streamed drag frames simply hold position). Containment is
+ * the SAME corner-projection test validateStairs() runs (convex-room
+ * assumption documented there), evaluated on the POST-transform polygon.
+ */
+function stairEscapedRoom(
+  stair: Staircase,
+  roomPolygon: Vec2[],
+): boolean {
+  const fp = stairFootprint(stair);
+  const corners: Array<[number, number]> = [
+    [-fp.halfRun, -fp.halfWidth],
+    [fp.halfRun, -fp.halfWidth],
+    [fp.halfRun, fp.halfWidth],
+    [-fp.halfRun, fp.halfWidth],
+  ].map(([l, w]) => [
+    fp.cx + fp.ux * l + fp.vx * w,
+    fp.cy + fp.uy * l + fp.vy * w,
+  ]);
+  // Convex CCW polygon: a point is inside iff it is never strictly on
+  // the OUTER side of any edge (cross < -EPSILON — the same tolerance
+  // validateStairs() uses).
+  for (let i = 0; i < roomPolygon.length; i += 1) {
+    const a = roomPolygon[i];
+    const b = roomPolygon[(i + 1) % roomPolygon.length];
+    for (const [cx, cy] of corners) {
+      const cross = (b[0] - a[0]) * (cy - a[1]) - (b[1] - a[1]) * (cx - a[0]);
+      if (cross < -1e-9) return true;
+    }
+  }
+  return false;
+}
+
 function reduceMoveRoom(st: EditorState, cmd: { roomId: string; delta: Pt }): DispatchResult {
   const room = flatRooms(st.data).find((r) => r.id === cmd.roomId);
   if (!room) return { ok: false, error: `unknown room "${cmd.roomId}"` };
-  room.polygon = room.polygon.map((p) => vecAdd(p, cmd.delta));
+  // Issue #139: reject the frame when a hosted stair would end up
+  // outside the translated polygon (strand guard — see stairEscapedRoom).
+  const moved = room.polygon.map((p) => vecAdd(p, cmd.delta));
+  for (const stair of st.data.stairs.filter((s) => s.roomId === cmd.roomId)) {
+    if (stairEscapedRoom(stair, moved)) {
+      return {
+        ok: false,
+        error: 'moving this room would strand its staircase — move the stair first or delete it',
+      };
+    }
+  }
+  room.polygon = moved;
   return { ok: true };
 }
 
@@ -349,6 +401,19 @@ function reduceResizeRoom(
     Math.abs(cmd.newPos[1]) > PLAN_EXTENT_LIMIT_M
   ) {
     return { ok: false, error: 'vertex beyond plan extent limit' };
+  }
+  // Issue #139: reject the frame when a hosted stair would end up
+  // outside the reshaped polygon (strand guard — see stairEscapedRoom).
+  const reshaped = room.polygon.map((p, i) =>
+    i === cmd.vertexIndex ? ([cmd.newPos[0], cmd.newPos[1]] as Vec2) : p,
+  );
+  for (const stair of st.data.stairs.filter((s) => s.roomId === cmd.roomId)) {
+    if (stairEscapedRoom(stair, reshaped)) {
+      return {
+        ok: false,
+        error: 'resizing this wall would strand its staircase — move the stair first or delete it',
+      };
+    }
   }
   room.polygon[cmd.vertexIndex] = [cmd.newPos[0], cmd.newPos[1]];
   return { ok: true };

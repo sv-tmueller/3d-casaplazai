@@ -254,3 +254,103 @@ test.describe.serial('stairs editor journey (issue #118)', () => {
     expect(errors).toEqual([]);
   });
 });
+
+test.describe.serial('stairs honesty residuals (issue #139)', () => {
+  test('ghost verdict: one validateGeometry per snapped cell, not per pointermove', async ({
+    page,
+  }) => {
+    await bootEditor(page);
+    await page.getByRole('button', { name: 'Stairs', exact: true }).click();
+
+    const verdicts = () =>
+      page.evaluate(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        () => (window as any).__editorStairVerdicts?.() ?? -1,
+      );
+
+    // Drag a flight in the kitchen (route from the journey leg), but
+    // with MANY more intermediate steps than distinct snapped cells —
+    // pointer events far outnumber 0.5 m grid cells crossed.
+    const before = (await verdicts()) as number;
+    expect(before).toBeGreaterThanOrEqual(0);
+
+    const a = await aim(page, 8.0, 1.5);
+    const b = await aim(page, 6.0, 1.5);
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    // 40 micro-moves across a 2.0 m drag (~4 snapped cells at 0.5 m).
+    await page.mouse.move(b.x, b.y, { steps: 40 });
+    await page.mouse.up();
+
+    const after = (await verdicts()) as number;
+    // The drag crossed at most ~5 distinct snapped cursor cells; the
+    // throttle guarantees at most one verdict computation EACH. 40+
+    // pointermoves costing <= 5 verdicts is the pin; a naive
+    // implementation computes 40+.
+    expect(after - before).toBeLessThanOrEqual(5);
+  });
+
+  test('bulk drag excludes stairs with a visible hint', async ({ page }) => {
+    await bootEditor(page);
+    // Draw a flight in the kitchen, then stamp a bed in the living room.
+    await page.getByRole('button', { name: 'Stairs', exact: true }).click();
+    await worldDrag(page, 8.0, 1.5, 6.0, 1.5);
+    // Accept the addFloor offer (the journey leg's flow — the offer
+    // ALWAYS rises for the apartment: no storey above the ground floor).
+    const offer = page.getByTestId('stair-addfloor-offer');
+    await expect(offer).toBeVisible();
+    await page.getByTestId('btn-stair-addfloor').click();
+    await expect(offer).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Furnish' }).click();
+    const bed = await aim(page, 1.5, 2.0);
+    await page.mouse.click(bed.x, bed.y);
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+
+    // Arm the multi-set by SHIFT-CLICKING the bed and the stair (the
+    // same multiSelected machinery the marquee fills; shift-click is
+    // deterministic where a marquee band start-point risks landing
+    // inside a room and select-dragging it instead).
+    const stairBefore = (await readState(page)) as {
+      stairs: Array<{ position: [number, number] }>;
+    };
+    expect(stairBefore.stairs.length).toBeGreaterThan(0);
+    const stairPos0 = stairBefore.stairs[0].position;
+
+    const bedClick = await aim(page, 1.5, 2.0);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(bedClick.x, bedClick.y);
+    await page.keyboard.up('Shift');
+    // Stair midpoint (7.0, 1.5) is inside the footprint
+    // (stairProgress semantics — the same hit test the select tool
+    // uses).
+    const stairClick = await aim(page, 7.0, 1.5);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(stairClick.x, stairClick.y);
+    await page.keyboard.up('Shift');
+
+    // Multi-set armed: the inspector shows the aggregate.
+    await page.getByTestId('btn-inspector').click();
+    const panel = page.getByTestId('inspector-panel');
+    await expect(panel).toContainText('Multiple selected');
+
+    // Grab the bed and drag it south-east by ~1 m.
+    const from = await aim(page, 1.5, 2.0);
+    const to = await aim(page, 2.5, 1.0);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    await page.mouse.up();
+
+    const stairAfter = (await readState(page)) as {
+      stairs: Array<{ position: [number, number] }>;
+    };
+    expect(stairAfter.stairs[0].position).toEqual(stairPos0);
+
+    // The hint flashed (inline-msg visible at some point during the
+    // drag; TTL 3.2 s — assert immediately after the drag).
+    const msg = page.locator('.inline-msg');
+    await expect(msg).toBeVisible();
+    await expect(msg).toContainText(/stay put/i);
+  });
+});

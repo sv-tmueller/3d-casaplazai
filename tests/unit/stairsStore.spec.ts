@@ -320,3 +320,93 @@ describe('nextFloorElevation (issue #118)', () => {
     expect(predicted).toBeCloseTo(6.0 + 2.7 + 0.3, 9);
   });
 });
+
+describe('#139 stranding guard: move/resize cannot strand a hosted stair', () => {
+  // REJECT posture (mirrors the #107 sane-extent guard and the
+  // delete-cascade posture): reduceMoveRoom/reduceResizeRoom refuse the
+  // frame when the transformed polygon would leave a hosted stair
+  // outside — the stranded flight otherwise fails compile with no
+  // inline rejection. Containment test is the same corner projection
+  // validateStairs() runs, evaluated on the POST-transform polygon.
+
+  function storeWithStair(): EditorStore {
+    const store = threeFloorStore();
+    addGroundStair(store);
+    return store;
+  }
+
+  it('moveRoom rejects a translation that strands the stair', () => {
+    const store = storeWithStair();
+    // living spans x 0..5, y 0..4; the stair sits at (2.5, 2), run 2.8
+    // along +x (rotation 0), width 1. Shifting the room 3 m east leaves
+    // the flight's west end (x 1.1) outside the moved polygon
+    // (x 3..8).
+    const res = store.dispatch({
+      type: 'moveRoom',
+      roomId: 'living',
+      delta: [3, 0],
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok === false) expect(res.error).toMatch(/strand/i);
+    // The polygon is UNMOVED (rejection, not clamp).
+    const living = store
+      .getState()
+      .data.floors[0].rooms.find((r) => r.id === 'living');
+    expect(living?.polygon[0]).toEqual([0, 0]);
+  });
+
+  it('moveRoom still permits translations that carry the stair along', () => {
+    const store = storeWithStair();
+    // A small shift keeps the whole footprint inside the moved room.
+    const res = store.dispatch({
+      type: 'moveRoom',
+      roomId: 'living',
+      delta: [0.5, 0.5],
+    });
+    expect(res.ok).toBe(true);
+    const living = store
+      .getState()
+      .data.floors[0].rooms.find((r) => r.id === 'living');
+    expect(living?.polygon[0]).toEqual([0.5, 0.5]);
+  });
+
+  it('resizeRoom rejects a squeeze that ejects the stair', () => {
+    const store = storeWithStair();
+    // Pull vertex 1 ([5,0]) to [2,0]: the slanted east edge crosses
+    // y=1.5 at x≈3.1, past the flight's east end (x 3.9) — the corner
+    // (3.9, 1.5) lands OUTSIDE the reshaped polygon.
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 1,
+      newPos: [2, 0],
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok === false) expect(res.error).toMatch(/strand/i);
+    const living = store
+      .getState()
+      .data.floors[0].rooms.find((r) => r.id === 'living');
+    expect(living?.polygon[1]).toEqual([5, 0]);
+  });
+
+  it('resizeRoom still permits vertex moves that spare the stair', () => {
+    const store = storeWithStair();
+    const res = store.dispatch({
+      type: 'resizeRoom',
+      roomId: 'living',
+      vertexIndex: 1,
+      newPos: [5, 1],
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('transforms of a stair-free room are unconstrained', () => {
+    const store = threeFloorStore(); // no stair placed
+    const res = store.dispatch({
+      type: 'moveRoom',
+      roomId: 'living',
+      delta: [50, 0],
+    });
+    expect(res.ok).toBe(true);
+  });
+});
