@@ -325,6 +325,9 @@ export function emptyAdaptedScene(): AdaptedScene {
   return {
     buckets: [],
     collisions: [],
+    // #152: no rooms → no ceiling spotlights; the field is required on
+    // AdaptedScene, so the empty scene carries the empty set.
+    roomLights: [],
     triangleCount: 0,
     bounds: { minX: -half, minY: -half, maxX: half, maxY: half },
     activeFloorElevation: 0,

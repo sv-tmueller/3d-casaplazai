@@ -148,11 +148,6 @@ export async function regionLuminance(
  * motion or capture timing.
  */
 export async function regionCarriesCanvasPixels(
- * Mean RGB channels (0..255) over the same rect (issue #152). The ceiling
- * probe needs the hue, not just the brightness: sky reads b ≫ r through a
- * hole in the roof, a lit ceiling reads neutral-to-warm.
- */
-export async function regionMeanRgb(
   page: Page,
   fx: number,
   fy: number,
@@ -183,6 +178,19 @@ async function hideCanvas(page: Page, hidden: boolean): Promise<void> {
     }
   }, hidden);
   await page.waitForTimeout(150);
+}
+
+/**
+ * Mean RGB channels (0..255) over the same rect (issue #152). The ceiling
+ * probe needs the hue, not just the brightness: sky reads b ≫ r through a
+ * hole in the roof, a lit ceiling reads neutral-to-warm.
+ */
+export async function regionMeanRgb(
+  page: Page,
+  fx: number,
+  fy: number,
+  fw: number,
+  fh: number,
 ): Promise<{ r: number; g: number; b: number }> {
   const region = await captureRegion(page, fx, fy, fw, fh);
   let r = 0;
