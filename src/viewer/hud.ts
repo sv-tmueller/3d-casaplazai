@@ -92,6 +92,18 @@ export interface HudHandles {
   compass: HTMLDivElement;
   /** Storage seam resolved at build time (null when unavailable). */
   storage: Storage | null;
+  /**
+   * Walker room readout (issue #147 CP3): the room name the walker
+   * stands in on its attributed storey, or "Outside". Hidden whenever
+   * walk mode is not live (no walker ⇒ no room claim).
+   */
+  roomReadout: HTMLSpanElement;
+  /**
+   * "Go to room…" picker (issue #147 CP3): one optgroup per storey,
+   * one option per room; choosing one teleports the walker. Disabled
+   * until a plan with rooms arrives.
+   */
+  gotoRoomSelect: HTMLSelectElement;
 }
 
 /** Callback invoked when the user toggles Walk/Overview. */
@@ -399,7 +411,37 @@ export function buildHud(
   floorField.append(floorFieldLabel, floorReadout);
   floorGroup.append(groupTitle('Floor'), floorField);
 
-  panelBody.append(visGroup, sunGroup, floorGroup);
+  // Walk navigation aids (issue #147 CP3), appended AFTER the sun
+  // cluster (append-only discipline — the sibling #120/#121 DOM order
+  // is untouched): the live room readout sits beside a "Go to room…"
+  // select. The select is a NATIVE control (arrow keys operate it for
+  // free, mouseless mandate); its options are rebuilt whenever the
+  // accepted plan changes (populateRoomPicker), never by hand here.
+  // #146 integration: mounted inside the docked panel's body (the old
+  // `bar` is retired) as its own group.
+  const navCluster = document.createElement('div');
+  navCluster.className = 'hud-walk-nav';
+  navCluster.dataset.testid = 'hud-walk-nav';
+
+  const roomReadout = document.createElement('span');
+  roomReadout.className = 'hud-room-readout';
+  roomReadout.dataset.testid = 'hud-room-readout';
+  roomReadout.textContent = '';
+  roomReadout.hidden = true; // no walker yet ⇒ no room claim
+
+  const gotoRoomSelect = document.createElement('select');
+  gotoRoomSelect.className = 'hud-goto-room';
+  gotoRoomSelect.dataset.testid = 'hud-goto-room';
+  gotoRoomSelect.setAttribute('aria-label', 'Go to room');
+  gotoRoomSelect.disabled = true; // enabled once a plan with rooms arrives
+  const gotoPlaceholder = document.createElement('option');
+  gotoPlaceholder.value = '';
+  gotoPlaceholder.textContent = 'Go to room…';
+  gotoRoomSelect.appendChild(gotoPlaceholder);
+
+  navCluster.append(roomReadout, gotoRoomSelect);
+
+  panelBody.append(visGroup, sunGroup, floorGroup, navCluster);
   panel.append(header, modeGroup, panelBody);
 
   // ---- Bottom-center hint strip (#146) ----------------------------
@@ -478,6 +520,8 @@ export function buildHud(
     sunNorthLabel,
     compass,
     storage,
+    roomReadout,
+    gotoRoomSelect,
   };
 
   // Apply the persisted preference (a reload boots into place; no flash
@@ -973,4 +1017,89 @@ export function destroyHud(handles: HudHandles): void {
   }
   handles.perfPanel?.remove();
   handles.root.remove();
+}
+
+/* ------------------- walk navigation aids (issue #147 CP3) ------------------- */
+
+/**
+ * Display the walker's room readout. `null` means "no walker" — the
+ * span hides entirely (rather than showing a stale room or a dash), so
+ * leaving walk mode never leaves a phantom room claim on screen. The
+ * string itself ("Outside" included) is computed by walkNav's
+ * roomReadoutAt; this function only puts it on the DOM.
+ */
+export function reflectRoomReadout(
+  handles: HudHandles,
+  text: string | null,
+): void {
+  handles.roomReadout.hidden = text === null;
+  handles.roomReadout.textContent = text ?? '';
+}
+
+/** One storey's worth of picker data (structurally a Floor subset). */
+export interface RoomPickerFloor {
+  name: string;
+  rooms: ReadonlyArray<{ id: string; name: string }>;
+}
+
+/**
+ * Rebuild the "Go to room…" picker from the ACCEPTED plan: one optgroup
+ * per storey (labelled with the floor name) and one option per room.
+ * Called on plan acceptance, not per frame — the option set is plan
+ * content, and rebuilding a focused native select mid-interaction would
+ * be hostile. A plan with no rooms leaves the control disabled (it has
+ * nothing honest to offer) and the placeholder value resets so picking
+ * the same room twice in a row still fires a change event.
+ */
+export function populateRoomPicker(
+  handles: HudHandles,
+  floors: ReadonlyArray<RoomPickerFloor>,
+): void {
+  const select = handles.gotoRoomSelect;
+  select.textContent = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Go to room…';
+  select.appendChild(placeholder);
+
+  let roomCount = 0;
+  for (const floor of floors) {
+    const group = document.createElement('optgroup');
+    group.label = floor.name;
+    for (const room of floor.rooms) {
+      const option = document.createElement('option');
+      option.value = room.id;
+      option.textContent = room.name;
+      group.appendChild(option);
+      roomCount += 1;
+    }
+    select.appendChild(group);
+  }
+
+  select.disabled = roomCount === 0;
+  select.value = '';
+}
+
+/** Callback invoked with the chosen room id (issue #147 CP3). */
+export type GotoRoomListener = (roomId: string) => void;
+
+/**
+ * Bind the picker's teleport handler. Returns an unsubscribe function.
+ * After firing, the select resets to its placeholder: the control is a
+ * button-like "go" affordance, not a persistent current-room state (the
+ * readout span owns that claim) — so re-picking the same room re-fires.
+ */
+export function onBindGotoRoom(
+  handles: HudHandles,
+  listener: GotoRoomListener,
+): () => void {
+  const onChange = (): void => {
+    const roomId = handles.gotoRoomSelect.value;
+    if (roomId === '') return;
+    handles.gotoRoomSelect.value = '';
+    listener(roomId);
+  };
+  handles.gotoRoomSelect.addEventListener('change', onChange);
+  return () => handles.gotoRoomSelect.removeEventListener('change', onChange);
 }

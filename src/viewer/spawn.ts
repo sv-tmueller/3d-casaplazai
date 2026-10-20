@@ -150,22 +150,36 @@ export function solveSpawn(
   }
   if (!best) throw new SpawnFailureError('Could not rank rooms.');
 
-  const [cx, cy] = polygonCentroid(best.polygon);
-  const yaw = facingYaw(best.polygon);
+  return solveSpawnInRoom(best, boxes);
+}
+
+/**
+ * Resolve a spawn pose inside ONE room (issue #147 CP2): the same
+ * centroid → clearance-march → bisection ladder solveSpawn runs, with
+ * the room choice made by the caller. The go-to-room teleport needs
+ * exactly this — the largest-room ranking would otherwise yank the
+ * walker into a different room than the one the user picked.
+ */
+export function solveSpawnInRoom(
+  room: Room,
+  boxes: readonly CollisionBox[],
+): { x: number; y: number; yaw: number } {
+  const [cx, cy] = polygonCentroid(room.polygon);
+  const yaw = facingYaw(room.polygon);
 
   if (isClear(cx, cy, boxes)) {
     return { x: cx, y: cy, yaw };
   }
 
   // March: fan-cell centroids, ordered near-origin first for determinism.
-  for (const [mx, my] of fanCellCentroids(best.polygon)) {
+  for (const [mx, my] of fanCellCentroids(room.polygon)) {
     if (isClear(mx, my, boxes, 1.5)) {
       return { x: mx, y: my, yaw };
     }
   }
 
   // Last resort: bisect from centroid toward each polygon vertex.
-  for (const p of best.polygon) {
+  for (const p of room.polygon) {
     if (!p) continue;
     for (let t = 0.25; t <= 0.75; t += 0.25) {
       const px = cx + (p[0] - cx) * t;
@@ -177,7 +191,7 @@ export function solveSpawn(
   }
 
   throw new SpawnFailureError(
-    `No clear spawn found in room "${best.name}" — collision volumes saturate it.`,
+    `No clear spawn found in room "${room.name}" — collision volumes saturate it.`,
   );
 }
 

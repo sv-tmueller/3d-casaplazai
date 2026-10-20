@@ -641,6 +641,42 @@ body {
   width: 72px;
 }
 
+/* ------------------ walk navigation aids (issue #147) --------------------- */
+
+.hud-walk-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* Live room claim: reads as a status pill, never a button. */
+.hud-room-readout {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.hud-goto-room {
+  font-size: 12px;
+  max-width: 150px;
+  color: #0f172a;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+
+.hud-goto-room:disabled {
+  color: #94a3b8;
+}
+
 /* Compass rose: the static div rotates by −northOffsetDeg via a JS-set
    inline transform; the N marker rides the rim. */
 .hud-compass {

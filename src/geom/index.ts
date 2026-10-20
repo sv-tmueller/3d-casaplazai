@@ -28,6 +28,7 @@ export {
 } from './errors';
 export { parseValidatedPlan, validateGeometry, validateStairs } from './validate';
 export { earClipIndices } from './earclip';
+export { pointInRing, type RingPoint } from './pointInRing';
 export { buildFloor, buildCeiling, effectiveCeilingHeight } from './surfaces';
 export { buildFloorWithHoles } from './floorHole';
 export {

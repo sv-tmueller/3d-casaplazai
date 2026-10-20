@@ -103,6 +103,7 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 | L                | Set the selected room’s wall lean (roof)             |
 | I                | Toggle the selection inspector panel                 |
 | 3                | Toggle the 3D inset preview                          |
+| C                | Place the 3D walk camera (click a room, drag to aim)  |
 | PageUp / [       | Switch to the floor below                            |
 | PageDown / ]     | Switch to the floor above                            |
 | Del / Backspace  | Delete selected room, opening, or furniture          |
@@ -137,6 +138,14 @@ in-app cheat sheet (**?**) renders from the same registry.
 
 Viewer keys: `Tab` toggles overview ⇄ walk; in walk mode use
 `WASD`/arrows, mouse-look, `Shift` sprint, `Esc` to release the mouse.
+
+Walk navigation aids (issue #147): the HUD carries a live room readout
+(the name of the room the walker stands in on its storey, or `Outside`)
+and a **Go to room…** picker that teleports the walker to any room,
+switching floors as needed. From the editor, **C** arms **Place camera**
+— click inside a room to move the walker there, drag to aim it, `Esc`
+cancels; the editor mirrors the walker as a glyph on the plan (orange
+dot + heading wedge) whenever it is on the active floor.
 
 ## Development
 

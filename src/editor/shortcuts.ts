@@ -72,6 +72,11 @@ export const SHORTCUTS: ShortcutEntry[] = [
     surface: 'editor',
   },
   {
+    keys: 'C',
+    action: 'Place the 3D walk camera (click a room, drag to aim)',
+    surface: 'editor',
+  },
+  {
     keys: 'PageUp / [',
     action: 'Switch to the floor below',
     surface: 'editor',
