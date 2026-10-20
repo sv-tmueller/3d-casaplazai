@@ -107,6 +107,12 @@ import { encodeShare } from '../shared/shareLink';
 import { isExportDialogOpen, openExportDialog } from './exportDialog';
 import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
 import { closeHelpModal, isHelpModalOpen, toggleHelpModal } from './helpModal';
+/* Issue #144 (Pkg 15.1): first-run experience — demo registry, modal
+ * discard gate, empty-state card, floating Plans menu. */
+import { CONFIRM_MSG, confirmDialog } from './confirmDialog';
+import { mountEmptyStateCard, planIsEmpty, type EmptyStateCard } from './emptyStateCard';
+import { mountPlanMenu } from './planMenu';
+import { demoById, loadDemoPlan, type DemoId } from './demos';
 import { EditorStore, activeFloorPlan, emptyPlan, nextFloorElevation, underlayFor } from './store';
 import { stairProgress, validateGeometry } from '../geom';
 import { vecAdd, vecSub } from './geom';
@@ -421,6 +427,21 @@ export function initEditorInteraction(
   let drawDims: DimFields | null = null;
   function drawDimsMount(): HTMLElement {
     return canvas.parentElement as HTMLElement;
+  }
+  /**
+   * Issue #144 fix-round: keep the first-run layers (empty-state card,
+   * Plans button) AFTER every canvas overlay in the wrap. ui.ts mounts
+   * them before this lazily-mounted widget, and an overlay button sitting
+   * between the canvas and the fields would steal the Tab stop the
+   * pointer+keyboard flow depends on (remountDrawDims: "the widget is one
+   * Tab away"). appendChild MOVES the existing nodes, so the card's
+   * pointer-events scheme (style.css) is untouched — this is pure DOM
+   * order: Tab sequencing + paint order.
+   */
+  function keepFirstRunLayersLast(): void {
+    const wrap = drawDimsMount();
+    wrap.appendChild(refs.emptyStateMount);
+    wrap.appendChild(refs.planMenuMount);
   }
 
   /* ---------- pkg 12.1 (issue #99): blueprint underlay ---------- */
@@ -926,6 +947,8 @@ export function initEditorInteraction(
     refreshStatus();
     refreshInspector();
     repaint();
+    // Issue #144: one cheap predicate call per notify drives the card.
+    refreshEmptyState();
     // Pkg 13.1 (#109): live plan → mini-3D inset. Cheap reference hop;
     // the inset debounces (150 ms) + skips unchanged signatures + gates
     // on in-flight draw gestures INTERNALLY (mini3d.ts).
@@ -1114,6 +1137,8 @@ export function initEditorInteraction(
     }
     refreshStatus();
     repaint();
+    // Arm-context change: a drawing tool dismisses the card (AC).
+    refreshEmptyState();
   }
 
   refs.btnSelect.addEventListener("click", () => setActiveTool("select"));
@@ -3958,6 +3983,10 @@ export function initEditorInteraction(
       angleLabel: "Pending angle (\u00B0)",
     });
     drawDimsMount().appendChild(drawDims.root);
+    // Issue #144 fix-round: the widget must stay the FIRST focusable
+    // stop after the canvas (remountDrawDims contract); re-assert the
+    // first-run layers' last-in-DOM position now that the widget exists.
+    keepFirstRunLayersLast();
     // Degenerate pending segment (fresh point, or right after Esc):
     // seed the fields CLEAR (brief: "fields cleared, chain intact")
     // instead of a meaningless 0/0 — typing starts from scratch.
@@ -4003,6 +4032,99 @@ export function initEditorInteraction(
     if (phase.tag === "drawingPoly") closePolygon();
   });
 
+  /* ---------- Pkg 15.1 (issue #144): first-run experience ---------- */
+
+  /*
+   * Three surfaces, one gate: the empty-state card (prefill), the
+   * floating Plans button + popover (replacement), and the in-app
+   * confirm dialog (discard guard). Everything mounts OUTSIDE the
+   * toolbar — sibling #142 reworks the toolbar, and the batch collision
+   * constraint forbids touching it. The sanctioned deviation from the
+   * issue's "File menu (or the toolbar)" wording is advisor-ratified
+   * (batch issue #160).
+   */
+
+  let card: EmptyStateCard | null = null;
+
+  /** Card visibility: empty plan AND no armed drawing tool. */
+  function refreshEmptyState(): void {
+    card?.update(planIsEmpty(store.getState().data) && tool === 'select');
+  }
+
+  /**
+   * Wholesale plan swap — the EXACT loadPlan/import sequence
+   * (replaceAll → autosave.stop() → persistSync, see the import handler
+   * above) so the autosave slot reflects the new plan across a reload.
+   *
+   * `replaceAll` deliberately KEEPS the underlay slice and the
+   * measurement lane: both are editor state persisted under their own
+   * keys (store.ts replaceAll comment), so New plan — which promises a
+   * clean slate — has to clear them explicitly. Demo loads keep them
+   * (only the plan is replaced), per the issue's wording.
+   *
+   * One-way: history resets with the swap and CONFIRM_MSG says so.
+   */
+  function swapPlan(
+    plan: FloorplanData,
+    opts: { clearUnderlays?: boolean; clearMeasurements?: boolean } = {},
+  ): void {
+    store.replaceAll(plan);
+    autosave.stop();
+    autosave.persistSync(plan);
+    if (opts.clearUnderlays) {
+      store.hydrateUnderlays({});
+      saveUnderlayMap(underlayStorage, {});
+    }
+    if (opts.clearMeasurements) {
+      measurements = [];
+      saveMeasurements(window.localStorage, measurements);
+    }
+  }
+
+  /**
+   * Destructive-swap guard. Empty plans load WITHOUT a prompt (AC);
+   * non-empty plans ask through the in-app dialog (never window.confirm)
+   * whose copy carries the Save JSON lifeline.
+   */
+  async function confirmDiscardIfNeeded(): Promise<boolean> {
+    if (planIsEmpty(store.getState().data)) return true;
+    return confirmDialog({
+      title: 'Replace the current plan?',
+      message: CONFIRM_MSG,
+      confirmLabel: 'Replace plan',
+    });
+  }
+
+  /** Demo load: guard → swap (underlays/measurements survive) → flash. */
+  async function loadDemoById(id: DemoId): Promise<void> {
+    if (!(await confirmDiscardIfNeeded())) return;
+    swapPlan(loadDemoPlan(id));
+    flashMessage(refs, `Loaded the ${demoById(id).label} demo.`);
+  }
+
+  /** New plan: guard → empty single-floor plan, clean slate. */
+  async function startNewPlan(): Promise<void> {
+    if (!(await confirmDiscardIfNeeded())) return;
+    swapPlan(emptyPlan(), { clearUnderlays: true, clearMeasurements: true });
+    flashMessage(refs, 'Started a new plan.');
+  }
+
+  card = mountEmptyStateCard(refs.emptyStateMount, {
+    onDrawRoom: () => setActiveTool('rectangle'),
+    onLoadDemo: (id) => void loadDemoById(id),
+    onImportJson: () => {
+      // Mirror the toolbar Import button: clearing the value makes
+      // re-picking the same file re-fire change (no new machinery).
+      refs.importFileInput.value = '';
+      refs.importFileInput.click();
+    },
+  });
+
+  mountPlanMenu(refs.planMenuMount, {
+    onNewPlan: () => void startNewPlan(),
+    onLoadDemo: (id) => void loadDemoById(id),
+  });
+
   /* ---------- boot ---------- */
   // Issue #126: load the stored theme and mirror it onto <html> before the
   // first paint (the canvas palette and the CSS tokens read it).
@@ -4013,6 +4135,7 @@ export function initEditorInteraction(
   refreshBadgeAndButtons();
   refreshFloorIndicator();
   refreshStatus();
+  refreshEmptyState();
 }
 
 /** Hydrate the store from autosaved data (validated) or start clean. */

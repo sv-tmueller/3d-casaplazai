@@ -1653,3 +1653,170 @@ html[data-theme="dark"] body {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* ------------------ Pkg 15.1 (issue #144) first-run surfaces -------------- */
+
+/* Mount layers over the canvas. Absolute + pointer-events:none so canvas
+   gestures pass straight through them; only the card and the Plans button
+   re-enable pointer events (the card pins editor.spec.ts, which drags
+   through the canvas centre on an empty plan). NO z-index: the layers are
+   kept LAST in the wrap (glue's keepFirstRunLayersLast re-asserts it when
+   the floating dims widget mounts), so they paint over the canvas while
+   the z-indexed overlays (draw-dims z-index:3) still win — and they never
+   steal the widget's intervening Tab stop. */
+.editor-firstrun-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.empty-state-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.empty-state-layer[hidden] {
+  display: none;
+}
+
+/* The card body must NOT swallow canvas gestures: editor.spec.ts drags
+   through the canvas centre on an empty plan. Only the buttons are hit-
+   testable; the copy is read-only text. */
+.empty-state-card {
+  pointer-events: none;
+  width: min(380px, calc(100% - 32px));
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+.empty-state-card button {
+  pointer-events: auto;
+}
+.empty-state-title {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+.empty-state-copy {
+  margin-bottom: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.empty-state-action {
+  flex: 1 1 auto;
+}
+.empty-state-action.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.empty-state-demos {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+}
+.empty-state-demos[hidden] {
+  display: none;
+}
+.empty-state-demo {
+  flex: 1 1 0;
+}
+.empty-state-footer {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Floating Plans button (canvas bottom-left) + popover (snapPopover
+   discipline; #142 absorbs it into its File menu by deleting one call). */
+.plan-menu {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+}
+.plans-button {
+  pointer-events: auto;
+  box-shadow: var(--shadow-sm);
+}
+.plan-menu-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+}
+.plan-menu-popover[hidden] {
+  display: none;
+}
+.plan-menu-item {
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-menu-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* In-app confirm dialog (replaces window.confirm; Escape unwinds). */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(15 23 42 / 45%);
+}
+.confirm-panel {
+  width: min(420px, calc(100% - 32px));
+  padding: 18px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.confirm-title {
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+.confirm-message {
+  margin-bottom: 16px;
+  color: var(--text);
+  font-size: 13px;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.confirm-confirm {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}

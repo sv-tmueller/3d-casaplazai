@@ -36,8 +36,13 @@ export function toLegacyWire(plan: FloorplanData): FloorplanDataV1 {
  * plan back to emptyPlan. Canonicalize AT INTAKE: every room of every
  * floor leaves with an explicit null, so the persistence lane never
  * writes a payload its own reader refuses.
+ *
+ * Issue #144 exports it: the demo registry (editor/demos.ts) loads the
+ * shipped JSON fixtures through the SAME intake door as loadPlan/import
+ * (they are persistSync'ed immediately), so it reuses this helper rather
+ * than carrying a byte-identical copy.
  */
-function backfillFloorTextures(plan: FloorplanData): FloorplanData {
+export function backfillFloorTextures(plan: FloorplanData): FloorplanData {
   return {
     ...plan,
     floors: plan.floors.map((floor) => ({
