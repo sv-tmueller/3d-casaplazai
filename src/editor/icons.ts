@@ -27,7 +27,9 @@ export type IconKey =
   | 'snap'
   | 'measure'
   /* pkg 13.4 (issue #118): staircase tool. */
-  | 'stairs';
+  | 'stairs'
+  /* pkg #142 (issue #142): File menu owner glyph. */
+  | 'file';
 
 const S = 'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"';
 
@@ -69,6 +71,8 @@ export const ICONS: Record<IconKey, string> = {
   measure: `<path ${S} d="M5 19L19 5"/><circle cx="5" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="5" r="1.5" fill="currentColor" stroke="none"/><path ${S} d="M9.5 12l2.5 2.5M12.5 9l2.5 2.5"/>`,
   // Stairs: stepped flight profile with an uphill arrow (issue #118).
   stairs: `<path ${S} d="M3 19h4v-4h4v-4h4V7h6"/><path ${S} d="M15.5 3.5L19 7l-3.5 3.5"/>`,
+  // pkg #142: sheet-of-paper glyph for the File menu owner.
+  file: `<path ${S} d="M7 3h7l4 4v14H7z"/><path ${S} d="M14 3v4h4"/>`,
 };
 
 /** Full `<svg>` markup for an icon; `aria-hidden` keeps names text-only. */

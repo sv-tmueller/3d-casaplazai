@@ -51,14 +51,139 @@ body {
   padding: 8px;
 }
 
-.editor-toolbar {
-  position: relative; /* anchors the snap popover (issue #68) */
+/* pkg #142 (Toolbar IA): the flat toolbar row is now (a) a top APP BAR
+   that never wraps — the headline AC pins scrollWidth <= clientWidth at
+   1280px — and (b) a left TOOL RAIL that collapses to icon-only below
+   1100px via a container query on `.pane-editor`. */
+.pane-editor {
+  container-type: inline-size; /* <1100px collapse context */
+  position: relative;
+}
+
+.editor-appbar {
+  position: relative; /* anchors the lean popover (former toolbar role) */
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+}
+
+.appbar-plan-name {
+  flex: 0 1 auto;
+  max-width: 160px;
+  padding: 0 8px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.appbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.appbar-spacer {
+  flex: 1 1 auto;
+  min-width: 4px;
+}
+
+.editor-appbar .editor-btn {
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+
+/* pkg #142: icon-only levers — the accessible name is preserved in the
+   aria-label (equal to the former visible label). */
+.editor-appbar .icon-only {
+  padding: 4px 6px;
+}
+
+.editor-appbar .icon-only .editor-btn-label {
+  display: none;
+}
+
+/* pkg #142: popover anchor — one rule relocates every popover. */
+.pop-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/* pkg #142: the vertical tool rail. */
+.editor-rail {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface-alt);
+}
+
+.editor-rail .editor-btn {
+  justify-content: center;
+  padding: 5px 6px;
+  font-size: 12.5px;
+}
+
+/* pkg #142: palette + Measure flyouts hang beside the rail (the palette
+   keeps glue's `refs.palette.hidden` as its visibility truth). */
+.editor-palette,
+.measure-flyout {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  z-index: 30;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
-  row-gap: 6px;
-  flex: none;
+  max-width: 260px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.editor-palette[hidden] {
+  display: none;
+}
+
+.measure-flyout[hidden] {
+  display: none;
+}
+
+/* Measure flyout mirrors the palette pattern with zero glue wiring: it
+   shows while the Measure tool is armed (glue's tool loop sets
+   aria-pressed on the button that precedes it in the same anchor). */
+.editor-measure[aria-pressed='true'] ~ .measure-flyout {
+  display: flex;
+}
+
+/* <1100px: rail collapses to icon-only (names live in the aria-labels),
+   the plan-name label yields, and the app bar sheds padding. */
+@container (max-width: 1099px) {
+  .editor-rail .editor-btn-label {
+    display: none;
+  }
+
+  .appbar-plan-name {
+    display: none;
+  }
+
+  .editor-appbar .editor-btn {
+    padding: 4px 6px;
+  }
 }
 
 .toolbar-sep {

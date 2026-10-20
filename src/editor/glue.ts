@@ -563,22 +563,14 @@ export function initEditorInteraction(
     // pkg 7.2: counts + total describe the ACTIVE floor (the storey
     // being edited); the floor indicator badge carries the floor name.
     const view = activeFloorPlan(st);
-    const parts: string[] = [
-      `rooms: ${flatRooms(view).length}`,
-      `tool: ${tool}`,
-    ];
-    if (flatOpenings(view).length > 0)
-      parts.push(`openings: ${flatOpenings(view).length}`);
-    if (flatFurniture(view).length > 0)
-      parts.push(`furniture: ${flatFurniture(view).length}`);
-    if (st.selectedId) parts.push("selected: 1");
-    if (store.canUndo()) parts.push("undo ↺");
-    if (store.canRedo()) parts.push("redo ↻");
-    refs.status.textContent = parts.join(" · ");
-    // pkg 6 (issue #7): livable-area total + contextual tool hint.
-    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(view));
+    // pkg #142 (Toolbar IA): the `rooms: n · tool: x · undo ↺` debug
+    // string is retired. Left zone = the contextual tool hint (moved
+    // from the tooltip), middle zone = live cursor (pointermove
+    // listener below), right zone = the area total (format unchanged).
     const hint = toolHint(tool) || GLOBAL_TOOL_HINT;
+    refs.status.textContent = hint;
     refs.status.title = hint;
+    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(view));
   }
 
   function refreshBadgeAndButtons(): void {
@@ -1008,6 +1000,51 @@ export function initEditorInteraction(
     },
     true,
   );
+  /* ---------- pkg #142: File menu popover ---------- */
+
+  // Snapshot of the #68 snapPopover pattern: visibility-toggled div,
+  // pointerdown-outside + capture-phase Escape dismissal. The items were
+  // wired long before this block (Import → hidden input, Share/Export/
+  // Save JSON) and keep their listeners — this only governs open/close.
+  const setFileMenuOpen = (open: boolean): void => {
+    refs.fileMenu.hidden = !open;
+    refs.btnFile.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  refs.btnFile.addEventListener("click", () => {
+    setFileMenuOpen(refs.fileMenu.hidden === true);
+  });
+
+  document.addEventListener("pointerdown", (ev) => {
+    if (refs.fileMenu.hidden) return;
+    const t = ev.target as Node;
+    if (refs.fileMenu.contains(t) || refs.btnFile.contains(t)) return;
+    setFileMenuOpen(false);
+  });
+
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (
+        !refs.fileMenu.hidden &&
+        ev.key === "Escape" &&
+        !drawGestureInProgress()
+      ) {
+        ev.stopPropagation();
+        setFileMenuOpen(false);
+      }
+    },
+    true,
+  );
+
+  // Choosing an item acts immediately, so the menu closes behind it —
+  // Export is the exception: its dialog anchors to the item's rect, so
+  // the menu stays open until the dialog resolves (its backdrop covers
+  // the open menu; Escape closes both).
+  for (const item of [refs.btnImport, refs.btnExportJson, refs.btnShare]) {
+    item.addEventListener("click", () => setFileMenuOpen(false));
+  }
+
   refs.btnRect.addEventListener("click", () => setActiveTool("rectangle"));
 
   /* ---------- pkg 12.1 (issue #99): underlay UI ---------- */
@@ -2539,8 +2576,17 @@ export function initEditorInteraction(
     repaint();
   }
 
+  // pkg #142: status bar middle zone — live cursor position in meters.
+  // Cleared on leave so a stale coordinate never sits next to the total.
+  canvas.addEventListener("pointerleave", () => {
+    refs.statusCoords.textContent = "";
+  });
+
   canvas.addEventListener("pointermove", (ev) => {
     const worldPt = evWorld(ev);
+    // pkg #142: the readout rides the EXISTING per-frame pointermove
+    // handler — no extra listener, no extra frame cost.
+    refs.statusCoords.textContent = `${worldPt[0].toFixed(2)}, ${worldPt[1].toFixed(2)} m`;
 
     // pkg 12.1 (issue #99): an in-flight underlay corner resize owns
     // the pointer (plain capture, no store gesture — the underlay is
