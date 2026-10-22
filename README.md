@@ -194,3 +194,7 @@ the easiest way is exporting through the app itself (Export → PNG).
 - **Playwright can’t bind port 4199** — the e2e server uses
   `strictPort`; stop the stale process or unset `reuseExistingServer`
   expectations (`npm run e2e` kills its own server).
+
+## License
+
+© 2026 Thomas Mueller. All rights reserved. Source shown for reference only.
