@@ -37,9 +37,9 @@ downloads from the source (Poly Haven `Diffuse`, `nor_gl` and `arm` JPGs; ambien
 | `public/assets/materials/plaster-warm/color.jpg` | https://polyhaven.com/a/beige_wall_001 | Dimitrios Savva, Rico Cilliers | CC0 1.0 |
 | `public/assets/materials/plaster-warm/normal.jpg` | https://polyhaven.com/a/beige_wall_001 | Dimitrios Savva, Rico Cilliers | CC0 1.0 |
 | `public/assets/materials/plaster-warm/arm.jpg` | https://polyhaven.com/a/beige_wall_001 | Dimitrios Savva, Rico Cilliers | CC0 1.0 |
-| `public/assets/materials/plaster-ceiling/color.jpg` | https://polyhaven.com/a/white_rough_plaster | Rob Tuytel | CC0 1.0 |
-| `public/assets/materials/plaster-ceiling/normal.jpg` | https://polyhaven.com/a/white_rough_plaster | Rob Tuytel | CC0 1.0 |
-| `public/assets/materials/plaster-ceiling/arm.jpg` | https://polyhaven.com/a/white_rough_plaster | Rob Tuytel | CC0 1.0 |
+| `public/assets/materials/plaster-ceiling/color.jpg` | https://polyhaven.com/a/plastered_wall_04 | Rob Tuytel | CC0 1.0 |
+| `public/assets/materials/plaster-ceiling/normal.jpg` | https://polyhaven.com/a/plastered_wall_04 | Rob Tuytel | CC0 1.0 |
+| `public/assets/materials/plaster-ceiling/arm.jpg` | https://polyhaven.com/a/plastered_wall_04 | Rob Tuytel | CC0 1.0 |
 | `public/assets/materials/roof-shingles/color.jpg` | https://polyhaven.com/a/roof_3 | Rob Tuytel | CC0 1.0 |
 | `public/assets/materials/roof-shingles/normal.jpg` | https://polyhaven.com/a/roof_3 | Rob Tuytel | CC0 1.0 |
 | `public/assets/materials/roof-shingles/arm.jpg` | https://polyhaven.com/a/roof_3 | Rob Tuytel | CC0 1.0 |

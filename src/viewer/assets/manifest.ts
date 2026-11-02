@@ -54,7 +54,7 @@ const SETS: Record<TextureSetId, TextureSetSpec> = {
   'polished-concrete': { tileMeters: 2, packedArm: true },
   'plaster-white': { tileMeters: 2, packedArm: true },
   'plaster-warm': { tileMeters: 3, packedArm: true },
-  'plaster-ceiling': { tileMeters: 1, packedArm: true },
+  'plaster-ceiling': { tileMeters: 3.2, packedArm: true },
   'roof-shingles': { tileMeters: 2, packedArm: true },
   'exterior-render': { tileMeters: 1.96, packedArm: true },
   grass: { tileMeters: 15, packedArm: true },

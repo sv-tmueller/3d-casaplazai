@@ -44,6 +44,7 @@ import {
   UnsignedByteType,
   WebGLRenderer,
   type Material,
+  type MeshStandardMaterial,
   type Object3D,
   type Texture,
 } from 'three';
@@ -295,7 +296,7 @@ export function fitShadowFrustum(
  * decimals), so the picture is tuned here and in the environment
  * intensity only.
  */
-export const TONE_MAPPING_EXPOSURE = 1;
+export const TONE_MAPPING_EXPOSURE = 0.9;
 
 /** Room-environment intensity at full daylight and at the night floor. */
 export const ENV_INTENSITY_NOON = 0.5;
@@ -303,6 +304,25 @@ export const ENV_INTENSITY_NIGHT = 0.12;
 
 /** The room environment is Y-up; the viewer's world is Z-up. */
 const ENV_ROTATION_X_RAD = Math.PI / 2;
+
+/**
+ * Slots that read a specular environment: the glossy floors, glass,
+ * frames and the hard-surface furniture. The matte architectural slots
+ * (walls, ceilings, roofs, carpet) skip the lookup: it is the most
+ * expensive part of the PBR shader on software GL and gains them
+ * little, since the hemisphere and ambient lights already carry their
+ * diffuse fill.
+ */
+const ENV_SLOTS: ReadonlySet<string> = new Set([
+  'wood',
+  'tile',
+  'concrete',
+  'glass',
+  'windowFrame',
+  'furn-wood',
+  'furn-porcelain',
+  'furn-laminate',
+]);
 
 /** Ground plot: how far below the active floor it sits, meters (clears floor slabs). */
 export const GROUND_PLOT_DROP_M = 0.04;
@@ -312,8 +332,13 @@ const CONTACT_SHADOW_LIFT_M = 0.005;
 /** Contact-shadow texture resolution (square, texels). */
 const CONTACT_SHADOW_TEXELS = 128;
 
-/** Scene each light trio belongs to, so applySunPose can retune the environment. */
-const sceneByLights = new WeakMap<ViewerLights, Scene>();
+/** The environment-lit materials of one built scene, keyed by its lights. */
+interface EnvBinding {
+  materials: MeshStandardMaterial[];
+  /** The environment texture the materials currently carry. */
+  attached: Texture | null;
+}
+const envByLights = new WeakMap<ViewerLights, EnvBinding>();
 
 /** Environment intensity for a sun intensity factor (night floor to 1). */
 function environmentIntensityFor(intensityFactor: number): number {
@@ -391,8 +416,11 @@ export function applySunPose(
   lights.sun.intensity = SUN_INTENSITY * state.intensityFactor;
   lights.sun.color.set(SUN_COLOR).lerp(SUN_DUSK_COLOR, state.duskBlend);
   lights.amb.intensity = AMBIENT_INTENSITY * state.ambientFactor;
-  const scene = sceneByLights.get(lights);
-  if (scene) scene.environmentIntensity = environmentIntensityFor(state.intensityFactor);
+  const binding = envByLights.get(lights);
+  if (binding) {
+    const intensity = environmentIntensityFor(state.intensityFactor);
+    for (const m of binding.materials) m.envMapIntensity = intensity;
+  }
   return state;
 }
 
@@ -685,18 +713,20 @@ export function buildViewerScene(
 
   const lights: ViewerLights = { sun, hemi, amb };
   // Environment (#179): the scene is built before configureRenderer
-  // makes the session's room environment, so it is borrowed lazily on
-  // the first render. applySunPose retunes the intensity by time of day.
-  sceneByLights.set(lights, scene);
-  scene.environmentIntensity = ENV_INTENSITY_NOON;
-  scene.environmentRotation.x = ENV_ROTATION_X_RAD;
-  if (quality === 'high') {
-    scene.onBeforeRender = () => {
-      if (sessionEnvironment && scene.environment !== sessionEnvironment.texture) {
-        scene.environment = sessionEnvironment.texture;
-      }
-    };
-  }
+  // makes the session's room environment, so the glossy materials
+  // borrow it lazily on the first render. applySunPose retunes their
+  // intensity by time of day through this binding.
+  const envBinding: EnvBinding = { materials: [], attached: null };
+  envByLights.set(lights, envBinding);
+  scene.onBeforeRender = () => {
+    const env = sessionEnvironment?.texture;
+    if (!env || envBinding.attached === env) return;
+    for (const m of envBinding.materials) {
+      m.envMap = env;
+      m.needsUpdate = true;
+    }
+    envBinding.attached = env;
+  };
   // Default sun pose (issue #121): identity at DEFAULT_SUN_SETTINGS —
   // the noon perch (8, −8, 12) the pre-#121 build hard-coded — so the
   // default output stays byte-identical. The controller re-applies the
@@ -723,6 +753,11 @@ export function buildViewerScene(
     // merged fan windings vary per triangle; double-sided removes any
     // missing-face flicker for negligible cost at this poly count.
     mat.side = DoubleSide;
+    if (hiQuality && quality === 'high' && ENV_SLOTS.has(bucket.slot)) {
+      mat.envMapIntensity = ENV_INTENSITY_NOON;
+      mat.envMapRotation.x = ENV_ROTATION_X_RAD;
+      envBinding.materials.push(mat);
+    }
 
     const mesh = new Mesh(geo, mat);
     mesh.name = `slot-${bucket.slot}`;

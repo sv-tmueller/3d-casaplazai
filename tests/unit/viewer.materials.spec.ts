@@ -115,4 +115,21 @@ describe('buildMaterial — slot routing', () => {
     expect(buildMaterial('wood').color.getHexString()).toBe('a06a3c');
     expect(buildMaterial('ceiling').color.getHexString()).toBe('fafafa');
   });
+
+  it('skips the AO sampler on the matte architectural slots and keeps it on floors', () => {
+    for (const slot of ['wall', 'ceiling', 'roof', 'carpet'] as const) {
+      expect(buildMaterial(slot).aoMap, slot).toBeNull();
+    }
+    for (const slot of ['wood', 'tile', 'concrete'] as const) {
+      expect(buildMaterial(slot).aoMap, slot).toBeTruthy();
+    }
+  });
+
+  it('brightens the ceiling set once loaded: the scanned plaster is a mid grey', async () => {
+    const ceiling = buildMaterial('ceiling');
+    const wall = buildMaterial('wall');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ceiling.color.r).toBeGreaterThan(1);
+    expect(wall.color.getHexString()).toBe('ffffff');
+  });
 });

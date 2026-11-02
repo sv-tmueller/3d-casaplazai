@@ -62,11 +62,27 @@ const SLOT_FLAT_COLORS: Record<MaterialSlot, string> = {
 };
 
 /**
- * Albedo tint once a set has loaded, for sets whose scanned colour sits
- * away from the look the slot should have. Absent = white (the map as
- * shot). Values above 1 brighten: three.js does not clamp `color`.
+ * Linear albedo gain once a set has loaded, for sets whose scanned
+ * albedo sits darker than the surface should read. Absent = 1 (the map
+ * as shot). Values above 1 brighten: three.js does not clamp `color`.
+ * The ceiling set is a mid-grey painted plaster; ceilings are white.
  */
-const UPGRADED_TINT: Partial<Record<MaterialSlot, string>> = {};
+const UPGRADED_GAIN: Partial<Record<MaterialSlot, number>> = {
+  ceiling: 3,
+};
+
+/** Matte slots: no AO sampler (indirect light there is a flat hemisphere). */
+const MATTE_SLOTS: ReadonlySet<MaterialSlot> = new Set<MaterialSlot>([
+  'wall',
+  'ceiling',
+  'roof',
+  'carpet',
+]);
+
+/** Tint colour for a linear gain; undefined keeps the loader's white. */
+function gainColor(gain: number | undefined): Color | undefined {
+  return gain === undefined ? undefined : new Color().setScalar(gain);
+}
 
 /** Roughness scalar once the roughness map is in. Absent = 1 (map drives it). */
 const UPGRADED_ROUGHNESS: Partial<Record<MaterialSlot, number>> = {};
@@ -87,6 +103,7 @@ export function buildGroundMaterial(hiQuality = true): MeshStandardMaterial {
   return createPbrMaterial('grass', {
     color: GROUND_FLAT_COLOR,
     roughness: GROUND_ROUGHNESS,
+    ao: false,
   });
 }
 
@@ -124,8 +141,9 @@ export function buildMaterial(slot: MaterialSlot, hiQuality = true): MeshStandar
     return createPbrMaterial(setId, {
       color: SLOT_FLAT_COLORS[slot],
       roughness: FLAT_ROUGHNESS[slot],
-      upgradedColor: UPGRADED_TINT[slot],
+      upgradedColor: gainColor(UPGRADED_GAIN[slot]),
       upgradedRoughness: UPGRADED_ROUGHNESS[slot],
+      ao: !MATTE_SLOTS.has(slot),
     });
   }
   return new MeshStandardMaterial({

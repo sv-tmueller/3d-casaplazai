@@ -172,6 +172,11 @@ export interface PbrMaterialOptions {
   upgradedColor?: ColorRepresentation;
   /** Roughness scalar once the map is in; defaults to 1 (map drives it). */
   upgradedRoughness?: number;
+  /**
+   * Wire the packed AO channel (default true). Matte surfaces skip it:
+   * the extra sampler costs real time for little visible gain.
+   */
+  ao?: boolean;
 }
 
 /** Materials still waiting for their set (disposed ones are removed). */
@@ -192,6 +197,7 @@ export function createPbrMaterial(
   options: PbrMaterialOptions,
 ): MeshStandardMaterial {
   const ph = getPlaceholders();
+  const withAo = options.ao ?? true;
   const mat = new MeshStandardMaterial({
     color: options.color,
     roughness: options.roughness,
@@ -199,7 +205,7 @@ export function createPbrMaterial(
     map: ph.white,
     normalMap: ph.normal,
     roughnessMap: ph.arm,
-    aoMap: ph.arm,
+    ...(withAo ? { aoMap: ph.arm } : {}),
   });
 
   pendingUpgrades.add(mat);
@@ -215,7 +221,7 @@ export function createPbrMaterial(
       mat.map = set.color;
       mat.normalMap = set.normal;
       mat.roughnessMap = set.roughness;
-      if (textureSetSpec(setId).packedArm) mat.aoMap = set.roughness;
+      if (withAo && textureSetSpec(setId).packedArm) mat.aoMap = set.roughness;
       mat.color.set(options.upgradedColor ?? 0xffffff);
       mat.roughness = options.upgradedRoughness ?? 1;
       mat.needsUpdate = true;

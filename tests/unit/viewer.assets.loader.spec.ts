@@ -186,6 +186,20 @@ describe('createPbrMaterial — in-place upgrade', () => {
   });
 });
 
+describe('createPbrMaterial — ambient occlusion opt-out', () => {
+  it('wires no AO map, before or after the upgrade, when ao is false', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createPbrMaterial('plaster-white', { color: '#e8e2d8', roughness: 0.92, ao: false });
+    expect(mat.aoMap).toBeNull();
+    for (const r of requests) r.resolve();
+    await flush();
+
+    expect(mat.aoMap).toBeNull();
+    expect(mat.roughnessMap).toBeTruthy();
+  });
+});
+
 describe('createPbrMaterial — failure fallback', () => {
   it('a failed download leaves the flat colour and placeholders, never an empty map', async () => {
     const { requests, fetcher } = manualFetcher();

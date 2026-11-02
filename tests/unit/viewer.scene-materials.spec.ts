@@ -9,6 +9,7 @@ import {
   ACESFilmicToneMapping,
   BufferAttribute,
   Mesh,
+  type MeshStandardMaterial,
   SRGBColorSpace,
   Scene,
   Texture,
@@ -301,31 +302,48 @@ describe('room environment', () => {
     expect(builds).toBe(1);
   });
 
-  it('is attached to a scene built BEFORE the renderer was configured', () => {
-    const built = buildViewerScene(scene([WALL_QUAD]), 'high');
-    expect(built.scene.environment).toBeNull();
+  it('reaches the glossy slots of a scene built BEFORE the renderer was configured', () => {
+    const built = buildViewerScene(scene([FLOOR_QUAD, WALL_QUAD]), 'high');
+    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
+    expect(floor.envMap).toBeNull();
 
     const env = new Texture();
     ensureEnvironment(fakeRenderer(), () => env);
     renderTick(built.scene);
-    expect(built.scene.environment).toBe(env);
+    expect(floor.envMap).toBe(env);
+  });
+
+  it('turns the environment Y-up to the viewer Z-up', () => {
+    const built = buildViewerScene(scene([FLOOR_QUAD]), 'high');
+    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
+    expect(floor.envMapRotation.x).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it('leaves the matte architectural slots out of the environment lookup', () => {
+    const built = buildViewerScene(scene([WALL_QUAD, ROOF_QUAD]), 'high');
+    ensureEnvironment(fakeRenderer(), () => new Texture());
+    renderTick(built.scene);
+    for (const slot of ['wall', 'roof']) {
+      expect((meshFor(built, slot).material as MeshStandardMaterial).envMap, slot).toBeNull();
+    }
   });
 
   it('LOW scenes never pick the environment up', () => {
-    const built = buildViewerScene(scene([WALL_QUAD]), 'low');
+    const built = buildViewerScene(scene([FLOOR_QUAD]), 'low', true);
     ensureEnvironment(fakeRenderer(), () => new Texture());
     renderTick(built.scene);
-    expect(built.scene.environment).toBeNull();
+    expect((meshFor(built, 'wood').material as MeshStandardMaterial).envMap).toBeNull();
   });
 
   it('applySunPose dims the environment toward night', () => {
-    const built = buildViewerScene(scene([WALL_QUAD]), 'high');
-    const noon = built.scene.environmentIntensity;
+    const built = buildViewerScene(scene([FLOOR_QUAD]), 'high');
+    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
+    const noon = floor.envMapIntensity;
     applySunPose(built.lights, { timeHours: 22, northOffsetDeg: 0 }, BOUNDS);
-    const night = built.scene.environmentIntensity;
+    const night = floor.envMapIntensity;
     expect(night).toBeLessThan(noon);
     expect(night).toBeGreaterThan(0);
     applySunPose(built.lights, { timeHours: 12, northOffsetDeg: 0 }, BOUNDS);
-    expect(built.scene.environmentIntensity).toBeCloseTo(noon, 6);
+    expect(floor.envMapIntensity).toBeCloseTo(noon, 6);
   });
 });
