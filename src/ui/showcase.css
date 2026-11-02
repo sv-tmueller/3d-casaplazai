@@ -1,0 +1,63 @@
+#kit {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+}
+
+#kit h1 {
+  margin: 0 0 var(--space-5);
+  font-size: 20px;
+}
+
+.kit-section {
+  margin-bottom: var(--space-5);
+}
+
+.kit-section h2 {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.kit-row > .ui-card {
+  width: var(--toolcard-w);
+}
+
+.kit-row > .ui-slider {
+  width: 260px;
+}
+
+.kit-pad {
+  margin: 0;
+  padding: var(--space-4);
+}
+
+.kit-icon {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 72px;
+  color: var(--ink);
+}
+
+.kit-icon small {
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+.kit-toasts {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+}

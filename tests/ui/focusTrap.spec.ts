@@ -16,7 +16,7 @@ import {
   focusablesWithin,
   trapFocus,
   type FocusTrap,
-} from '../../src/editor/popoverFocus';
+} from '../../src/ui/focusTrap';
 
 interface Fixture {
   invoker: HTMLButtonElement;

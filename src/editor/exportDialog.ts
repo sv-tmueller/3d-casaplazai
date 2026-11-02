@@ -4,7 +4,7 @@
  * caller. No dependencies beyond the DOM.
  */
 
-import { trapFocus } from './popoverFocus';
+import { trapFocus } from '../ui/focusTrap';
 
 export interface ExportChoice {
   format: 'png' | 'jpeg';

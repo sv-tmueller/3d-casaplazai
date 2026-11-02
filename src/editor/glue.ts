@@ -96,7 +96,7 @@ import {
   type SegmentAddress,
 } from './inspectorPanel';
 import { flashMessage, type EditorDomRefs } from './ui';
-import { trapFocus, type FocusTrap } from './popoverFocus';
+import { trapFocus, type FocusTrap } from '../ui/focusTrap';
 import { paintScene, paintSelectedSegmentOverlay, stairsOfActiveFloor as activeFloorStairs } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';

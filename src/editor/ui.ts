@@ -13,7 +13,7 @@
  * contains()-based and therefore location-blind.
  */
 import { FURNITURE_DEFAULTS } from "./model/constants";
-import { iconMarkup, type IconKey } from "./icons";
+import { iconMarkup, type IconKey } from "../ui/icons";
 import { TOOL_HINTS } from "./polish";
 
 export interface EditorDomRefs {
