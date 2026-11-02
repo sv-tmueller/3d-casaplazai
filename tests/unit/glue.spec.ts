@@ -14,7 +14,7 @@ import {
   openingCommitNotice,
   ZOOM_BUTTON_STEP,
   zoomAboutCenter,
-} from '../../src/editor/glue';
+} from '../../src/editor/canvasEngine';
 import { worldToScreen, type Camera } from '../../src/editor/controller';
 import { emptyPlan } from '../../src/editor/store';
 import type { FloorplanData, FurnitureItem, Room } from '../../src/shared/schema';

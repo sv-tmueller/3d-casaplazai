@@ -14,7 +14,7 @@
 import { SCHEMA_VERSION, type FloorplanData, type FloorplanDataV1 } from '../shared/schema';
 import './../style.css';
 import { AutosaveManager } from './autosave';
-import { hydrateFromAutosave, initEditorInteraction } from './glue';
+import { hydrateFromAutosave, initEditorInteraction } from './canvasEngine';
 import { buildEditorUi, type EditorDomRefs } from './ui';
 import { EditorStore, emptyPlan } from './store';
 import { prefersReducedMotion } from '../shared/reducedMotion';

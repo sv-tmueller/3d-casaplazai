@@ -16,7 +16,7 @@ import type { FloorplanData, FloorplanDataV1 } from '../../src/shared/schema';
 import { SCHEMA_VERSION, migrate, registerTransform, validateFloorplan } from '../../src/shared/schema';
 import { AUTOSAVE_KEY, AutosaveManager } from '../../src/editor/autosave';
 import { EditorStore, emptyPlan } from '../../src/editor/store';
-import { hydrateFromAutosave } from '../../src/editor/glue';
+import { hydrateFromAutosave } from '../../src/editor/canvasEngine';
 import { normalizeIncoming } from '../../src/editor/wire';
 
 /** Minimal but REAL v1 payload (localStorage-autosave shaped). */
