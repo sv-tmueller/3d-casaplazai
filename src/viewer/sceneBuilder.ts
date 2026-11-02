@@ -19,27 +19,37 @@
  */
 
 import {
+  ACESFilmicToneMapping,
   AmbientLight,
   BackSide,
   BufferAttribute,
   BufferGeometry,
   Color,
+  DataTexture,
   DirectionalLight,
   DoubleSide,
   Group,
   HemisphereLight,
+  LinearFilter,
   Mesh,
+  MeshBasicMaterial,
   OrthographicCamera,
   PCFSoftShadowMap,
+  PMREMGenerator,
+  RGBAFormat,
+  SRGBColorSpace,
   Scene,
   ShaderMaterial,
   SphereGeometry,
+  UnsignedByteType,
   WebGLRenderer,
   type Material,
   type Object3D,
+  type Texture,
 } from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-import { buildMaterial } from './materials';
+import { buildGroundMaterial, buildMaterial } from './materials';
 import { isHighQuality } from './quality';
 import {
   AMBIENT_COLOR,
@@ -65,6 +75,7 @@ import {
   SUN_COLOR,
   SUN_DUSK_COLOR_HEX,
   SUN_INTENSITY,
+  SUN_NIGHT_INTENSITY_FLOOR,
   type QualityLevel,
 } from './renderConstants';
 import { DEFAULT_SUN_SETTINGS, sunState, type SunState } from './sun';
@@ -126,15 +137,125 @@ function attachMeterUvs(geo: BufferGeometry): void {
   geo.setAttribute('uv', new BufferAttribute(uvs, 2));
 }
 
+/**
+ * Slots whose geometry is split per face and projected per face (#179).
+ * Furniture is excluded (its vertex count is read as volumes * 8 by the
+ * stats probe), as are glass and window frames (flat colour, no maps).
+ */
+const PROJECTED_SLOTS: ReadonlySet<string> = new Set([
+  'wall',
+  'ceiling',
+  'roof',
+  'wood',
+  'tile',
+  'carpet',
+  'concrete',
+]);
+
+/** |n.z| at or above which a face counts as horizontal (u=x, v=y, as for floors). */
+const HORIZONTAL_NZ = 0.999;
+
+/**
+ * Per-face UV projection (issue #179). Horizontal faces keep u=x, v=y,
+ * identical to the floor mapping before this change. Every other face
+ * takes u along its horizontal tangent (up x normal) and v along its
+ * up direction: z on a vertical wall, the slope on a pitched roof, so
+ * one texture repeat spans the asset's real size and the pattern never
+ * smears into a one-dimensional stripe. The tangent follows the
+ * winding normal, so the two triangles of a quad share one mapping and
+ * (tangent x up) points along the face normal, which keeps normal-map
+ * relief from flipping.
+ *
+ * Wall slabs are eight-corner prisms whose shared vertices would blend
+ * normals across corners, so a mesh with any non-horizontal face is
+ * split to three vertices per triangle (flat normals) behind a
+ * sequential index. The index count never changes: the roof and glass
+ * triangle probes read it. Returns null when every face is horizontal
+ * and the shared-vertex geometry can stay as it is.
+ */
+function projectFaceUvs(
+  positions: Float32Array,
+  indices: Uint32Array,
+): { positions: Float32Array; indices: Uint32Array; uvs: Float32Array } | null {
+  const triCount = Math.floor(indices.length / 3);
+  const outPos = new Float32Array(triCount * 9);
+  const outUv = new Float32Array(triCount * 6);
+  let anyTilted = false;
+
+  for (let t = 0; t < triCount; t += 1) {
+    const ia = indices[t * 3] * 3;
+    const ib = indices[t * 3 + 1] * 3;
+    const ic = indices[t * 3 + 2] * 3;
+    const ax = positions[ia], ay = positions[ia + 1], az = positions[ia + 2];
+    const bx = positions[ib], by = positions[ib + 1], bz = positions[ib + 2];
+    const cx = positions[ic], cy = positions[ic + 1], cz = positions[ic + 2];
+
+    // Winding normal (unnormalised).
+    const ex = bx - ax, ey = by - ay, ez = bz - az;
+    const fx = cx - ax, fy = cy - ay, fz = cz - az;
+    let nx = ey * fz - ez * fy;
+    let ny = ez * fx - ex * fz;
+    let nz = ex * fy - ey * fx;
+    const len = Math.hypot(nx, ny, nz);
+    const horizontal = len === 0 || Math.abs(nz) / len >= HORIZONTAL_NZ;
+
+    // Tangent T = z x n, up V = n x T (so T x V = n).
+    let tx = 0, ty = 0, tz = 0, vx = 0, vy = 0, vz = 1;
+    if (!horizontal) {
+      anyTilted = true;
+      nx /= len; ny /= len; nz /= len;
+      const tl = Math.hypot(nx, ny);
+      tx = -ny / tl; ty = nx / tl; tz = 0;
+      vx = ny * tz - nz * ty;
+      vy = nz * tx - nx * tz;
+      vz = nx * ty - ny * tx;
+    }
+
+    const base = t * 9;
+    const uvBase = t * 6;
+    const corners = [
+      [ax, ay, az],
+      [bx, by, bz],
+      [cx, cy, cz],
+    ];
+    for (let k = 0; k < 3; k += 1) {
+      const [px, py, pz] = corners[k];
+      outPos[base + k * 3] = px;
+      outPos[base + k * 3 + 1] = py;
+      outPos[base + k * 3 + 2] = pz;
+      if (horizontal) {
+        outUv[uvBase + k * 2] = px;
+        outUv[uvBase + k * 2 + 1] = py;
+      } else {
+        outUv[uvBase + k * 2] = px * tx + py * ty + pz * tz;
+        outUv[uvBase + k * 2 + 1] = px * vx + py * vy + pz * vz;
+      }
+    }
+  }
+  if (!anyTilted) return null;
+
+  const seq = new Uint32Array(triCount * 3);
+  for (let i = 0; i < seq.length; i += 1) seq[i] = i;
+  return { positions: outPos, indices: seq, uvs: outUv };
+}
+
 /** Build one BufferGeometry from a bucket's flat arrays. */
 function bucketGeometry(
+  slot: string,
   positions: Float32Array,
   indices: Uint32Array,
 ): BufferGeometry {
   const geo = new BufferGeometry();
-  geo.setAttribute('position', new BufferAttribute(positions, 3));
-  geo.setIndex(new BufferAttribute(indices, 1));
-  attachMeterUvs(geo);
+  const projected = PROJECTED_SLOTS.has(slot) ? projectFaceUvs(positions, indices) : null;
+  if (projected) {
+    geo.setAttribute('position', new BufferAttribute(projected.positions, 3));
+    geo.setIndex(new BufferAttribute(projected.indices, 1));
+    geo.setAttribute('uv', new BufferAttribute(projected.uvs, 2));
+  } else {
+    geo.setAttribute('position', new BufferAttribute(positions, 3));
+    geo.setIndex(new BufferAttribute(indices, 1));
+    attachMeterUvs(geo);
+  }
   geo.computeVertexNormals();
   geo.computeBoundingBox();
   geo.computeBoundingSphere();
@@ -164,6 +285,76 @@ export function fitShadowFrustum(
   cam.updateProjectionMatrix();
   light.shadow.bias = SHADOW_BIAS;
   light.shadow.normalBias = SHADOW_NORMAL_BIAS;
+}
+
+/* ------------------------- lighting tunables (#179) ----------------------- */
+
+/**
+ * Renderer exposure under ACES filmic tone mapping. Light intensities
+ * are pinned by the sun e2e (SUN_INTENSITY * intensityFactor to six
+ * decimals), so the picture is tuned here and in the environment
+ * intensity only.
+ */
+export const TONE_MAPPING_EXPOSURE = 1;
+
+/** Room-environment intensity at full daylight and at the night floor. */
+export const ENV_INTENSITY_NOON = 0.5;
+export const ENV_INTENSITY_NIGHT = 0.12;
+
+/** The room environment is Y-up; the viewer's world is Z-up. */
+const ENV_ROTATION_X_RAD = Math.PI / 2;
+
+/** Ground plot: how far below the active floor it sits, meters (clears floor slabs). */
+export const GROUND_PLOT_DROP_M = 0.04;
+/** Contact darkening: peak opacity at the building edge, and its lift above the plot. */
+const CONTACT_SHADOW_MAX_ALPHA = 0.55;
+const CONTACT_SHADOW_LIFT_M = 0.005;
+/** Contact-shadow texture resolution (square, texels). */
+const CONTACT_SHADOW_TEXELS = 128;
+
+/** Scene each light trio belongs to, so applySunPose can retune the environment. */
+const sceneByLights = new WeakMap<ViewerLights, Scene>();
+
+/** Environment intensity for a sun intensity factor (night floor to 1). */
+function environmentIntensityFor(intensityFactor: number): number {
+  const span = 1 - SUN_NIGHT_INTENSITY_FLOOR;
+  const t = Math.min(1, Math.max(0, (intensityFactor - SUN_NIGHT_INTENSITY_FLOOR) / span));
+  return ENV_INTENSITY_NIGHT + (ENV_INTENSITY_NOON - ENV_INTENSITY_NIGHT) * t;
+}
+
+/** The session's one room environment (HIGH tier), tied to its renderer. */
+let sessionEnvironment: { renderer: WebGLRenderer; texture: Texture } | null = null;
+
+/** Prefiltered RoomEnvironment: the default environment builder. */
+function buildRoomEnvironment(renderer: WebGLRenderer): Texture {
+  const pmrem = new PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  const target = pmrem.fromScene(room, 0.04);
+  room.dispose();
+  pmrem.dispose();
+  return target.texture;
+}
+
+/**
+ * Build the room environment once per renderer and keep it for the
+ * session (never disposed on scene rebuilds: scenes only borrow it).
+ * Returns null when the renderer has no usable GL context, so a
+ * context-less environment degrades to direct lighting only.
+ */
+export function ensureEnvironment(
+  renderer: WebGLRenderer,
+  make: (renderer: WebGLRenderer) => Texture = buildRoomEnvironment,
+): Texture | null {
+  if (sessionEnvironment && sessionEnvironment.renderer === renderer) {
+    return sessionEnvironment.texture;
+  }
+  try {
+    const texture = make(renderer);
+    sessionEnvironment = { renderer, texture };
+    return texture;
+  } catch {
+    return null;
+  }
 }
 
 /* ------------------------------- sun pose (#121) -------------------------- */
@@ -200,6 +391,8 @@ export function applySunPose(
   lights.sun.intensity = SUN_INTENSITY * state.intensityFactor;
   lights.sun.color.set(SUN_COLOR).lerp(SUN_DUSK_COLOR, state.duskBlend);
   lights.amb.intensity = AMBIENT_INTENSITY * state.ambientFactor;
+  const scene = sceneByLights.get(lights);
+  if (scene) scene.environmentIntensity = environmentIntensityFor(state.intensityFactor);
   return state;
 }
 
@@ -227,7 +420,9 @@ export function applySkyDusk(
  * preference, PCFSoft shadows with autoUpdate disabled (static scene —
  * shadowAtlas refresh happens only via renderer.shadowMap.needsUpdate).
  * LOW quality (issue #86) turns shadow mapping OFF entirely — the
- * biggest single perf lever for integrated GPUs.
+ * biggest single perf lever for integrated GPUs. Issue #179 adds ACES
+ * filmic tone mapping + sRGB output (both tiers) and the HIGH-tier room
+ * environment map.
  */
 export function configureRenderer(
   renderer: WebGLRenderer,
@@ -243,6 +438,14 @@ export function configureRenderer(
   renderer.shadowMap.type = PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.needsUpdate = true;
+  // Filmic tone mapping and sRGB output on both tiers (#179). Lights are
+  // physically based by default since three r165, so nothing to switch.
+  renderer.toneMapping = ACESFilmicToneMapping;
+  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE;
+  renderer.outputColorSpace = SRGBColorSpace;
+  // The specular environment is the HIGH tier's luxury; scenes pick it up
+  // through scene.onBeforeRender (they are built before this runs).
+  if (quality === 'high') ensureEnvironment(renderer);
 }
 
 /**
@@ -303,6 +506,105 @@ void main() {
   dome.frustumCulled = false; // encloses the camera; never cull it
   dome.renderOrder = -1; // painted before every opaque slot mesh
   return dome;
+}
+
+/**
+ * Ground plot (issue #179): a flat quad just below the active floor,
+ * the plan bounds plus the shadow-frustum pad on every side, so it
+ * stays inside the sun's shadow camera and leaves the viewport corners
+ * to the sky. Built in world coordinates, so its UVs are meters and the
+ * grass tiles at its real size. Kept out of `meshes` and slot counting
+ * like the sky dome. HIGH: the grass set, receiving shadows. LOW: a
+ * flat colour with no map of any kind.
+ */
+export function buildGroundPlot(
+  bounds: AdaptedScene['bounds'],
+  floorElevation: number,
+  hiQuality: boolean,
+  receiveShadows: boolean,
+): Mesh {
+  const x0 = bounds.minX - SHADOW_FRUSTUM_PAD_M;
+  const x1 = bounds.maxX + SHADOW_FRUSTUM_PAD_M;
+  const y0 = bounds.minY - SHADOW_FRUSTUM_PAD_M;
+  const y1 = bounds.maxY + SHADOW_FRUSTUM_PAD_M;
+  const z = floorElevation - GROUND_PLOT_DROP_M;
+
+  const geo = new BufferGeometry();
+  geo.setAttribute(
+    'position',
+    new BufferAttribute(new Float32Array([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z]), 3),
+  );
+  geo.setAttribute(
+    'uv',
+    new BufferAttribute(new Float32Array([x0, y0, x1, y0, x1, y1, x0, y1]), 2),
+  );
+  geo.setIndex(new BufferAttribute(new Uint32Array([0, 1, 2, 0, 2, 3]), 1));
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+
+  const plot = new Mesh(geo, buildGroundMaterial(hiQuality));
+  plot.name = 'ground-plot';
+  plot.receiveShadow = receiveShadows;
+  return plot;
+}
+
+/**
+ * Soft contact darkening around the building (issue #179): a black
+ * overlay whose alpha peaks at the plan edge and fades to nothing over
+ * the pad width. Alpha comes from a small procedural texture, so no
+ * asset ships for it. HIGH tier only; the texture is released with the
+ * material.
+ */
+export function buildContactShadow(
+  bounds: AdaptedScene['bounds'],
+  floorElevation: number,
+): Mesh {
+  const x0 = bounds.minX - SHADOW_FRUSTUM_PAD_M;
+  const x1 = bounds.maxX + SHADOW_FRUSTUM_PAD_M;
+  const y0 = bounds.minY - SHADOW_FRUSTUM_PAD_M;
+  const y1 = bounds.maxY + SHADOW_FRUSTUM_PAD_M;
+  const z = floorElevation - GROUND_PLOT_DROP_M + CONTACT_SHADOW_LIFT_M;
+
+  const n = CONTACT_SHADOW_TEXELS;
+  const data = new Uint8Array(n * n * 4);
+  for (let j = 0; j < n; j += 1) {
+    const y = y0 + ((j + 0.5) / n) * (y1 - y0);
+    for (let i = 0; i < n; i += 1) {
+      const x = x0 + ((i + 0.5) / n) * (x1 - x0);
+      const dx = Math.max(bounds.minX - x, 0, x - bounds.maxX);
+      const dy = Math.max(bounds.minY - y, 0, y - bounds.maxY);
+      const falloff = Math.max(0, 1 - Math.hypot(dx, dy) / SHADOW_FRUSTUM_PAD_M);
+      data[(j * n + i) * 4 + 3] = Math.round(255 * CONTACT_SHADOW_MAX_ALPHA * falloff * falloff);
+    }
+  }
+  const texture = new DataTexture(data, n, n, RGBAFormat, UnsignedByteType);
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+
+  const geo = new BufferGeometry();
+  geo.setAttribute(
+    'position',
+    new BufferAttribute(new Float32Array([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z]), 3),
+  );
+  geo.setAttribute('uv', new BufferAttribute(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), 2));
+  geo.setIndex(new BufferAttribute(new Uint32Array([0, 1, 2, 0, 2, 3]), 1));
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+
+  const mat = new MeshBasicMaterial({
+    color: 0x000000,
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+  });
+  mat.addEventListener('dispose', () => texture.dispose());
+  const mesh = new Mesh(geo, mat);
+  mesh.name = 'ground-contact';
+  mesh.renderOrder = 1; // after the opaque plot it darkens
+  return mesh;
 }
 
 /**
@@ -382,6 +684,19 @@ export function buildViewerScene(
   lightGroup.add(amb);
 
   const lights: ViewerLights = { sun, hemi, amb };
+  // Environment (#179): the scene is built before configureRenderer
+  // makes the session's room environment, so it is borrowed lazily on
+  // the first render. applySunPose retunes the intensity by time of day.
+  sceneByLights.set(lights, scene);
+  scene.environmentIntensity = ENV_INTENSITY_NOON;
+  scene.environmentRotation.x = ENV_ROTATION_X_RAD;
+  if (quality === 'high') {
+    scene.onBeforeRender = () => {
+      if (sessionEnvironment && scene.environment !== sessionEnvironment.texture) {
+        scene.environment = sessionEnvironment.texture;
+      }
+    };
+  }
   // Default sun pose (issue #121): identity at DEFAULT_SUN_SETTINGS —
   // the noon perch (8, −8, 12) the pre-#121 build hard-coded — so the
   // default output stays byte-identical. The controller re-applies the
@@ -396,7 +711,7 @@ export function buildViewerScene(
   const hiQuality = forceLowMaterials ? false : isHighQuality();
 
   for (const bucket of adapted.buckets) {
-    const geo = bucketGeometry(bucket.positions, bucket.indices);
+    const geo = bucketGeometry(bucket.slot, bucket.positions, bucket.indices);
     const mat = buildMaterial(
       bucket.slot === 'wall' || bucket.slot === 'ceiling'
         ? bucket.slot
@@ -418,6 +733,15 @@ export function buildViewerScene(
     mesh.userData.slot = bucket.slot;
     scene.add(mesh);
     meshes.push(mesh);
+  }
+
+  // Ground plot (#179): same material tier as every slot, so a scene
+  // never mixes grass with flat colour surfaces.
+  scene.add(
+    buildGroundPlot(adapted.bounds, adapted.activeFloorElevation, hiQuality, quality === 'high'),
+  );
+  if (hiQuality) {
+    scene.add(buildContactShadow(adapted.bounds, adapted.activeFloorElevation));
   }
 
   paintSky(scene);
