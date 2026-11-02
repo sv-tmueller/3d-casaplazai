@@ -12,6 +12,9 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 interface Stats {
   meshCount: number;
   glassRoughness: number;

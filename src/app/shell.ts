@@ -6,6 +6,8 @@
  * command registry. Talks to the 2D engine through the EditorEngine
  * interface only and to the 3D engine through ViewerPort.
  */
+import '../ui/card.css';
+import '../ui/button.css';
 import './shell.css';
 import { el } from '../ui/el';
 import { ToastStack, type ToastStackHandle } from '../ui/toast';
@@ -273,7 +275,7 @@ export function mountShell(opts: ShellOptions): Shell {
   }
 
   /* ------------------------------- refresh ------------------------------ */
-  let lastHint = '';
+  let lastHint = engine.hint();
   let selectionText = '';
   const paintStatusLeft = (): void => status.setHint(selectionText || lastHint);
 
@@ -407,6 +409,7 @@ export function mountShell(opts: ShellOptions): Shell {
   }
   reportInsets();
   toolCard.renderMeasurements(engine.measurements());
+  paintStatusLeft();
   refresh();
 
   return {

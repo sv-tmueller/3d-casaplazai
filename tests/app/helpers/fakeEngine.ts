@@ -76,6 +76,7 @@ export function fakeEngine(): FakeEngine {
       eng.emit('furniture', { type: t });
     },
     gestureInProgress: () => eng.busy,
+    hint: () => 'Press ? for keyboard shortcuts.',
     camera: () => ({ originX: 0, originY: 0, scale: 80 }),
     zoomBy(f) {
       eng.calls.push(`zoomBy:${f}`);

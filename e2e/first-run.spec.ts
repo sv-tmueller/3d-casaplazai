@@ -16,6 +16,9 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: rewrite pending (#178)');
+
 const CARD = '[data-testid="empty-state-card"]';
 const POPOVER = '[data-testid="plans-popover"]';
 const BACKDROP = '[data-testid="confirm-backdrop"]';

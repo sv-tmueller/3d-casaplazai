@@ -207,6 +207,10 @@ describe('inspector', () => {
 });
 
 describe('status bar', () => {
+  it('shows the armed tool hint from boot', () => {
+    expect(tid('ws-status-hint').textContent).toBe('Press ? for keyboard shortcuts.');
+  });
+
   it('shows the hint, the cursor, the zoom and the area total', () => {
     engine.emit('hint', { text: 'Drag to draw a rectangular room.' });
     expect(tid('ws-status-hint').textContent).toBe('Drag to draw a rectangular room.');

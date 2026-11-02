@@ -170,3 +170,33 @@ function validateOk(p: unknown): boolean {
 function validateFail(_p: unknown): boolean {
   return false;
 }
+
+describe('onPersisted (issue #178, G8: the unsaved dot)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('fires after a debounced write lands, and after a synchronous persist', () => {
+    const persisted = vi.fn();
+    const mgr = new AutosaveManager(new FakeStorage(), 100, persisted);
+    mgr.scheduleSave(PLAN);
+    expect(persisted).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(100);
+    expect(persisted).toHaveBeenCalledTimes(1);
+    mgr.persistSync(PLAN);
+    expect(persisted).toHaveBeenCalledTimes(2);
+  });
+
+  it('stays silent when a flush has nothing pending, or a write throws', () => {
+    const persisted = vi.fn();
+    const storage = new FakeStorage();
+    const mgr = new AutosaveManager(storage, 100, persisted);
+    mgr.flush();
+    expect(persisted).not.toHaveBeenCalled();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    mgr.scheduleSave(PLAN);
+    expect(() => vi.advanceTimersByTime(100)).toThrow('quota');
+    expect(persisted).not.toHaveBeenCalled();
+  });
+});

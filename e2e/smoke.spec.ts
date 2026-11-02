@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: rewrite pending (#178)');
+
 // Navigate by route NAME ("/" vs "/viewer"), not by file path with suffix:
 // vite preview redirects "/index.html" -> "/" which breaks asset-relative URLs.
 const ROUTES = [

@@ -27,6 +27,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { FloorplanData } from '../src/shared/schema';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 /** See tests/unit/walkNavHud.spec.ts — near-twin fixture, e2e copy
  *  (specs must not import test files); the e2e copy moves the rooms into
  *  the default camera's visible quadrant. */

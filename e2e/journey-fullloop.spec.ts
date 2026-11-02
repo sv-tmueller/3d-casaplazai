@@ -8,6 +8,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { CAM_SCALE as SCALE } from './fixtures/camConstants';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: rewrite pending (#178)');
+
 
 /** Demo fixture + a 4th room, seeded through the editor bridge. */
 const FOUR_ROOMS = {

@@ -71,6 +71,8 @@ export interface EditorEngine {
   armFurniture(type: string): void;
   /** True while any pointer gesture or draft is in flight. */
   gestureInProgress(): boolean;
+  /** The armed tool's status-bar hint (also published as `hint`). */
+  hint(): string;
 
   /* camera */
   camera(): Camera;

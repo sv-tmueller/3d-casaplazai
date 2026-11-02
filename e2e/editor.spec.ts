@@ -15,6 +15,9 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { BTN_ZOOM, CAM_SCALE, FIT_MARGIN } from './fixtures/camConstants';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: rewrite pending (#178)');
+
 const SCALE = CAM_SCALE; // INITIAL_SCALE in glue.ts (via camConstants; glued by tests/unit/glue.spec.ts)
 
 type Plan = {

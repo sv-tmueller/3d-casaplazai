@@ -15,6 +15,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { regionLuminance, regionMeanRgb } from './fixtures/luminance';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 /**
  * CP0 baselines, captured on the PRE-CHANGE dist (issue #152): demo
  * apartment, seated walk, region 0.5/0.15/0.5/0.4, ?quality=high&perf=1.

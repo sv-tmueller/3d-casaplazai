@@ -83,41 +83,45 @@ badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 ## Controls & keyboard shortcuts
 
 <!-- BEGIN SHORTCUTS -->
-| Keys             | Action                                              |
-| ---------------- | ---------------------------------------------------- |
-| ?                | Show keyboard shortcuts                              |
-| Esc              | Cancel current gesture / deselect                    |
-| Enter            | Close polygon while drawing                          |
-| Ctrl+Z           | Undo                                                 |
-| Ctrl+Shift+Z     | Redo                                                 |
-| Ctrl+Y           | Redo                                                 |
-| V                | Arm the Select tool                                  |
-| R                | Arm Rectangle (rotates selected furniture 90° while one is selected) |
-| P                | Arm the Polygon tool                                 |
-| D                | Arm the Door tool                                    |
-| W                | Arm the Window tool                                  |
-| F                | Arm the Furnish (stamp) tool                         |
-| T                | Arm the Stairs tool                                  |
-| M                | Arm the Measure tool                                 |
-| S                | Toggle the Snapping settings popover                 |
-| L                | Set the selected room’s wall lean (roof)             |
-| I                | Toggle the selection inspector panel                 |
-| 3                | Toggle the 3D inset preview                          |
-| C                | Place the 3D walk camera (click a room, drag to aim)  |
-| PageUp / [       | Switch to the floor below                            |
-| PageDown / ]     | Switch to the floor above                            |
-| Del / Backspace  | Delete selected room, opening, or furniture          |
-| 0                | Fit the whole plan in the viewport                   |
-| Space (hold)     | Temporarily switch to the Pan tool                    |
+| Keys | Action |
+| ---- | ------ |
+| ? | Show keyboard shortcuts |
+| Esc | Cancel current gesture / deselect |
+| Enter | Close polygon while drawing |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z | Redo |
+| Ctrl+Y | Redo |
+| V | Arm the Select tool |
+| R | Arm Rectangle (rotates selected furniture 90° while one is selected) |
+| P | Arm the Polygon tool |
+| D | Arm the Door tool |
+| W | Arm the Window tool |
+| F | Arm the Furniture (stamp) tool |
+| T | Arm the Stairs tool |
+| M | Arm the Measure tool |
+| S | Open the Build tab’s Snapping section |
+| L | Set the selected room’s wall lean (roof) in the inspector |
+| I | Toggle the inspector panel |
+| 1 | Switch to the Plan view |
+| 2 | Switch to the 3D view |
+| 3 | Switch to the Walk view |
+| C | Place the walk camera (click a room, drag to aim), then walk |
+| PageUp / [ | Switch to the floor below |
+| PageDown / ] | Switch to the floor above |
+| Del / Backspace | Delete selected room, opening, or furniture |
+| 0 | Fit the whole plan in the viewport |
+| Space (hold) | Temporarily switch to the Pan tool |
 | Drag on empty space | Marquee multi-select (bulk delete; bulk DRAG moves rooms and furniture — staircases stay put) |
-| Alt+Drag / Middle-Drag | Pan the canvas                                 |
-| Wheel            | Zoom at cursor                                       |
+| Alt+Drag / Middle-Drag | Pan the canvas |
+| Wheel | Zoom at cursor |
 <!-- END SHORTCUTS -->
 
-This table is kept in sync with `src/editor/shortcuts.ts` by
+This table is kept in sync with the command registry
+(`src/app/commands.ts`, rows exported by `src/app/shortcuts.ts`) by
 [`tests/unit/readme.shortcuts.sync.spec.ts`](tests/unit/readme.shortcuts.sync.spec.ts)
 — edit the registry, rerun tests, paste the failing expectation. The
-in-app cheat sheet (**?**) renders from the same registry.
+in-app cheat sheet (**?**) and every control's tooltip render from the
+same registry.
 
 ## Accessibility
 

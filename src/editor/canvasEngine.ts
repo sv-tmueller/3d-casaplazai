@@ -1,9 +1,13 @@
 /**
- * Wire-up: binds DOM events to the controller primitives and paints on
- * every state change. Lives here (not in controller.ts) so the gesture
- * math stays unit-testable without a real canvas/browser.
+ * Canvas engine (issue #178, design §8.3; formerly glue.ts): the 2D
+ * interaction engine behind the EditorEngine interface. It owns its
+ * canvas, binds pointer/keyboard gestures to the controller primitives,
+ * paints on every state change and reports to the shell through events
+ * — no DOM refs bag, no toolbar, no popovers. Tool hotkeys, history keys
+ * and the other single-key shortcuts moved to the shell's command
+ * registry; the engine keeps the gesture keys (Esc, Enter, arrows, Space).
  */
-import type { FloorplanData, FurnitureItem, Room, Staircase } from "../shared/schema";
+import type { FloorplanData, FurnitureItem, Staircase } from "../shared/schema";
 import {
   flatFurniture,
   flatOpenings,
@@ -11,7 +15,7 @@ import {
   migrate,
   validateFloorplan,
 } from "../shared/schema";
-import { AutosaveManager } from "./autosave";
+import type { AutosaveManager } from "./autosave";
 import {
   attemptDrop,
   bandRect,
@@ -47,18 +51,12 @@ import {
 import { FURNITURE_DEFAULTS, OPENING_DEFAULTS } from "./model/constants";
 import {
   loadSnapSettings,
-  parsePitch,
   resolveSnap,
   safeLocalStorage,
   saveSnapSettings,
   type SnapSettings,
 } from "./model/settings";
-import {
-  DEFAULT_THEME,
-  loadTheme,
-  saveTheme,
-  type ThemePreference,
-} from "./model/theme";
+import { DEFAULT_THEME, type ThemePreference } from "./model/theme";
 import {
   clampTForDrag,
   nearestSegment,
@@ -85,35 +83,28 @@ import {
   UNDERLAY_DEFAULT_OPACITY,
   UNDERLAY_NUDGE_LARGE_M,
   UNDERLAY_NUDGE_M,
-  UNDERLAY_ROTATE_STEP_DEG,
   type UnderlayState,
 } from './model/underlay';
 import {
-  mountInspectorPanel,
   sameSegmentAddress,
-  type InspectorPanel,
   type SelectionDescriptor,
   type SegmentAddress,
 } from './inspectorPanel';
-import { flashMessage, type EditorDomRefs } from './ui';
-import { trapFocus, type FocusTrap } from '../ui/focusTrap';
 import { paintScene, paintSelectedSegmentOverlay, stairsOfActiveFloor as activeFloorStairs } from './render';
 import { paintMeasureAnnotations, paintMeasurementBadges } from './render/measurementBadges';
 import { paintAngleReadouts } from './render/angleReadouts';
 import { angleReadoutLabels } from './render/angleReadouts';
-import { totalLivableAreaM2, formatTotal } from './measures';
 import { renderOffscreen, downloadExport, type ExportScale } from './export';
-import { encodeShare } from '../shared/shareLink';
-import { isExportDialogOpen, openExportDialog } from './exportDialog';
-import { initShortcuts, toolHint, GLOBAL_TOOL_HINT } from './polish';
-import { closeHelpModal, isHelpModalOpen, toggleHelpModal } from './helpModal';
-/* Issue #144 (Pkg 15.1): first-run experience — demo registry, modal
- * discard gate, empty-state card, floating Plans menu. */
-import { CONFIRM_MSG, confirmDialog } from './confirmDialog';
-import { mountEmptyStateCard, planIsEmpty, type EmptyStateCard } from './emptyStateCard';
-import { mountPlanMenu } from './planMenu';
-import { demoById, loadDemoPlan, type DemoId } from './demos';
 import { EditorStore, activeFloorPlan, emptyPlan, nextFloorElevation, underlayFor } from './store';
+import type {
+  EditorEngine,
+  EngineEventName,
+  EngineEvents,
+  ExportChoice,
+  MessageLevel,
+  ViewportInsets,
+} from './engine';
+import { ZOOM_BUTTON_FACTOR } from './engine';
 import { stairProgress, validateGeometry } from '../geom';
 import { vecAdd, vecSub } from './geom';
 import {
@@ -125,14 +116,7 @@ import {
 } from "./model/measure";
 import { compassAngleBetween, polarEndpoint } from "./model/angles";
 import { mountDimFields, type DimFields } from "./typeInDims";
-import type { Mini3DInset } from "./mini3d";
-import {
-  getPose,
-  hasViewerSubscriber,
-  sendCommand,
-  subscribePose,
-  type WalkerPose,
-} from "../shared/walkerLink";
+import { getPose, subscribePose, type WalkerPose } from "../shared/walkerLink";
 import { drawPlaceAim, drawWalkerGlyph } from "./render/walkerGlyph";
 
 const POLYGON_MIN_POINTS = 3;
@@ -213,6 +197,29 @@ function imageSize(src: string): Promise<{ w: number; h: number }> {
 
 const NEUTRAL_CAMERA: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
 
+/** No reserved panel space (pure fit, the pre-#178 framing). */
+const NO_INSETS: ViewportInsets = { left: 0, right: 0, top: 0, bottom: 0 };
+
+/** Contextual status-bar hint per armed tool (moved from polish.ts). */
+export const TOOL_HINTS: Record<string, string> = {
+  select: 'Click a room or piece to select; drag to move.',
+  rectangle: 'Drag to draw a rectangular room (snaps to 0.5 m grid).',
+  polygon: 'Click vertices; press Enter or dbl-click to close.',
+  door: 'Hover a wall, then click to place a door.',
+  window: 'Hover a wall, then click to place a window.',
+  stamp: 'Pick a piece in the tool card, then click inside a room to place it.',
+  measure: 'Click two points to add a dimension; click a label to remove it.',
+  stairs: 'Drag inside a room to draw a staircase up to the floor above.',
+  pan: 'Drag to pan the canvas (or hold Space for a temporary pan).',
+};
+
+/** Hint for bindings not tied to a tool. */
+export const GLOBAL_TOOL_HINT = 'Press ? for keyboard shortcuts.';
+
+export function toolHint(tool: string): string {
+  return TOOL_HINTS[tool] ?? '';
+}
+
 function clampScale(scale: number): number {
   return Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, scale));
 }
@@ -254,17 +261,31 @@ export function computeFitCamera(
   plan: FloorplanData,
   w: number,
   h: number,
+  insets: ViewportInsets = NO_INSETS,
 ): Camera {
   const b = planBounds(plan);
   if (b === null || !(w > 0) || !(h > 0)) return { ...NEUTRAL_CAMERA };
   const bw = b.maxX - b.minX;
   const bh = b.maxY - b.minY;
   if (!(bw > 0) || !(bh > 0)) return { ...NEUTRAL_CAMERA };
-  const scale = clampScale(Math.min(w / bw, h / bh) * (1 - FIT_MARGIN));
+  // Issue #178: frame the plan inside the region the floating tool card
+  // and inspector leave free — unless that region is too small to use.
+  let { left, right, top, bottom } = insets;
+  if (w - left - right < MIN_FIT_REGION_PX || h - top - bottom < MIN_FIT_REGION_PX) {
+    left = right = top = bottom = 0;
+  }
+  const fw = w - left - right;
+  const fh = h - top - bottom;
+  const scale = clampScale(Math.min(fw / bw, fh / bh) * (1 - FIT_MARGIN));
   const cx = (b.minX + b.maxX) / 2;
   const cy = (b.minY + b.maxY) / 2;
-  return { originX: cx - w / 2 / scale, originY: cy + h / 2 / scale, scale };
+  const sx = left + fw / 2;
+  const sy = top + fh / 2;
+  return { originX: cx - sx / scale, originY: cy + sy / scale, scale };
 }
+
+/** Smallest free region (CSS px) the inset-aware fit will use. */
+const MIN_FIT_REGION_PX = 160;
 
 /**
  * Zoom about the canvas midpoint: the world point under the centre stays
@@ -291,17 +312,61 @@ export const MIN_ZOOM_SCALE = 12;
 export const MAX_ZOOM_SCALE = 480;
 
 /** Button zoom step — deliberately distinct from the wheel's 1.1 (#46). */
-export const ZOOM_BUTTON_STEP = 1.2;
+export const ZOOM_BUTTON_STEP = ZOOM_BUTTON_FACTOR;
 /** Fraction of the viewport left clear around the fitted plan bbox (#46). */
 export const FIT_MARGIN = 0.1;
 
-export function initEditorInteraction(
-  refs: EditorDomRefs,
-  store: EditorStore,
-  autosave: AutosaveManager,
-): void {
-  const canvas = refs.canvas;
+export interface CanvasEngineOptions {
+  canvas: HTMLCanvasElement;
+  store: EditorStore;
+  theme?: ThemePreference;
+}
+
+export function createCanvasEngine(opts: CanvasEngineOptions): EditorEngine {
+  const { canvas, store } = opts;
   const ctx = canvas.getContext("2d"); // null in stub/happy-dom environments
+
+  /* ---------- issue #178: events + listener bookkeeping ---------- */
+  const handlers = new Map<EngineEventName, Set<(payload: never) => void>>();
+  function emit<K extends EngineEventName>(event: K, payload: EngineEvents[K]): void {
+    for (const h of [...(handlers.get(event) ?? [])]) {
+      (h as (p: EngineEvents[K]) => void)(payload);
+    }
+  }
+  const disposers: Array<() => void> = [];
+  /** addEventListener with automatic removal on dispose(). */
+  function listen<K extends keyof WindowEventMap>(
+    target: Window,
+    type: K,
+    fn: (ev: WindowEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  function listen<K extends keyof DocumentEventMap>(
+    target: Document,
+    type: K,
+    fn: (ev: DocumentEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  function listen(
+    target: Window | Document,
+    type: string,
+    fn: (ev: never) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    target.addEventListener(type, fn as EventListener, options);
+    disposers.push(() => target.removeEventListener(type, fn as EventListener, options));
+  }
+  /** Gap G1: document/window keys reach the engine only in the Plan view. */
+  let inputEnabled = true;
+  /** Space reserved by the floating panels (fit framing). */
+  let insets: ViewportInsets = { ...NO_INSETS };
+  /** Gap G6: a fit requested while the canvas was hidden. */
+  let fitPending = false;
+  /** Last non-zero viewport (export from a hidden canvas, G6). */
+  let lastViewport = { w: 0, h: 0 };
+  function flash(text: string, ttlMs?: number, level: MessageLevel = 'polite'): void {
+    emit('message', ttlMs === undefined ? { text, level } : { text, level, ttlMs });
+  }
   const cam: Camera = { originX: 0, originY: 0, scale: INITIAL_SCALE };
   let tool: AnyToolMode = "select";
   // Issue #168 (#126 fix round): true while the Pan tool is armed BY the
@@ -313,7 +378,7 @@ export function initEditorInteraction(
   // Issue #126 (Pkg 14.x): editor theme preference (light/dark), loaded at
   // boot from its own localStorage slot and mirrored onto <html> by
   // applyTheme() below. EDITOR state only — never part of the plan.
-  let theme: ThemePreference = DEFAULT_THEME;
+  let theme: ThemePreference = opts.theme ?? DEFAULT_THEME;
   let hoverRoomId: string | null = null;
   /** Issue #53: index of the resize handle under the cursor, if any. */
   let hoverHandle: number | null = null;
@@ -389,6 +454,9 @@ export function initEditorInteraction(
   // Issue #60: single "Dimensions" toggle — gates wall length labels AND
   // room-area badges (one overlay, one switch).
   let dimensionsVisible = true;
+  // Issue #178: the View tab's Grid toggle (session preference).
+  let gridVisible = true;
+  const emitOverlays = (): void => emit('overlays', { dimensions: dimensionsVisible, grid: gridVisible });
   // Issue #68: snap settings (pitch + master). Editor preference, not
   // plan data — hydrated from localStorage and persisted on change.
   const snapStorage = safeLocalStorage();
@@ -398,6 +466,7 @@ export function initEditorInteraction(
   function updateSnapSettings(next: SnapSettings): void {
     snapSettings = next;
     saveSnapSettings(snapStorage, snapSettings);
+    emit('snap', { settings: snapSettings });
     repaint();
   }
   // Issue #66 (Pkg 1): measure-tool annotations. Editor-local state kept
@@ -417,9 +486,9 @@ export function initEditorInteraction(
   // hover-segment path (door/window tools) and by proximity clicks on a
   // selected room; cleared whenever the selection moves elsewhere.
   let selectedSegment: SegmentAddress | null = null;
-  // The inspector panel (pure renderer — mounted below, rendered on
-  // every store notify + segment change).
-  let inspector: InspectorPanel | null = null;
+  // Issue #178: the shell's inspector card visibility (the wall-segment
+  // overlay paints only while the panel that explains it is visible).
+  let inspectorVisible = false;
   // Issue #100 (Pkg 12.2): the FLOATING type-in dim fields shown while
   // drawingPoly has ≥1 committed point. Mounted lazily inside the
   // canvas wrap (position:absolute, bottom-right); torn down when the
@@ -428,22 +497,6 @@ export function initEditorInteraction(
   function drawDimsMount(): HTMLElement {
     return canvas.parentElement as HTMLElement;
   }
-  /**
-   * Issue #144 fix-round: keep the first-run layers (empty-state card,
-   * Plans button) AFTER every canvas overlay in the wrap. ui.ts mounts
-   * them before this lazily-mounted widget, and an overlay button sitting
-   * between the canvas and the fields would steal the Tab stop the
-   * pointer+keyboard flow depends on (remountDrawDims: "the widget is one
-   * Tab away"). appendChild MOVES the existing nodes, so the card's
-   * pointer-events scheme (style.css) is untouched — this is pure DOM
-   * order: Tab sequencing + paint order.
-   */
-  function keepFirstRunLayersLast(): void {
-    const wrap = drawDimsMount();
-    wrap.appendChild(refs.emptyStateMount);
-    wrap.appendChild(refs.planMenuMount);
-  }
-
   /* ---------- pkg 12.1 (issue #99): blueprint underlay ---------- */
 
   /**
@@ -469,14 +522,12 @@ export function initEditorInteraction(
       // Warn ONCE per session; beforeunload stays silent (no UI timing).
       if (!ok && !underlayPersistWarned) {
         underlayPersistWarned = true;
-        flashMessage(
-          refs,
-          'Underlay not saved — storage quota exceeded. It will be lost on reload.',
+        flash('Underlay not saved — storage quota exceeded. It will be lost on reload.',
         );
       }
     }, UNDERLAY_DEBOUNCE_MS);
   }
-  window.addEventListener('beforeunload', () => {
+  listen(window, 'beforeunload', () => {
     if (underlayTimer !== null) {
       clearTimeout(underlayTimer);
       underlayTimer = null;
@@ -526,7 +577,12 @@ export function initEditorInteraction(
     if (res.ok) {
       if (next === null) underlaySelected = false;
       scheduleUnderlayPersist();
+      emitUnderlay();
     }
+  }
+
+  function emitUnderlay(): void {
+    emit('underlay', { underlay: activeUnderlay(), selected: underlaySelected });
   }
 
   /** Screen-space corners of the active underlay ([] when none). */
@@ -545,6 +601,14 @@ export function initEditorInteraction(
     canvas.width = Math.max(1, Math.round(rect.width * dpr));
     canvas.height = Math.max(1, Math.round(rect.height * dpr));
     ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (rect.width > 0 && rect.height > 0) {
+      lastViewport = { w: rect.width, h: rect.height };
+      if (fitPending) {
+        fitPending = false;
+        fitToPlan();
+        return;
+      }
+    }
     repaint();
   }
 
@@ -575,6 +639,7 @@ export function initEditorInteraction(
       // Issue #126: canvas theme (light default keeps pre-#126 paints
       // bit-identical; the export painter omits it and stays white).
       theme,
+      gridVisible,
     );
     // Pkg 12.3 (issue #101, fix round): the WALL case paints WHICH
     // segment the inspector is addressing (yellow, same readout path as
@@ -582,8 +647,7 @@ export function initEditorInteraction(
     // invisible on canvas. Shown only when the panel can actually be
     // seen (open) so the select-tool idle canvas stays unpolluted.
     if (
-      inspector !== null &&
-      inspector.isOpen() &&
+      inspectorVisible &&
       selectedSegment &&
       selectedSegment.roomId === store.getState().selectedId
     ) {
@@ -660,19 +724,17 @@ export function initEditorInteraction(
    * into, and a silently-dead "C" would be a lie; answer honestly.
    */
   function setPlaceCameraArmed(armed: boolean): void {
-    if (armed && !hasViewerSubscriber()) {
-      flashMessage(refs, "Place camera needs the 3D pane \u2014 open /viewer.");
-      return;
-    }
+    // Issue #178: the 3D view lives in the same page, so the gesture no
+    // longer needs a live viewer subscriber.
     placeCameraArmed = armed;
     placeDrag = null;
     ghost = null;
-    flashMessage(
-      refs,
+    flash(
       armed
         ? "Place camera: click a room to move the walker \u2014 drag to aim, Esc cancels."
         : "Place camera cancelled.",
     );
+    emit('placeCamera', { armed });
     repaint();
   }
 
@@ -693,9 +755,7 @@ export function initEditorInteraction(
       pointInPolygonGeom(world, r.polygon),
     );
     if (!room) {
-      flashMessage(
-        refs,
-        "Place camera: click inside a room (Esc cancels).",
+      flash("Place camera: click inside a room (Esc cancels).",
       );
       repaint();
       return;
@@ -709,16 +769,15 @@ export function initEditorInteraction(
       const end = screenToWorld(cam, drag.to);
       yaw = Math.atan2(end[1] - world[1], end[0] - world[0]);
     }
-    sendCommand({
-      kind: "place",
-      x: world[0],
-      y: world[1],
-      yaw,
-      floorIdx: st.activeFloorIdx,
-    });
     placeCameraArmed = false;
-    flashMessage(refs, `Camera placed in ${room.name}.`);
+    emit('placeCamera', { armed: false });
     repaint();
+    // Issue #178 (G3/G15): the shell owns the view switch — it stores the
+    // pose and seats the Walk view from it (no pointer lock request).
+    emit('walkerPlaced', {
+      pose: { x: world[0], y: world[1], yawRad: yaw, floorIdx: st.activeFloorIdx, mode: 'walk' },
+      roomName: room.name,
+    });
   }
 
   /**
@@ -748,41 +807,15 @@ export function initEditorInteraction(
   }
 
   function refreshStatus(): void {
-    const st = store.getState();
-    // pkg 7.2: counts + total describe the ACTIVE floor (the storey
-    // being edited); the floor indicator badge carries the floor name.
-    const view = activeFloorPlan(st);
-    // pkg #142 (Toolbar IA): the `rooms: n · tool: x · undo ↺` debug
-    // string is retired. Left zone = the contextual tool hint (moved
-    // from the tooltip), middle zone = live cursor (pointermove
-    // listener below), right zone = the area total (format unchanged).
-    const hint = toolHint(tool) || GLOBAL_TOOL_HINT;
-    refs.status.textContent = hint;
-    refs.status.title = hint;
-    refs.statusTotal.textContent = formatTotal(totalLivableAreaM2(view));
+    // Issue #178: the shell renders the status bar; the engine reports
+    // the armed tool's hint (the total comes from the store).
+    emit('hint', { text: toolHint(tool) || GLOBAL_TOOL_HINT });
   }
 
   function refreshBadgeAndButtons(): void {
     // pkg 7.2: overlap warnings are per-storey — rooms on different
     // floors legitimately stack atop each other in plan coordinates.
-    const overlaps = computeOverlaps(activeFloorPlan(store.getState()));
-    refs.badge.hidden = overlaps.length === 0;
-    const st = store.getState();
-    refs.btnDelete.disabled = st.selectedId === null;
-    refs.btnUndo.disabled = !store.canUndo();
-    refs.btnRedo.disabled = !store.canRedo();
-  }
-
-  /** pkg 7.2 (issue #75): sync the floor-indicator badge + nav buttons. */
-  function refreshFloorIndicator(): void {
-    const st = store.getState();
-    const floor =
-      st.data.floors[Math.min(st.activeFloorIdx, st.data.floors.length - 1)];
-    refs.floorBadge.textContent = `${floor.name} · Level ${st.activeFloorIdx + 1}`;
-    refs.btnPrevFloor.disabled = st.activeFloorIdx <= 0;
-    refs.btnNextFloor.disabled = st.activeFloorIdx >= st.data.floors.length - 1;
-    // Deleting the sole floor is refused by the reducer; reflect that.
-    refs.btnDeleteFloor.disabled = st.data.floors.length <= 1;
+    emit('overlaps', { count: computeOverlaps(activeFloorPlan(store.getState())).length });
   }
 
   /* ---------- pkg 12.3 (issue #101): inspector panel ---------- */
@@ -853,10 +886,9 @@ export function initEditorInteraction(
     return { kind: "none", floor: activeFl };
   }
 
-  /** Re-render the inspector IF it is open (cheap no-op collapsed). */
+  /** Issue #178: publish the resolved selection (the shell renders it). */
   function refreshInspector(): void {
-    if (inspector === null || !inspector.isOpen()) return;
-    inspector.render(resolveSelection(), store.getState().data);
+    emit('selection', { descriptor: resolveSelection() });
   }
 
   /** Assign the UI-local segment address + re-render the panel. */
@@ -928,175 +960,54 @@ export function initEditorInteraction(
     repaint();
   }
 
-  store.subscribe((_s) => {
+  // Issue #178 (G14): fit on a floor change, never on a wholesale plan
+  // swap (bridge loadPlan keeps the camera; the shell fits explicitly
+  // after Import / demo / New / #plan=). Reducers mutate `data` in
+  // place, so a new `data` reference means replaceAll / undo / redo.
+  let lastData = store.getState().data;
+  let lastFloorIdx = store.getState().activeFloorIdx;
+  disposers.push(store.subscribe((_s) => {
     if (_s === undefined) return;
     // Issue #139: any store notify invalidates the stair-ghost memo —
     // reducers mutate `data` IN PLACE, so identity checks cannot detect
     // revisions. Cleared here, wholesale, on every notify.
     stairGhostCache = null;
-    // Ratified decision (a) on issue #75: the autosave slot carries RAW
-    // v2 data (hydration migrates-at-the-door, so both shapes load).
-    // Renaming the KEY would orphan every existing save — key stays.
-    // toLegacyWire remains ONLY for the __casaplaza bridge (wire.ts).
-    if (store.dirty) autosave.scheduleSave(_s.data);
     // Issue #110: reap multi-set members a command removed before the
     // inspector re-renders (bulk delete, undo, floor switch).
     purgeStaleMulti();
     refreshBadgeAndButtons();
-    refreshFloorIndicator();
     refreshStatus();
     refreshInspector();
+    let floorChanged = false;
+    if (_s.data !== lastData) {
+      lastData = _s.data;
+      floorChanged = _s.activeFloorIdx !== lastFloorIdx;
+      lastFloorIdx = _s.activeFloorIdx;
+    } else if (_s.activeFloorIdx !== lastFloorIdx) {
+      lastFloorIdx = _s.activeFloorIdx;
+      floorChanged = true;
+      // An empty storey keeps the camera (nothing to frame); a storey
+      // with geometry is framed — today it loaded off-screen (§6.4).
+      if (planBounds(activeFloorPlan(_s)) !== null) fitToPlan();
+    }
+    if (floorChanged) {
+      emitMeasurements();
+      emitUnderlay();
+    }
     repaint();
-    // Issue #144: one cheap predicate call per notify drives the card.
-    refreshEmptyState();
-    // Pkg 13.1 (#109): live plan → mini-3D inset. Cheap reference hop;
-    // the inset debounces (150 ms) + skips unchanged signatures + gates
-    // on in-flight draw gestures INTERNALLY (mini3d.ts).
-    mini3d?.notifyPlanChanged(_s.data);
-  });
+  }));
 
-  /* ---------- Pkg 13.1 (issue #109): mini-3D inset ---------- */
-
-  /*
-   * The inset mounts as a flex SIBLING of the inspector panel inside
-   * inspectorDock (the #101 mount precedent two lines below — the dock
-   * is .editor-main-area, a flex row, so the 2D canvas auto-narrows
-   * with ZERO sizing math). Deps load via DYNAMIC import on FIRST
-   * enable: three.js + the viewer pipeline stay OUT of the editor's
-   * initial chunk (layering law: editor→viewer is the legal direction).
-   */
-  let mini3d: Mini3DInset | null = null;
-  let mini3dLoading = false;
-  let mini3dPendingOpen = false;
-
-  async function ensureMini3d(): Promise<Mini3DInset | null> {
-    if (mini3d !== null) return mini3d;
-    if (mini3dLoading) return null;
-    mini3dLoading = true;
-    try {
-      // Dynamic import on FIRST toggle only: three.js + the viewer
-      // pipeline stay OUT of the editor's initial chunk (SUB_PLAN §3).
-      // Both bindings come from the dynamic import — glue holds only a
-      // TYPE import statically, so rolldown can actually split it.
-      const { Mini3DInset: Ctor, loadViewerDeps } = await import(
-        './mini3d'
-      );
-      const deps = await loadViewerDeps();
-      mini3d = new Ctor(refs.inspectorDock, deps, {
-        gestureGate: drawGestureInProgress,
-      });
-      return mini3d;
-    } catch {
-      return null; // chunk load failure behaves like a GL-less stub
-    } finally {
-      mini3dLoading = false;
-    }
-  }
-
-  async function setMini3dOpen(open: boolean): Promise<void> {
-    if (open) {
-      mini3dPendingOpen = true;
-      const inset = await ensureMini3d();
-      if (inset === null || !mini3dPendingOpen) return; // collapsed while loading
-      inset.notifyPlanChanged(store.getState().data, { immediate: true });
-      inset.setOpen(true);
-      refs.btnMini3d.setAttribute('aria-pressed', 'true');
-    } else {
-      mini3dPendingOpen = false;
-      refs.btnMini3d.setAttribute('aria-pressed', 'false');
-      mini3d?.setOpen(false);
-    }
-  }
-
-  refs.btnMini3d.addEventListener("click", () => {
-    void setMini3dOpen(mini3d === null || !mini3d.isOpen());
-  });
-
-  /**
-   * Pkg 12.3 (issue #101): mount + toggle the inspector panel. The panel
-   * is a PURE RENDERER (inspectorPanel.ts) fed by resolveSelection(); it
-   * commits through the SAME store commands the popovers use — no new
-   * commands, no forked validation (errors surface via flashMessage).
-   */
   /**
    * Pkg 155 (issue #155): error flashes announce ASSERTIVELY (screen
    * readers interrupt) while routine notices keep the default polite
-   * channel. Every error call site funnels through this adapter — the
-   * inspector's flash callback is error-only.
+   * channel. Every error call site funnels through this adapter (the
+   * shell maps assertive messages to error toasts).
    */
   function flashError(text: string): void {
-    flashMessage(refs, text, undefined, 'assertive');
+    flash(text, undefined, 'assertive');
   }
 
-  inspector = mountInspectorPanel(
-    (cmd) => store.dispatch(cmd as Parameters<typeof store.dispatch>[0]),
-    (msg) => flashError(msg),
-  );
-  refs.inspectorDock.appendChild(inspector.root);
-
-  function setInspectorOpen(open: boolean): void {
-    inspector!.setOpen(open);
-    refs.btnInspector.setAttribute('aria-pressed', String(open));
-    // Repaint: the canvas segment overlay draws only while the panel is
-    // open (visibility tied to the affordance it explains).
-    repaint();
-    if (open) {
-      refreshInspector();
-      // Heading into the panel body puts focus INSIDE the dock — the
-      // precondition for the panel-scoped Esc handler below.
-      inspector!.root.setAttribute("tabindex", "-1");
-      inspector!.root.focus();
-    }
-  }
-
-  refs.btnInspector.addEventListener("click", () => {
-    setInspectorOpen(!inspector!.isOpen());
-  });
-
-  // Pkg 12.3 (issue #101): Esc / I act on the panel ONLY while focus
-  // sits INSIDE it (capture phase + containment gate) — canvas-focused
-  // strokes pass straight through to the canvas handler, so the panel
-  // never eats the drawing-Esc path. In-flight gestures always win the
-  // key (same drawGestureInProgress guard as the popovers). Letter keys
-  // typed into the panel's own INPUTS are ignored (typing ≠ toggling).
-  document.addEventListener(
-    "keydown",
-    (ev) => {
-      if (!inspector!.isOpen()) return;
-      if (!inspector!.root.contains(document.activeElement)) return;
-      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-      const target = ev.target as HTMLElement;
-      const typingIntoField =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable;
-      if (ev.key === "Escape") {
-        if (drawGestureInProgress()) return;
-        // Issue #117: a pending measure anchor outranks the panel close
-        // — the first Escape drops the draft (panel stays open, focus
-        // unmoved), the second closes the panel. Same precedence the
-        // canvas strand already honors.
-        if (measureDraft !== null) {
-          measureDraft = null;
-          repaint();
-          ev.stopPropagation();
-          return;
-        }
-        ev.stopPropagation();
-        setInspectorOpen(false);
-        refs.btnInspector.focus();
-      } else if ((ev.key === "i" || ev.key === "I") && !typingIntoField) {
-        if (drawGestureInProgress()) return;
-        ev.stopPropagation();
-        setInspectorOpen(false);
-        refs.btnInspector.focus();
-      }
-    },
-    true,
-  );
-
-  /* ---------- toolbar ---------- */
+  /* ---------- tools ---------- */
   function setActiveTool(next: AnyToolMode): void {
     tool = next;
     spacePanOwnsTool = false; // #168: an explicit pick ends any Space claim
@@ -1114,764 +1025,140 @@ export function initEditorInteraction(
       store.dispatch({ type: "setEntitySelection", entityId: null });
       phase = { tag: "idle" };
     }
-
-    // Furniture palette rides shotgun with the stamp tool.
-    refs.palette.hidden = tool !== "stamp";
-
     // Issue #126: the Pan tool (Space-hold funnels through here too)
     // owns the grab cursor on the canvas.
     canvas.classList.toggle("pan-armed", tool === "pan");
-    for (const [btn, val] of [
-      [refs.btnSelect, "select"],
-      [refs.btnRect, "rectangle"],
-      [refs.btnPoly, "polygon"],
-      [refs.btnDoor, "door"],
-      [refs.btnWindow, "window"],
-      [refs.btnStamp, "stamp"],
-      [refs.btnStairs, "stairs"],
-      [refs.btnAddMeasure, "measure"],
-      [refs.btnPan, "pan"],
-    ] as Array<[HTMLButtonElement, AnyToolMode]>) {
-      btn.classList.toggle("active", val === tool);
-      btn.setAttribute("aria-pressed", String(val === tool));
-    }
+    emit('tool', { tool });
     refreshStatus();
     repaint();
-    // Arm-context change: a drawing tool dismisses the card (AC).
-    refreshEmptyState();
   }
 
-  refs.btnSelect.addEventListener("click", () => setActiveTool("select"));
-  // Issue #60: "Dimensions" toggle — flips aria-pressed, repaints.
-  refs.btnDimensions.addEventListener("click", () => {
-    dimensionsVisible = !dimensionsVisible;
-    refs.btnDimensions.setAttribute("aria-pressed", String(dimensionsVisible));
-    refs.btnDimensions.classList.toggle("active", dimensionsVisible);
-    repaint();
-  });
-
-  /* ---------- Issue #68: snap settings popover ---------- */
-
-  /** Sync popover controls from the current settings. */
-  const syncSnapControls = (): void => {
-    refs.snapPopover
-      .querySelectorAll<HTMLInputElement>('input[name="snap-pitch"]')
-      .forEach((r) => {
-        r.checked = parsePitch(Number(r.value)) === snapSettings.pitch;
-      });
-    const masterCb = refs.snapPopover.querySelector<HTMLInputElement>(
-      '[data-testid="snap-master"]',
-    );
-    if (masterCb) masterCb.checked = snapSettings.master;
-  };
-
-  /** Focus trap + invoker for the open Snap popover (pkg 155). */
-  let snapTrap: FocusTrap | null = null;
-  const setSnapPopoverOpen = (open: boolean): void => {
-    refs.snapPopover.hidden = !open;
-    refs.btnSnap.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) {
-      // Pkg 155: Snap used to focus NOTHING on open — land on the first
-      // control (the pitch radios) so the popover is keyboard-usable.
-      // FIX ROUND (tester finding 1): NOT while a draw gesture is in
-      // flight. "S" opens this popover mid-draw; a focus move here puts
-      // the canvas Escape handler out of reach, so the #94 guard below
-      // never sees a cancelled draft and the rect COMMITS on release.
-      // The popover still opens; focus-on-open resumes for idle opens.
-      snapTrap = trapFocus(refs.snapPopover, refs.btnSnap, {
-        focusInitial: !drawGestureInProgress(),
-      });
-    } else {
-      // EVERY close path (button, outside pointerdown, Escape) funnels
-      // through here, so the invoker restore is unconditional.
-      snapTrap?.release();
-      snapTrap = null;
-    }
-  };
-
-  refs.btnSnap.addEventListener("click", () => {
-    // hidden===true means the popover is closed, i.e. we are OPENING it.
-    const opening = refs.snapPopover.hidden === true;
-    if (opening) syncSnapControls();
-    setSnapPopoverOpen(opening);
-  });
-
-  refs.snapPopover.addEventListener("change", (ev) => {
-    const target = ev.target as HTMLInputElement;
-    if (target.name === "snap-pitch") {
-      const pitch = parsePitch(Number(target.value));
-      if (pitch !== null) updateSnapSettings({ ...snapSettings, pitch });
-    } else if (target.dataset.testid === "snap-master") {
-      updateSnapSettings({ ...snapSettings, master: target.checked });
-    }
-  });
-
-  // Outside click closes the popover (dumb listeners; pkg 155 SUPERSEDES
-  // the old "no focus trap" note — the trap lives on the popover ELEMENT
-  // and these paths just funnel into the setter that releases it).
-  document.addEventListener("pointerdown", (ev) => {
-    if (refs.snapPopover.hidden) return;
-    if (refs.snapPopover.contains(ev.target as Node)) return;
-    if (refs.btnSnap.contains(ev.target as Node)) return;
-    setSnapPopoverOpen(false);
-  });
-  // Escape closes it too (capture phase so canvas key handling is moot).
-  // Issue #94: but NEVER while a draw gesture is mid-flight — swallowing
-  // Escape there would starve the canvas draw-cancel path (below), the
-  // exact bug this guard exists for. The popover may stay open; the
-  // gesture always wins the key.
+  /** A draw gesture owns the keyboard (Issue #94 precedence). */
   const drawGestureInProgress = (): boolean => phase.tag !== "idle";
-  document.addEventListener(
-    "keydown",
-    (ev) => {
-      if (
-        !refs.snapPopover.hidden &&
-        ev.key === "Escape" &&
-        !drawGestureInProgress()
-      ) {
-        ev.stopPropagation();
-        setSnapPopoverOpen(false);
-        // FIX ROUND (tester finding 1): a keyboard dismissal hands focus
-        // back to the invoker. release() only restores while focus sat
-        // INSIDE the popover — never true for a popover opened mid-draw,
-        // where focus deliberately stayed on the canvas.
-        refs.btnSnap.focus();
-      }
-    },
-    true,
-  );
-  /* ---------- pkg #142: File menu popover ---------- */
+  /**
+   * Every in-flight interaction, including the phase-less pointer-owned
+   * ones (marquee band, underlay resize, opening drag — review round 2
+   * of #143): shortcut commands are swallowed while this holds.
+   */
+  const interactionBusy = (): boolean =>
+    drawGestureInProgress() ||
+    dragOpening !== null ||
+    marquee !== null ||
+    resizingUnderlay !== null ||
+    placeDrag !== null;
 
-  // Snapshot of the #68 snapPopover pattern: visibility-toggled div,
-  // pointerdown-outside + capture-phase Escape dismissal. The items were
-  // wired long before this block (Import → hidden input, Share/Export/
-  // Save JSON) and keep their listeners — this only governs open/close.
-  const setFileMenuOpen = (open: boolean): void => {
-    refs.fileMenu.hidden = !open;
-    refs.btnFile.setAttribute("aria-expanded", open ? "true" : "false");
-  };
+  /* ---------- pkg 12.1 (issue #99): underlay import ---------- */
 
-  refs.btnFile.addEventListener("click", () => {
-    setFileMenuOpen(refs.fileMenu.hidden === true);
-  });
-
-  document.addEventListener("pointerdown", (ev) => {
-    if (refs.fileMenu.hidden) return;
-    const t = ev.target as Node;
-    if (refs.fileMenu.contains(t) || refs.btnFile.contains(t)) return;
-    setFileMenuOpen(false);
-  });
-
-  document.addEventListener(
-    "keydown",
-    (ev) => {
-      if (
-        !refs.fileMenu.hidden &&
-        ev.key === "Escape" &&
-        !drawGestureInProgress()
-      ) {
-        ev.stopPropagation();
-        setFileMenuOpen(false);
-      }
-    },
-    true,
-  );
-
-  // Choosing an item acts immediately, so the menu closes behind it —
-  // Export is the exception: its dialog anchors to the item's rect, so
-  // the menu stays open until the dialog resolves (its backdrop covers
-  // the open menu; Escape closes both).
-  for (const item of [refs.btnImport, refs.btnExportJson, refs.btnShare]) {
-    item.addEventListener("click", () => setFileMenuOpen(false));
-  }
-
-  refs.btnRect.addEventListener("click", () => setActiveTool("rectangle"));
-
-  /* ---------- pkg 12.1 (issue #99): underlay UI ---------- */
-
-  /** Seed popover controls from the ACTIVE floor's underlay. */
-  function syncUnderlayControls(): void {
-    const u = activeUnderlay();
-    refs.underlayOpacity.value = String(u?.opacity ?? UNDERLAY_DEFAULT_OPACITY);
-    refs.underlayOpacityValue.textContent = `${refs.underlayOpacity.value}%`;
-    refs.underlayLock.checked = u?.locked ?? false;
-    refs.underlayHide.checked = u?.hidden ?? false;
-  }
-
-  /** Focus trap + invoker for the open Underlay popover (pkg 155). */
-  let underlayTrap: FocusTrap | null = null;
-  const setUnderlayPopoverOpen = (open: boolean): void => {
-    refs.underlayPopover.hidden = !open;
-    refs.btnUnderlay.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) {
-      syncUnderlayControls();
-      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
-      // as Snap — the popover opens, the draw gesture keeps the keyboard.
-      if (!drawGestureInProgress()) refs.underlayOpacity.focus();
-      // Pkg 155: trap Tab + remember the invoker. focusInitial=false
-      // keeps the existing slider-first focus above authoritative.
-      underlayTrap = trapFocus(refs.underlayPopover, refs.btnUnderlay, {
-        focusInitial: false,
-      });
-    } else {
-      underlayTrap?.release();
-      underlayTrap = null;
-    }
-  };
-
-  refs.btnUnderlay.addEventListener('click', () => {
-    const u = activeUnderlay();
-    if (u === null) {
-      // No image yet: the button IS the import affordance (picker
-      // opens; choosing a file places + selects the underlay).
-      refs.underlayFileInput.value = '';
-      refs.underlayFileInput.click();
+  /** Read, validate, size and place an image as the active underlay. */
+  async function importUnderlayFile(file: File): Promise<void> {
+    let dataUrl: string;
+    try {
+      dataUrl = await readFileAsDataUrl(file);
+    } catch {
+      flashError('Could not read the selected image.');
       return;
     }
-    setUnderlayPopoverOpen(refs.underlayPopover.hidden === true);
-  });
-
-  refs.underlayFileInput.addEventListener('change', () => {
-    const file = refs.underlayFileInput.files?.[0];
-    if (!file) return;
-    void (async () => {
-      let dataUrl: string;
-      try {
-        dataUrl = await readFileAsDataUrl(file);
-      } catch {
-        flashError('Could not read the selected image.');
-        return;
-      }
-      // Reject non-images defensively (the accept filter is advisory).
-      if (!/^data:image\/(?:png|jpeg|webp);base64,/.test(dataUrl)) {
-        flashError('Unsupported image type — use PNG, JPG, or WebP.');
-        return;
-      }
-      const aspect = await imageSize(dataUrl);
-      // Fit the larger side to UNDERLAY_FIT_M preserving aspect ratio;
-      // degenerate (zero-dimension) decodes are refused.
-      if (aspect.w === 0 || aspect.h === 0) {
-        flashError('That image could not be decoded.');
-        return;
-      }
-      const k = UNDERLAY_FIT_M / Math.max(aspect.w, aspect.h);
-      // Land mid-viewport, not at world (0,0) — the neutral camera puts
-      // the origin at the canvas' top-left corner, so a (0,0)-centered
-      // image would arrive half off-screen.
-      const rect = canvas.getBoundingClientRect();
-      const center = screenToWorld(cam, [rect.width / 2, rect.height / 2]);
-      setUnderlay({
-        dataUrl,
-        cx: center[0],
-        cy: center[1],
-        w: aspect.w * k,
-        h: aspect.h * k,
-        rotDeg: 0,
-        opacity: UNDERLAY_DEFAULT_OPACITY,
-        locked: false,
-        hidden: false,
-      });
-      underlaySelected = true;
-      flashMessage(refs, `Underlay imported — arrow keys nudge, corners resize.`);
-      repaint();
-    })();
-  });
-
-  // Opacity slider: live readout, committed on change (pointer release).
-  refs.underlayOpacity.addEventListener('input', () => {
-    refs.underlayOpacityValue.textContent = `${refs.underlayOpacity.value}%`;
-  });
-  refs.underlayOpacity.addEventListener('change', () => {
-    const u = activeUnderlay();
-    if (!u) return;
-    setUnderlay({ ...u, opacity: Number(refs.underlayOpacity.value) });
-  });
-
-  refs.btnUnderlayRotateCCW.addEventListener('click', () => {
-    const u = activeUnderlay();
-    if (!u) return;
-    setUnderlay(rotateUnderlayBy(u, -UNDERLAY_ROTATE_STEP_DEG));
-  });
-  refs.btnUnderlayRotateCW.addEventListener('click', () => {
-    const u = activeUnderlay();
-    if (!u) return;
-    setUnderlay(rotateUnderlayBy(u, UNDERLAY_ROTATE_STEP_DEG));
-  });
-
-  refs.underlayLock.addEventListener('change', () => {
-    const u = activeUnderlay();
-    if (!u) return;
-    // Locking deselects: locked ⇒ no handles, no nudge (pass-through
-    // is then trivially guaranteed — nothing intercepts).
-    if (refs.underlayLock.checked) underlaySelected = false;
-    setUnderlay({ ...u, locked: refs.underlayLock.checked });
-    repaint();
-  });
-
-  refs.underlayHide.addEventListener('change', () => {
-    const u = activeUnderlay();
-    if (!u) return;
-    if (refs.underlayHide.checked) underlaySelected = false;
-    setUnderlay({ ...u, hidden: refs.underlayHide.checked });
-    repaint();
-  });
-
-  refs.btnUnderlayRemove.addEventListener('click', () => {
-    if (activeUnderlay() === null) return;
-    setUnderlay(null);
-    setUnderlayPopoverOpen(false);
-    flashMessage(refs, 'Underlay removed.');
-  });
-
-  // Outside click closes the popover (first-popover discipline).
-  document.addEventListener('pointerdown', (ev) => {
-    if (refs.underlayPopover.hidden) return;
-    if (refs.underlayPopover.contains(ev.target as Node)) return;
-    if (refs.btnUnderlay.contains(ev.target as Node)) return;
-    setUnderlayPopoverOpen(false);
-  });
-  // Escape closes it too (capture phase), except mid-gesture (#94).
-  document.addEventListener('keydown', (ev) => {
-    if (
-      !refs.underlayPopover.hidden &&
-      ev.key === 'Escape' &&
-      !drawGestureInProgress()
-    ) {
-      ev.stopPropagation();
-      // Issue #117 (ratified amendment): a pending measure anchor dies
-      // FIRST — the popover stays open for a second Escape.
-      if (measureDraft !== null) {
-        measureDraft = null;
-        repaint();
-        return;
-      }
-      setUnderlayPopoverOpen(false);
+    // Reject non-images defensively (the accept filter is advisory).
+    if (!/^data:image\/(?:png|jpeg|webp);base64,/.test(dataUrl)) {
+      flashError('Unsupported image type — use PNG, JPG, or WebP.');
+      return;
     }
-  }, true);
+    const aspect = await imageSize(dataUrl);
+    // Fit the larger side to UNDERLAY_FIT_M preserving aspect ratio;
+    // degenerate (zero-dimension) decodes are refused.
+    if (aspect.w === 0 || aspect.h === 0) {
+      flashError('That image could not be decoded.');
+      return;
+    }
+    const k = UNDERLAY_FIT_M / Math.max(aspect.w, aspect.h);
+    // Land mid-viewport, not at world (0,0).
+    const { w, h } = viewportSize();
+    const center = screenToWorld(cam, [w / 2, h / 2]);
+    underlaySelected = true;
+    setUnderlay({
+      dataUrl,
+      cx: center[0],
+      cy: center[1],
+      w: aspect.w * k,
+      h: aspect.h * k,
+      rotDeg: 0,
+      opacity: UNDERLAY_DEFAULT_OPACITY,
+      locked: false,
+      hidden: false,
+    });
+    flash(`Underlay imported — arrow keys nudge, corners resize.`);
+    repaint();
+  }
 
-
-  /* ---------- pkg 7.2 (issue #75): floor selector ---------- */
-
-  /**
-   * Mouseless floor navigation (trackpad-only constraint): Prev/Next
-   * buttons + a name/level indicator badge in the toolbar; rename and
-   * delete live in a popover (role=dialog) reachable from the badge —
-   * same first-popover discipline as the #68 snap popover. Every
-   * control is a real button/input: the whole flow is Tab-reachable.
-   */
+  /* ---------- pkg 7.2 (issue #75): floor switching ---------- */
   function switchFloor(delta: number): void {
     const st = store.getState();
     const next = st.activeFloorIdx + delta;
     if (next < 0 || next >= st.data.floors.length) return;
-    store.dispatch({ type: 'setActiveFloor', index: next });
     // Reviewer #99 nit: the underlay selection is floor-independent —
     // leaving it armed across a switch pointed invisible arrow-nudges
     // at the NEW floor's underlay. Deselect on every switch.
     underlaySelected = false;
+    store.dispatch({ type: 'setActiveFloor', index: next });
   }
 
-  /** Focus trap + invoker for the open Floor popover (pkg 155). */
-  let floorTrap: FocusTrap | null = null;
-  const setFloorPopoverOpen = (open: boolean): void => {
-    refs.floorPopover.hidden = !open;
-    refs.floorBadge.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) {
-      // Seed the rename field with the active floor's current name.
-      const name =
-        store.getState().data.floors[store.getState().activeFloorIdx]?.name ??
-        "";
-      refs.floorRenameInput.value = name;
-      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
-      // as Snap (focus AND selection together — the field is not focused
-      // mid-gesture, so a lone selection would be invisible state).
-      if (!drawGestureInProgress()) {
-        refs.floorRenameInput.focus();
-        refs.floorRenameInput.select();
-      }
-      // Pkg 155: trap Tab; focusInitial=false keeps the rename field's
-      // focus AND selection (typing straight away) authoritative.
-      floorTrap = trapFocus(refs.floorPopover, refs.floorBadge, {
-        focusInitial: false,
-      });
-    } else {
-      floorTrap?.release();
-      floorTrap = null;
-    }
-  };
+  /* ---------- issue #178: selection helpers for the shell ---------- */
 
-  refs.btnPrevFloor.addEventListener("click", () => switchFloor(-1));
-  refs.btnNextFloor.addEventListener("click", () => switchFloor(1));
-  refs.btnAddFloor.addEventListener("click", () => {
-    const res = store.dispatch({ type: "addFloor" });
-    if (!res.ok) flashError(res.error);
-  });
-
-  // The badge doubles as the popover toggle (aria-expanded + popup).
-  refs.floorBadge.addEventListener("click", () => {
-    setFloorPopoverOpen(refs.floorPopover.hidden === true);
-  });
-
-  refs.floorRenameForm.addEventListener("submit", (ev) => {
-    ev.preventDefault();
-    const res = store.dispatch({
-      type: "renameFloor",
-      name: refs.floorRenameInput.value,
+  /** R on a selected furniture piece (the dual-purpose R, #143). */
+  function rotateSelectedFurniture(): boolean {
+    const sel = store.getState().selectedId;
+    const item =
+      sel === null
+        ? undefined
+        : flatFurniture(activeFloorPlan(store.getState())).find((f) => f.id === sel);
+    if (!item) return false;
+    store.dispatch({
+      type: "rotateFurniture",
+      furnitureId: item.id,
+      rotationDeg: nextRotation(item.rotationDeg),
     });
-    if (!res.ok) {
-      flashError(res.error);
-      return;
-    }
-    setFloorPopoverOpen(false);
-  });
-
-  refs.btnDeleteFloor.addEventListener("click", () => {
-    const res = store.dispatch({ type: "deleteFloor" });
-    if (!res.ok) flashError(res.error);
-    else setFloorPopoverOpen(false);
-  });
-
-  // Outside click closes the popover (dumb listeners, no focus trap).
-  document.addEventListener("pointerdown", (ev) => {
-    if (refs.floorPopover.hidden) return;
-    if (refs.floorPopover.contains(ev.target as Node)) return;
-    if (refs.floorBadge.contains(ev.target as Node)) return;
-    setFloorPopoverOpen(false);
-  });
-  // Escape closes it too (capture phase so canvas key handling is moot),
-  // except mid-gesture (Issue #94 — see drawGestureInProgress above).
-  document.addEventListener(
-    "keydown",
-    (ev) => {
-      if (
-        !refs.floorPopover.hidden &&
-        ev.key === "Escape" &&
-        !drawGestureInProgress()
-      ) {
-        ev.stopPropagation();
-        // Issue #117 (ratified amendment): a pending measure anchor dies
-        // FIRST — the popover stays open for a second Escape.
-        if (measureDraft !== null) {
-          measureDraft = null;
-          repaint();
-          return;
-        }
-        setFloorPopoverOpen(false);
-      }
-    },
-    true,
-  );
-
-  /* ---------- pkg 8.1 (issue #83): wall-lean popover ---------- */
+    return true;
+  }
 
   /**
-   * Populate the lean popover for a room: one radio per wall segment
-   * (labels "Wall 1..n"), preselecting the FIRST leaned segment (else
-   * segment 0) and syncing the slider to that segment's stored lean.
-   * Radios are rebuilt per open — rooms gain/lose segments constantly.
+   * L (pkg 8.1, re-homed by #178): address the selected room's lean wall
+   * — the first leaned segment, else segment 0 — so the inspector shows
+   * the wall case with its Roof lean field.
    */
-  function populateLeanPopover(room: Room): void {
-    refs.leanSegFieldset.replaceChildren(
-      refs.leanSegFieldset.querySelector("legend")!,
-    );
-    const rows = room.roofs ?? [];
-    let anyChecked = false;
-    for (let i = 0; i < room.polygon.length; i += 1) {
-      const label = document.createElement("label");
-      label.className = "snap-radio";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "lean-seg";
-      radio.value = String(i);
-      radio.dataset.testid = `lean-seg-${i}`;
-      const row = rows.find((r) => r.segmentIndex === i);
-      if (row) {
-        radio.checked = true;
-        anyChecked = true;
-      }
-      label.append(radio, document.createTextNode(` Wall ${i + 1}`));
-      refs.leanSegFieldset.appendChild(label);
-    }
-    // Nothing leaned yet: preselect Wall 1 so keyboard flow starts sane.
-    if (!anyChecked) {
-      refs.leanSegFieldset
-        .querySelector<HTMLInputElement>('input[name="lean-seg"]')
-        ?.setAttribute("checked", "checked");
-    }
-    // Checked segment drives the slider seed (stored lean, else 0).
-    syncLeanSlider();
-  }
-
-  /** Slider ← checked radio segment's stored lean (0 when none). */
-  function syncLeanSlider(): void {
+  function addressLeanWall(): boolean {
     const st = store.getState();
     const room =
       st.selectedId !== null
         ? flatRooms(activeFloorPlan(st)).find((r) => r.id === st.selectedId)
         : undefined;
-    const checked = refs.leanSegFieldset.querySelector<HTMLInputElement>(
-      'input[name="lean-seg"]:checked',
-    );
-    const si = checked ? Number(checked.value) : 0;
-    const row = room?.roofs?.find((r) => r.segmentIndex === si);
-    refs.leanSlider.value = String(row?.leanDeg ?? 0);
-    refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
+    if (!room || room.polygon.length === 0) return false;
+    const leaned = (room.roofs ?? []).map((r) => r.segmentIndex).sort((a, b) => a - b)[0];
+    setSelectedSegment({ roomId: room.id, segIndex: leaned ?? 0 });
+    refreshInspector();
+    return true;
   }
 
-  /** Focus trap + invoker for the open Lean popover (pkg 155). */
-  let leanTrap: FocusTrap | null = null;
-  const setLeanPopoverOpen = (open: boolean): void => {
-    refs.leanPopover.hidden = !open;
-    if (open) {
-      // Pkg 155: no toolbar button opens this popover (the L shortcut
-      // does), so the invoker is whatever held focus a moment ago — the
-      // canvas in practice. Captured BEFORE the radio focus below.
-      const previous = document.activeElement;
-      const invoker =
-        previous instanceof HTMLElement && previous !== document.body
-          ? previous
-          : refs.canvas;
-      const firstRadio = refs.leanSegFieldset.querySelector<HTMLInputElement>(
-        'input[name="lean-seg"]',
-      );
-      // FIX ROUND (tester finding 1): same mid-gesture focus-steal guard
-      // as Snap — the draw gesture keeps the keyboard.
-      if (!drawGestureInProgress()) firstRadio?.focus();
-      // focusInitial=false keeps the first-radio focus above.
-      leanTrap = trapFocus(refs.leanPopover, invoker, { focusInitial: false });
-    } else {
-      leanTrap?.release();
-      leanTrap = null;
-    }
-  };
-
-  /** Checked radio's segment index, or null when the room has no walls. */
-  function checkedLeanSeg(): number | null {
-    const checked = refs.leanSegFieldset.querySelector<HTMLInputElement>(
-      'input[name="lean-seg"]:checked',
-    );
-    if (!checked) return null;
-    const si = Number(checked.value);
-    return Number.isInteger(si) ? si : null;
+  /** Measurements of the ACTIVE floor (legacy untagged = ground). */
+  function activeMeasurements(): Measurement[] {
+    const idx = store.getState().activeFloorIdx;
+    return measurements.filter((m) => (m.floorIdx ?? 0) === idx);
   }
 
-  refs.leanSegFieldset.addEventListener("change", () => {
-    syncLeanSlider();
-  });
+  function emitMeasurements(): void {
+    emit('measurements', { items: activeMeasurements() });
+  }
 
-  // Live degree readout while the slider moves (committed on Apply).
-  refs.leanSlider.addEventListener("input", () => {
-    refs.leanValue.textContent = `${refs.leanSlider.value}\u00B0`;
-  });
-
-  refs.leanForm.addEventListener("submit", (ev) => {
-    ev.preventDefault();
-    const st = store.getState();
-    const roomId = st.selectedId;
-    if (roomId === null) return;
-    const si = checkedLeanSeg();
-    if (si === null) return;
-    const leanDeg = Math.round(Number(refs.leanSlider.value));
-    // Lean 0 strips the row (reduceSetWallLean treats it as clear too,
-    // but routing through clearWallLean exercises the explicit path).
-    const res =
-      leanDeg === 0
-        ? store.dispatch({ type: "clearWallLean", roomId, segmentIndex: si })
-        : store.dispatch({
-            type: "setWallLean",
-            roomId,
-            segmentIndex: si,
-            leanDeg,
-          });
-    if (!res.ok) {
-      flashError(res.error);
-      return;
+  function persistMeasurements(): void {
+    try {
+      saveMeasurements(window.localStorage, measurements);
+    } catch {
+      /* no-storage stub environments */
     }
-    setLeanPopoverOpen(false);
-  });
-
-  refs.btnClearLean.addEventListener("click", () => {
-    const st = store.getState();
-    const roomId = st.selectedId;
-    if (roomId === null) return;
-    const si = checkedLeanSeg();
-    if (si === null) return;
-    const res = store.dispatch({
-      type: "clearWallLean",
-      roomId,
-      segmentIndex: si,
-    });
-    if (!res.ok) {
-      flashError(res.error);
-      return;
-    }
-    setLeanPopoverOpen(false);
-  });
-
-  // Outside click closes the popover (dumb listeners, no focus trap).
-  document.addEventListener("pointerdown", (ev) => {
-    if (refs.leanPopover.hidden) return;
-    if (refs.leanPopover.contains(ev.target as Node)) return;
-    setLeanPopoverOpen(false);
-  });
-  // Escape closes it too (capture phase so canvas key handling is moot),
-  // except mid-gesture (Issue #94 — see drawGestureInProgress above).
-  document.addEventListener(
-    "keydown",
-    (ev) => {
-      if (
-        !refs.leanPopover.hidden &&
-        ev.key === "Escape" &&
-        !drawGestureInProgress()
-      ) {
-        ev.stopPropagation();
-        // Issue #117 (ratified amendment): a pending measure anchor dies
-        // FIRST — the popover stays open for a second Escape.
-        if (measureDraft !== null) {
-          measureDraft = null;
-          repaint();
-          return;
-        }
-        setLeanPopoverOpen(false);
-      }
-    },
-    true,
-  );
-
-  refs.btnPoly.addEventListener("click", () => setActiveTool("polygon"));
-  refs.btnDoor.addEventListener("click", () => setActiveTool("door"));
-  refs.btnWindow.addEventListener("click", () => setActiveTool("window"));
-  refs.btnStamp.addEventListener("click", () => setActiveTool("stamp"));
-  refs.btnStairs.addEventListener("click", () => setActiveTool("stairs"));
-  refs.btnAddMeasure.addEventListener("click", () => setActiveTool("measure"));
-
-  /* ---------- issue #143: single-key tool hotkeys ---------- */
-
-  /**
-   * The 8 tool hotkeys live in ONE document-level handler (NOT the
-   * canvas listener) so they fire from anywhere in the editor while the
-   * exact-match map lookup keeps every other key structurally outside
-   * the decision path — Space (#126 pan) can never be intercepted
-   * because there is no catch-all single-letter branch, ever.
-   */
-  const TOOL_HOTKEYS: Record<string, AnyToolMode> = {
-    v: "select",
-    r: "rectangle",
-    p: "polygon",
-    d: "door",
-    w: "window",
-    f: "stamp",
-    t: "stairs",
-    m: "measure",
-  };
-
-  document.addEventListener("keydown", (ev) => {
-    // Chords stay untouched (undo/redo, browser combos).
-    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    // Typing wins: the inspector fields, the floor-rename input, and
-    // every #155 popover input are excluded here (letter keys are text
-    // while a field owns focus — never a tool switch, never a rotate).
-    const target = ev.target as HTMLElement | null;
-    if (
-      target !== null &&
-      (target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable)
-    ) {
-      return;
-    }
-    // Mid-gesture keys are swallowed, same discipline as I/3: a tool
-    // switch now would kill the live draw via setActiveTool's cleanup.
-    // Review round 2 (#143): drawGestureInProgress() reads `phase`, so it
-    // is BLIND to the phase-less pointer-owned interactions the canvas
-    // Escape strand recognizes — marquee band, underlay resize, opening
-    // drag (same three branches below). The opening drag is the corrosive
-    // one: pointerdown arms `dragOpening` while `phase` stays "idle" and
-    // the store gesture only opens once the pointer clears the threshold
-    // (handleOpeningDrag). Retooling mid-drag reached setActiveTool,
-    // which nulls dragOpening WITHOUT endGesture(): the leaked
-    // _gestureBase made the next atomic command throw ("non-streamable
-    // command inside gesture") and poisoned undo (silently for V, which
-    // dispatches nothing).
-    if (
-      drawGestureInProgress() ||
-      dragOpening !== null ||
-      marquee !== null ||
-      resizingUnderlay !== null
-    ) {
-      return;
-    }
-    // Never retool behind an open dialog sheet. The "?" cheat sheet owns
-    // the keyboard, and so does the export popover — its capture handler
-    // stops only Escape, so D used to arm Door and R used to rotate the
-    // selected furniture INVISIBLY behind it (a following export could
-    // capture the unseen rotation).
-    if (isHelpModalOpen() || isExportDialogOpen()) return;
-    const next = TOOL_HOTKEYS[ev.key.toLowerCase()];
-    if (next === undefined) return; // exact match only (Space is not here)
-    if (next === "rectangle") {
-      // R is dual-purpose: it rotates the selected furniture piece (the
-      // former canvas-local R strand, folded in here so R can never
-      // double-fire — canvas keydown bubbles up to this listener), and
-      // arms Rectangle when nothing rotatable is selected.
-      const sel = store.getState().selectedId;
-      const item =
-        sel === null
-          ? undefined
-          : flatFurniture(activeFloorPlan(store.getState())).find(
-              (f) => f.id === sel,
-            );
-      if (item) {
-        ev.preventDefault();
-        store.dispatch({
-          type: "rotateFurniture",
-          furnitureId: item.id,
-          rotationDeg: nextRotation(item.rotationDeg),
-        });
-        return;
-      }
-    }
-    ev.preventDefault();
-    setActiveTool(next);
-  });
-
-  // Issue #126: the Pan tool button (Space-hold arms it without a click).
-  refs.btnPan.addEventListener("click", () => setActiveTool("pan"));
-  // Issue #66: wipe all annotations (persists immediately).
-  // Issue #138: the pending anchor dies WITH them — a stale draft
-  // otherwise ate one Escape press under the guarded popovers
-  // (user-visible as "popover ignored Esc once").
-  refs.btnClearMeasure.addEventListener("click", () => {
-    measurements = [];
-    measureDraft = null;
-    saveMeasurements(window.localStorage, measurements);
+    emitMeasurements();
     repaint();
-  });
-
-  for (const chip of Array.from(
-    refs.palette.querySelectorAll<HTMLButtonElement>(".palette-chip"),
-  )) {
-    chip.addEventListener("click", () => {
-      const t = chip.dataset.stampType;
-      if (t && FURNITURE_DEFAULTS[t]) {
-        stampType = t;
-        for (const c of Array.from(
-          refs.palette.querySelectorAll<HTMLButtonElement>(".palette-chip"),
-        )) {
-          c.classList.toggle("active", c === chip);
-        }
-      }
-    });
   }
 
-  refs.btnUndo.addEventListener("click", () => {
-    store.undo();
-  });
-  refs.btnRedo.addEventListener("click", () => {
-    store.redo();
-  });
-
-  /* ---------- pkg 6 (issue #7): export + help ---------- */
+  /* ---------- pkg 6 (issue #7): image export ---------- */
 
   /**
    * Offscreen re-render for export: draws the plan with the LIVE camera
@@ -1902,172 +1189,18 @@ export function initEditorInteraction(
     };
   }
 
-  async function runExportFlow(): Promise<void> {
-    const choice = await openExportDialog(refs.btnExport);
-    if (!choice) return;
-    const rect = refs.canvas.getBoundingClientRect();
-    try {
-      const result = await renderOffscreen(
-        exportPainterFactory(choice.scale),
-        rect.width,
-        rect.height,
-        choice,
-      );
-      downloadExport(result);
-      flashMessage(
-        refs,
-        `Exported ${result.filename} (${result.width}\u00D7${result.height}).`,
-      );
-    } catch (err) {
-      flashMessage(refs, `Export failed: ${(err as Error).message}`);
-    }
-  }
-  refs.btnExport.addEventListener("click", () => {
-    void runExportFlow();
-  });
-
-  /* ---------- pkg 10.1 (issue #91): share link + JSON transfer ---------- */
-
   /**
-   * Copy text with a graceful degradation ladder: async Clipboard API
-   * first, then the legacy textarea/select/execCommand path (deprecated
-   * but the accepted fallback for non-secure/insecure contexts).
-   * Returns false when BOTH rungs fail — callers flash, never throw.
+   * Issue #178 (G6): export from any view — the size comes from the last
+   * non-zero viewport, so a hidden canvas (3D view) still exports.
    */
-  async function copyToClipboard(text: string): Promise<boolean> {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } catch {
-        /* fall through to the legacy rung */
-      }
-    }
-    const ta = document.createElement("textarea");
-    try {
-      ta.value = text;
-      // Position off-screen but NOT display:none — detached/hidden
-      // editors are excluded from some browsers' copy paths.
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      return document.execCommand("copy");
-    } catch {
-      return false;
-    } finally {
-      // Reviewer #91 should-fix: ALWAYS detach — a thrown select()/
-      // execCommand previously leaked the (invisible, focusable,
-      // plan-carrying) textarea into the DOM.
-      ta.remove();
-    }
+  async function exportImage(choice: ExportChoice): Promise<{ filename: string; width: number; height: number }> {
+    const live = viewportSize();
+    const w = live.w > 0 ? live.w : lastViewport.w || 1024;
+    const h = live.h > 0 ? live.h : lastViewport.h || 768;
+    const result = await renderOffscreen(exportPainterFactory(choice.scale), w, h, choice);
+    downloadExport(result);
+    return { filename: result.filename, width: result.width, height: result.height };
   }
-
-  refs.btnShare.addEventListener("click", () => {
-    void (async () => {
-      // Feature-detect AT THE BUTTON (codec stays native-only by
-      // design): browsers lacking CompressionStream get a clear
-      // message instead of a half-encoded link.
-      if (typeof CompressionStream === "undefined") {
-        flashMessage(refs, "Sharing is unavailable in this browser.");
-        return;
-      }
-      let out: Awaited<ReturnType<typeof encodeShare>>;
-      try {
-        out = await encodeShare(store.getState().data);
-      } catch (err) {
-        flashMessage(refs, (err as Error).message);
-        return;
-      }
-      // Fragments never hit servers: the plan rides in location.hash.
-      // Links target the VIEWER route — the recipient gets the 3D
-      // rendering (which is the decode/boot consumer of #plan=), not
-      // the sender's editor page.
-      const url = `${location.origin}/viewer#plan=${out.fragment}`;
-      const copied = await copyToClipboard(url);
-      if (!copied) {
-        flashMessage(refs, "Could not copy — clipboard unavailable.");
-        return;
-      }
-      if (out.warning) {
-        flashMessage(
-          refs,
-          `Link copied (${out.warning.length.toLocaleString()} chars — some chats may truncate it).`,
-          5000,
-        );
-      } else {
-        flashMessage(refs, "Share link copied to clipboard.");
-      }
-    })();
-  });
-
-  refs.btnExportJson.addEventListener("click", () => {
-    // Symmetric counterpart to Import: pretty-printed JSON of the live
-    // store, downloaded through the same Blob dance as export.ts.
-    const blob = new Blob([JSON.stringify(store.getState().data, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `floorplan-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
-    flashMessage(refs, "Plan exported as JSON.");
-  });
-
-  const importFileInputEl = refs.importFileInput;
-  refs.btnImport.addEventListener("click", () => {
-    importFileInputEl.value = ""; // re-picking the same file must re-fire change
-    importFileInputEl.click();
-  });
-
-  importFileInputEl.addEventListener("change", () => {
-    const file = importFileInputEl.files?.[0];
-    if (!file) return;
-    void (async () => {
-      let text: string;
-      try {
-        text = await file.text();
-      } catch {
-        flashError("Could not read the selected file.");
-        return;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        flashError("Not a valid JSON file.");
-        return;
-      }
-      // migrate + validate DIRECTLY (NOT normalizeIncoming — it silently
-      // falls back to emptyPlan, which would wipe the user's work on a
-      // typo'd import). Failure leaves the store untouched.
-      const migrated = migrate(parsed);
-      if (!migrated.ok || !migrated.data) {
-        flashMessage(refs, "Import failed: unsupported schema version.");
-        return;
-      }
-      const validated = validateFloorplan(migrated.data);
-      if (!validated.ok) {
-        flashError(`Import failed: ${validated.errors[0].message}`);
-        return;
-      }
-      // Success: the loadPlan sequence from editor/main.ts — swap the
-      // plan, then persist synchronously so a reload keeps it.
-      store.replaceAll(validated.value);
-      autosave.stop();
-      autosave.persistSync(validated.value);
-      flashMessage(refs, `Imported “${file.name}”.`);
-    })();
-  });
-
-  refs.btnHelp.addEventListener("click", () => toggleHelpModal());
-  initShortcuts();
-  window.addEventListener("beforeunload", closeHelpModal, { once: true });
 
   /**
    * Delete routes by WHAT is selected: furniture stamp → deleteFurniture,
@@ -2111,9 +1244,8 @@ export function initEditorInteraction(
     }
     store.dispatch({ type: "deleteRoom", roomId: sel });
   }
-  refs.btnDelete.addEventListener("click", () => routeDelete());
 
-  /* ---------- pkg 2 (issue #46): center + zoom buttons ---------- */
+  /* ---------- pkg 2 (issue #46): camera ---------- */
 
   /** Viewport extent in CSS pixels (canvas is DPR-scaled internally). */
   function viewportSize(): { w: number; h: number } {
@@ -2121,55 +1253,32 @@ export function initEditorInteraction(
     return { w: rect.width, h: rect.height };
   }
 
+  function emitZoom(): void {
+    emit('zoom', { percent: (cam.scale / INITIAL_SCALE) * 100 });
+  }
+
   function applyCamera(next: Camera): void {
     cam.originX = next.originX;
     cam.originY = next.originY;
     cam.scale = next.scale;
+    emitZoom();
     repaint();
   }
 
   /**
-   * Issue #126: fit-to-plan framing — shared by the Center button and the
-   * "0" shortcut (pkg 7.2: frames the ACTIVE floor; whole-plan writers
-   * like export keep full scope).
+   * Fit-to-plan framing (#126 "0" + the View tab's Fit; pkg 7.2: frames
+   * the ACTIVE floor). Issue #178: inset-aware, and deferred while the
+   * canvas is hidden (G6) — the next resize with a real size applies it.
    */
   function fitToPlan(): void {
     const { w, h } = viewportSize();
-    applyCamera(computeFitCamera(activeFloorPlan(store.getState()), w, h));
+    if (!(w > 0) || !(h > 0)) {
+      fitPending = true;
+      return;
+    }
+    fitPending = false;
+    applyCamera(computeFitCamera(activeFloorPlan(store.getState()), w, h, insets));
   }
-
-  refs.btnCenter.addEventListener("click", () => {
-    fitToPlan();
-  });
-  refs.btnZoomIn.addEventListener("click", () => {
-    const { w, h } = viewportSize();
-    applyCamera(zoomAboutCenter(cam, ZOOM_BUTTON_STEP, w, h));
-  });
-  refs.btnZoomOut.addEventListener("click", () => {
-    const { w, h } = viewportSize();
-    applyCamera(zoomAboutCenter(cam, 1 / ZOOM_BUTTON_STEP, w, h));
-  });
-
-  /* ---------- Issue #126: dark theme (editor preference) ---------- */
-
-  /**
-   * Apply a theme: mirror it onto <html data-theme> (style.css overrides
-   * the #54 tokens there), sync the toolbar button, and repaint (the
-   * canvas palette is a TS record in render.ts, not CSS).
-   */
-  function applyTheme(next: ThemePreference): void {
-    theme = next;
-    document.documentElement.dataset.theme = next;
-    refs.btnTheme.setAttribute("aria-pressed", String(next === "dark"));
-    refs.btnTheme.classList.toggle("active", next === "dark");
-    repaint();
-  }
-
-  refs.btnTheme.addEventListener("click", () => {
-    const next: ThemePreference = theme === "dark" ? "light" : "dark";
-    saveTheme(safeLocalStorage(), next);
-    applyTheme(next);
-  });
 
   /* ---------- Issue #126: Space-hold temporary pan ---------- */
 
@@ -2213,8 +1322,8 @@ export function initEditorInteraction(
     }
     if (restore !== "pan") setActiveTool(restore);
   };
-  window.addEventListener("keydown", (ev) => {
-    if (ev.key !== " ") return;
+  listen(window, "keydown", (ev) => {
+    if (!inputEnabled || ev.key !== " ") return;
     if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
     if (blocksSpacePan(ev.target)) return;
     if (drawGestureInProgress()) return;
@@ -2228,13 +1337,13 @@ export function initEditorInteraction(
       spacePanOwnsTool = true;
     }
   });
-  window.addEventListener("keyup", (ev) => {
+  listen(window, "keyup", (ev) => {
     if (ev.key !== " ") return;
     releaseSpacePan();
   });
   // Safety net: focus loss while Space is held (alt-tab) must not leave
   // the pan tool wedged.
-  window.addEventListener("blur", releaseSpacePan);
+  listen(window, "blur", releaseSpacePan);
 
   // Read-only debug seam for e2e: main.ts's __casaplaza bridge is out of
   // Pkg 2's grant, so the camera is exposed from glue instead.
@@ -2318,7 +1427,7 @@ export function initEditorInteraction(
   // appears to vanish) — but EDGE-triggered on the pose's floorIdx, not
   // on every tick: a viewer publishing per frame must not pin the
   // editor's floor and make manual browsing impossible.
-  subscribePose((pose) => {
+  disposers.push(subscribePose((pose) => {
     walkerPose = pose;
     if (pose === null) {
       lastPoseFloorIdx = null;
@@ -2336,7 +1445,7 @@ export function initEditorInteraction(
       }
     }
     requestWalkerGlyphRepaint();
-  });
+  }));
 
   // Issue #147 CP4 read-only seam (the __editorCam precedent): the
   // mirrored glyph state + place-camera arming — canvas-drawn and
@@ -2363,7 +1472,7 @@ export function initEditorInteraction(
     return {
       visible,
       armed: placeCameraArmed,
-      hasViewer: hasViewerSubscriber(),
+      hasViewer: true,
       pose: walkerPose === null ? null : { ...walkerPose },
       screenX: screen === null ? null : screen[0],
       screenY: screen === null ? null : screen[1],
@@ -2518,7 +1627,7 @@ export function initEditorInteraction(
       rowsBefore,
       flatOpenings(activeFloorPlan(store.getState())).length,
     );
-    if (notice !== null) flashMessage(refs, notice);
+    if (notice !== null) flash(notice);
   }
 
   /* ---------- pkg 13.4 (issue #118): staircase tool ---------- */
@@ -2673,9 +1782,7 @@ export function initEditorInteraction(
     if (!res.ok) {
       flashError(res.error);
     } else {
-      flashMessage(
-        refs,
-        notice ??
+      flash(notice ??
           `Staircase added — ${stair.stepCount} steps climbing ${stair.rise.toFixed(2)} m.`,
       );
     }
@@ -2717,7 +1824,7 @@ export function initEditorInteraction(
     accept.addEventListener('click', () => acceptStairOffer());
     cancel.addEventListener('click', () => {
       abandonStairDraft();
-      flashMessage(refs, 'Staircase cancelled — no floor above to climb to.');
+      flash('Staircase cancelled — no floor above to climb to.');
     });
     // Mouseless chain: the offer lands focused, Enter accepts.
     accept.focus();
@@ -2740,7 +1847,7 @@ export function initEditorInteraction(
     }
     const added = store.dispatch({ type: 'addFloor' });
     if (!added.ok) {
-      flashMessage(refs, added.error);
+      flash(added.error);
       abandonStairDraft();
       return;
     }
@@ -2751,7 +1858,7 @@ export function initEditorInteraction(
     }
     const verdict = stairCandidateVerdict(stair);
     if (!verdict.ok) {
-      flashMessage(refs, verdict.message);
+      flash(verdict.message);
       abandonStairDraft();
       return;
     }
@@ -2862,7 +1969,7 @@ export function initEditorInteraction(
         );
         flashError(openingErrorMessage(code ?? "UNKNOWN", tool));
       } else {
-        flashMessage(refs, `Move closer to a wall to place the ${tool}.`);
+        flash(`Move closer to a wall to place the ${tool}.`);
       }
       repaint();
       return;
@@ -2875,9 +1982,7 @@ export function initEditorInteraction(
       const view = activeFloorPlan(store.getState());
       const outcome = attemptDrop(view, def.footprint, worldPt);
       if (outcome.verdict === "rejected") {
-        flashMessage(
-          refs,
-          outcome.reason === "NO_ROOM_AT_POINT"
+        flash(outcome.reason === "NO_ROOM_AT_POINT"
             ? "Click inside a room to place furniture."
             : "That piece does not fit anywhere in this room — placement cancelled.",
         );
@@ -2897,9 +2002,7 @@ export function initEditorInteraction(
       if (!res.ok) {
         flashError(res.error);
       } else if (outcome.verdict === "warn") {
-        flashMessage(
-          refs,
-          "Placed, but adjusted inward to stay inside the room.",
+        flash("Placed, but adjusted inward to stay inside the room.",
         );
       }
       repaint();
@@ -2913,7 +2016,7 @@ export function initEditorInteraction(
       const anchor = snapPoint(worldPt);
       const host = roomAt(anchor, activeFloorPlan(store.getState()));
       if (!host) {
-        flashMessage(refs, "Start the staircase inside a room.");
+        flash("Start the staircase inside a room.");
         return;
       }
       phase = { tag: "drawingStair", anchor, cursor: anchor, roomId: host.id };
@@ -2993,9 +2096,7 @@ export function initEditorInteraction(
       );
       const rideAlong = [...multiSelected].filter((id) => !stairIds.has(id));
       if (rideAlong.length !== multiSelected.size) {
-        flashMessage(
-          refs,
-          "Staircases stay put in a bulk drag — move or redraw them individually.",
+        flash("Staircases stay put in a bulk drag — move or redraw them individually.",
         );
       }
       bulkDragIds =
@@ -3184,14 +2285,14 @@ export function initEditorInteraction(
   // pkg #142: status bar middle zone — live cursor position in meters.
   // Cleared on leave so a stale coordinate never sits next to the total.
   canvas.addEventListener("pointerleave", () => {
-    refs.statusCoords.textContent = "";
+    emit('cursor', { world: null });
   });
 
   canvas.addEventListener("pointermove", (ev) => {
     const worldPt = evWorld(ev);
     // pkg #142: the readout rides the EXISTING per-frame pointermove
     // handler — no extra listener, no extra frame cost.
-    refs.statusCoords.textContent = `${worldPt[0].toFixed(2)}, ${worldPt[1].toFixed(2)} m`;
+    emit('cursor', { world: [worldPt[0], worldPt[1]] });
 
     // Issue #147 CP4: an in-flight place-camera aim owns the pointer. A
     // buttonless move (release missed the window pre-capture) disarms.
@@ -3298,9 +2399,7 @@ export function initEditorInteraction(
           if (grabbedItem) {
             const verdict = judgeMoveTarget(plan, fid, worldPt);
             if (verdict.verdict === "rejected") {
-              flashMessage(
-                refs,
-                "Bulk move stopped — the grabbed piece left its room.",
+              flash("Bulk move stopped — the grabbed piece left its room.",
               );
             } else {
               const dx = verdict.resolved[0] - grabbedItem.position[0];
@@ -3341,9 +2440,7 @@ export function initEditorInteraction(
               furnitureId: fid,
               position: item.position,
             });
-            flashMessage(
-              refs,
-              "Piece pulled outside the room — snapped back to its last valid spot.",
+            flash("Piece pulled outside the room — snapped back to its last valid spot.",
             );
           }
         } else {
@@ -3353,9 +2450,7 @@ export function initEditorInteraction(
             position: verdict.resolved,
           });
           if (verdict.verdict === "warn") {
-            flashMessage(
-              refs,
-              "Moved, but clamped to keep the piece inside the room.",
+            flash("Moved, but clamped to keep the piece inside the room.",
             );
           }
         }
@@ -3543,7 +2638,7 @@ export function initEditorInteraction(
       }
       const verdict = stairCandidateVerdict(stair);
       if (!verdict.ok) {
-        flashMessage(refs, verdict.message);
+        flash(verdict.message);
         abandonStairDraft();
         return;
       }
@@ -3623,6 +2718,7 @@ export function initEditorInteraction(
       cam.originX = worldUnderCursor[0] - pos[0] / newScale;
       cam.originY = worldUnderCursor[1] + pos[1] / newScale;
       cam.scale = newScale;
+      emitZoom();
       repaint();
     },
     { passive: false },
@@ -3735,171 +2831,9 @@ export function initEditorInteraction(
         return;
       }
     }
-    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'z' || ev.key === 'Z')) {
-      ev.preventDefault();
-      if (ev.shiftKey) store.redo();
-      else store.undo();
-      return;
-    }
-    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "y" || ev.key === "Y")) {
-      ev.preventDefault();
-      store.redo();
-      return;
-    }
-    // Issue #143: the R strand MOVED to the document-level tool-hotkey
-    // handler (installed with the toolbar wiring). Canvas keydown
-    // bubbles up to it, so R keeps rotating the selected furniture with
-    // canvas focus AND arms Rectangle with nothing selected — deleting
-    // the old branch here is what keeps R from double-firing.
-    //
-    // Issue #147 CP4: "C" arms the place-camera gesture — click a room
-    // to move the 3D walker there, drag to aim it. Needs the viewer
-    // (hasViewerSubscriber check inside setPlaceCameraArmed) and refuses
-    // mid-gesture like the other letter keys; pressing "C" again
-    // disarms. Registered in shortcuts.ts (sheet + README sync duty).
-    if (
-      (ev.key === "c" || ev.key === "C") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      if (drawGestureInProgress()) return;
-      ev.preventDefault();
-      setPlaceCameraArmed(!placeCameraArmed);
-      return;
-    }
-    // Issue #68: "S" toggles the snap-settings popover. Registered in
-    // shortcuts.ts (feeds the "?" help modal + README sync spec).
-    if (
-      (ev.key === "s" || ev.key === "S") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      const opening = refs.snapPopover.hidden === true;
-      if (opening) syncSnapControls();
-      setSnapPopoverOpen(opening);
-      ev.preventDefault();
-      return;
-    }
-    // pkg 8.1 (issue #83): "L" opens the wall-lean popover for the
-    // SELECTED room (keyboard-first authoring — trackpad-only user).
-    // Registered in shortcuts.ts (shortcut-sheet + README sync duty).
-    if (
-      (ev.key === "l" || ev.key === "L") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      // Typing inside the popover's own inputs must not re-trigger.
-      if (!refs.leanPopover.hidden) return;
-      const sel = store.getState().selectedId;
-      const room =
-        sel !== null
-          ? flatRooms(activeFloorPlan(store.getState())).find(
-              (r) => r.id === sel,
-            )
-          : undefined;
-      if (!room) {
-        flashMessage(
-          refs,
-          "Select a room first, then press L to set a wall lean.",
-        );
-        return;
-      }
-      populateLeanPopover(room);
-      setLeanPopoverOpen(true);
-      ev.preventDefault();
-      return;
-    }
-    // pkg 7.2 (issue #75): floor switching. PageUp/PageDown with [ / ]
-    // aliases (brackets need no Fn key — friendlier on laptops).
-    // Registered in shortcuts.ts (shortcut-sheet duty).
-    if (
-      (ev.key === "PageUp" ||
-        ev.key === "PageDown" ||
-        ev.key === "[" ||
-        ev.key === "]") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      const down = ev.key === "PageDown" || ev.key === "]";
-      switchFloor(down ? 1 : -1);
-      ev.preventDefault();
-      return;
-    }
-    // Pkg 12.3 (issue #101): "I" toggles the inspector panel (canvas-
-    // focused stroke; the panel-scoped handler above covers focus
-    // inside the panel). Registered in shortcuts.ts (sheet duty).
-    // Mid-gesture 'I' is swallowed (same guard as the panel handler +
-    // popovers): opening the panel mid-draw would steal focus and strand
-    // Esc/Enter for the rest of the gesture.
-    if (
-      (ev.key === "i" || ev.key === "I") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      if (drawGestureInProgress()) return;
-      setInspectorOpen(!inspector!.isOpen());
-      ev.preventDefault();
-      return;
-    }
-    // Pkg 13.1 (issue #109): "3" toggles the mini-3D inset (canvas-
-    // focused stroke — the inset owns NO window-level keydown listener,
-    // so the pinned Esc/Enter/I/L canvas discipline is untouched).
-    // Registered in shortcuts.ts (sheet + README sync duty). Mid-gesture
-    // "3" is swallowed (same guard as I): enabling the inset mid-draw
-    // would recompile the 3D scene under a streaming gesture.
-    if (
-      (ev.key === "3") &&
-      !ev.ctrlKey &&
-      !ev.metaKey &&
-      !ev.altKey
-    ) {
-      if (drawGestureInProgress()) return;
-      void setMini3dOpen(mini3d === null || !mini3d.isOpen());
-      ev.preventDefault();
-      return;
-    }
-    // Issue #126: "0" fits the whole plan in the viewport (the Center
-    // button's framing, shared via fitToPlan; registered in shortcuts.ts
-    // for the sheet + README sync). Same guards as "3"/"I": swallowed
-    // mid-gesture, and Ctrl/Cmd+0 stays the browser's zoom reset.
-    if (ev.key === "0" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-      if (drawGestureInProgress()) return;
-      fitToPlan();
-      ev.preventDefault();
-      return;
-    }
-    if (
-      (ev.key === "Backspace" || ev.key === "Delete") &&
-      !ev.ctrlKey &&
-      !ev.metaKey
-    ) {
-      // Issue #100 (Pkg 12.2): typing dims into a field must never
-      // DELETE the selection — Backspace is an EDIT key whenever
-      // focus sits in an input/textarea/select (the floating draw
-      // widget, the inspector, the popovers). Guard before routing.
-      const t = ev.target as HTMLElement | null;
-      if (
-        t !== null &&
-        (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
-          t.tagName === "SELECT" ||
-          t.isContentEditable)
-      ) {
-        return;
-      }
-      const sel = store.getState().selectedId;
-      // Issue #110: an armed multi-set also owns the Delete key (even
-      // with no single selection live).
-      if (sel !== null || multiSelected.size > 0) {
-        ev.preventDefault();
-        routeDelete();
-      }
-    }
+    // Issue #178: undo/redo, C, S, L, I, floor keys, 0 and Delete are
+    // registry commands now (src/app/commands.ts) — dispatched by the
+    // shell's keyboard handler, scoped to the Plan view.
   });
 
   /* ---------- pkg 12.2 (issue #100): mid-draw type-in dims ---------- */
@@ -3967,7 +2901,7 @@ export function initEditorInteraction(
       },
       onInvalid: () => {
         // Reject-with-flash; state untouched (ghost keeps last preview).
-        flashMessage(refs, "Length must be a positive number.");
+        flash("Length must be a positive number.");
       },
       onCancel: () => {
         if (phase.tag !== "drawingPoly") return;
@@ -3983,10 +2917,6 @@ export function initEditorInteraction(
       angleLabel: "Pending angle (\u00B0)",
     });
     drawDimsMount().appendChild(drawDims.root);
-    // Issue #144 fix-round: the widget must stay the FIRST focusable
-    // stop after the canvas (remountDrawDims contract); re-assert the
-    // first-run layers' last-in-DOM position now that the widget exists.
-    keepFirstRunLayersLast();
     // Degenerate pending segment (fresh point, or right after Esc):
     // seed the fields CLEAR (brief: "fields cleared, chain intact")
     // instead of a meaningless 0/0 — typing starts from scratch.
@@ -4012,9 +2942,7 @@ export function initEditorInteraction(
     destroyDrawDims();
     const pts = phase.points;
     if (pts.length < POLYGON_MIN_POINTS) {
-      flashMessage(
-        refs,
-        `Need at least ${POLYGON_MIN_POINTS} points to close a polygon`,
+      flash(`Need at least ${POLYGON_MIN_POINTS} points to close a polygon`,
       );
       phase = { tag: "idle" };
       repaint();
@@ -4032,110 +2960,168 @@ export function initEditorInteraction(
     if (phase.tag === "drawingPoly") closePolygon();
   });
 
-  /* ---------- Pkg 15.1 (issue #144): first-run experience ---------- */
-
-  /*
-   * Three surfaces, one gate: the empty-state card (prefill), the
-   * floating Plans button + popover (replacement), and the in-app
-   * confirm dialog (discard guard). Everything mounts OUTSIDE the
-   * toolbar — sibling #142 reworks the toolbar, and the batch collision
-   * constraint forbids touching it. The sanctioned deviation from the
-   * issue's "File menu (or the toolbar)" wording is advisor-ratified
-   * (batch issue #160).
-   */
-
-  let card: EmptyStateCard | null = null;
-
-  /** Card visibility: empty plan AND no armed drawing tool. */
-  function refreshEmptyState(): void {
-    card?.update(planIsEmpty(store.getState().data) && tool === 'select');
-  }
-
-  /**
-   * Wholesale plan swap — the EXACT loadPlan/import sequence
-   * (replaceAll → autosave.stop() → persistSync, see the import handler
-   * above) so the autosave slot reflects the new plan across a reload.
-   *
-   * `replaceAll` deliberately KEEPS the underlay slice and the
-   * measurement lane: both are editor state persisted under their own
-   * keys (store.ts replaceAll comment), so New plan — which promises a
-   * clean slate — has to clear them explicitly. Demo loads keep them
-   * (only the plan is replaced), per the issue's wording.
-   *
-   * One-way: history resets with the swap and CONFIRM_MSG says so.
-   */
-  function swapPlan(
-    plan: FloorplanData,
-    opts: { clearUnderlays?: boolean; clearMeasurements?: boolean } = {},
-  ): void {
-    store.replaceAll(plan);
-    autosave.stop();
-    autosave.persistSync(plan);
-    if (opts.clearUnderlays) {
+  /* ---------- issue #178: editor-state reset (New plan) ---------- */
+  function resetEditorState(o: { underlays?: boolean; measurements?: boolean }): void {
+    if (o.underlays) {
+      underlaySelected = false;
       store.hydrateUnderlays({});
       saveUnderlayMap(underlayStorage, {});
+      emitUnderlay();
     }
-    if (opts.clearMeasurements) {
+    if (o.measurements) {
       measurements = [];
-      saveMeasurements(window.localStorage, measurements);
+      measureDraft = null;
+      persistMeasurements();
     }
   }
 
-  /**
-   * Destructive-swap guard. Empty plans load WITHOUT a prompt (AC);
-   * non-empty plans ask through the in-app dialog (never window.confirm)
-   * whose copy carries the Save JSON lifeline.
-   */
-  async function confirmDiscardIfNeeded(): Promise<boolean> {
-    if (planIsEmpty(store.getState().data)) return true;
-    return confirmDialog({
-      title: 'Replace the current plan?',
-      message: CONFIRM_MSG,
-      confirmLabel: 'Replace plan',
-    });
+  /** Pan so a measurement's midpoint sits in the free region's centre. */
+  function revealMeasurement(id: string): void {
+    const m = measurements.find((x) => x.id === id);
+    if (!m) return;
+    const { w, h } = viewportSize();
+    const mid: Pt = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2];
+    const sx = insets.left + (w - insets.left - insets.right) / 2;
+    const sy = insets.top + (h - insets.top - insets.bottom) / 2;
+    applyCamera({ originX: mid[0] - sx / cam.scale, originY: mid[1] + sy / cam.scale, scale: cam.scale });
   }
-
-  /** Demo load: guard → swap (underlays/measurements survive) → flash. */
-  async function loadDemoById(id: DemoId): Promise<void> {
-    if (!(await confirmDiscardIfNeeded())) return;
-    swapPlan(loadDemoPlan(id));
-    flashMessage(refs, `Loaded the ${demoById(id).label} demo.`);
-  }
-
-  /** New plan: guard → empty single-floor plan, clean slate. */
-  async function startNewPlan(): Promise<void> {
-    if (!(await confirmDiscardIfNeeded())) return;
-    swapPlan(emptyPlan(), { clearUnderlays: true, clearMeasurements: true });
-    flashMessage(refs, 'Started a new plan.');
-  }
-
-  card = mountEmptyStateCard(refs.emptyStateMount, {
-    onDrawRoom: () => setActiveTool('rectangle'),
-    onLoadDemo: (id) => void loadDemoById(id),
-    onImportJson: () => {
-      // Mirror the toolbar Import button: clearing the value makes
-      // re-picking the same file re-fire change (no new machinery).
-      refs.importFileInput.value = '';
-      refs.importFileInput.click();
-    },
-  });
-
-  mountPlanMenu(refs.planMenuMount, {
-    onNewPlan: () => void startNewPlan(),
-    onLoadDemo: (id) => void loadDemoById(id),
-  });
 
   /* ---------- boot ---------- */
-  // Issue #126: load the stored theme and mirror it onto <html> before the
-  // first paint (the canvas palette and the CSS tokens read it).
-  applyTheme(loadTheme(safeLocalStorage()));
   const ro = new ResizeObserver(resizeCanvas);
   ro.observe(canvas.parentElement!);
+  disposers.push(() => ro.disconnect());
   resizeCanvas();
   refreshBadgeAndButtons();
-  refreshFloorIndicator();
   refreshStatus();
-  refreshEmptyState();
+
+  let disposed = false;
+  const engine: EditorEngine = {
+    canvas,
+    on(event, handler) {
+      const set = handlers.get(event) ?? new Set();
+      set.add(handler as (payload: never) => void);
+      handlers.set(event, set);
+      return () => {
+        set.delete(handler as (payload: never) => void);
+      };
+    },
+    tool: () => tool,
+    setTool: (t) => setActiveTool(t),
+    armedFurniture: () => stampType,
+    armFurniture(type) {
+      if (!FURNITURE_DEFAULTS[type]) return;
+      stampType = type;
+      emit('furniture', { type });
+    },
+    gestureInProgress: () => interactionBusy(),
+    hint: () => toolHint(tool) || GLOBAL_TOOL_HINT,
+    camera: () => ({ ...cam }),
+    zoomBy(factor) {
+      const { w, h } = viewportSize();
+      applyCamera(zoomAboutCenter(cam, factor, w, h));
+    },
+    fitPlan: () => fitToPlan(),
+    setViewportInsets(next) {
+      insets = { ...next };
+    },
+    resize: () => resizeCanvas(),
+    dimensionsVisible: () => dimensionsVisible,
+    setDimensionsVisible(visible) {
+      dimensionsVisible = visible;
+      emitOverlays();
+      repaint();
+    },
+    gridVisible: () => gridVisible,
+    setGridVisible(visible) {
+      gridVisible = visible;
+      emitOverlays();
+      repaint();
+    },
+    snapSettings: () => snapSettings,
+    setSnapSettings: (next) => updateSnapSettings(next),
+    underlay: () => activeUnderlay(),
+    importUnderlay: (file) => importUnderlayFile(file),
+    setUnderlayOpacity(percent) {
+      const u = activeUnderlay();
+      if (u) setUnderlay({ ...u, opacity: Math.min(100, Math.max(0, Math.round(percent))) });
+    },
+    rotateUnderlay(deltaDeg) {
+      const u = activeUnderlay();
+      if (u) setUnderlay(rotateUnderlayBy(u, deltaDeg));
+    },
+    setUnderlayLocked(locked) {
+      const u = activeUnderlay();
+      if (!u) return;
+      // Locking deselects: locked ⇒ no handles, no nudge.
+      if (locked) underlaySelected = false;
+      setUnderlay({ ...u, locked });
+      repaint();
+    },
+    setUnderlayHidden(hidden) {
+      const u = activeUnderlay();
+      if (!u) return;
+      if (hidden) underlaySelected = false;
+      setUnderlay({ ...u, hidden });
+      repaint();
+    },
+    removeUnderlay() {
+      if (activeUnderlay() === null) return;
+      setUnderlay(null);
+      flash('Underlay removed.');
+    },
+    measurements: () => activeMeasurements(),
+    clearMeasurements() {
+      // Issue #138: the pending anchor dies WITH the annotations.
+      measurements = [];
+      measureDraft = null;
+      persistMeasurements();
+    },
+    removeMeasurement(id) {
+      measurements = measurements.filter((m) => m.id !== id);
+      persistMeasurements();
+    },
+    revealMeasurement,
+    selection: () => resolveSelection(),
+    hasDeletableSelection: () => store.getState().selectedId !== null || multiSelected.size > 0,
+    deleteSelection: () => routeDelete(),
+    rotateSelectedFurniture,
+    addressLeanWall,
+    cancelTransient() {
+      // Issue #117: a pending measure anchor outranks the panel close.
+      if (measureDraft !== null) {
+        measureDraft = null;
+        repaint();
+        return true;
+      }
+      return false;
+    },
+    setInspectorVisible(visible) {
+      inspectorVisible = visible;
+      repaint();
+    },
+    switchFloor,
+    placeCameraArmed: () => placeCameraArmed,
+    setPlaceCameraArmed: (armed) => setPlaceCameraArmed(armed),
+    setInputEnabled(enabled) {
+      inputEnabled = enabled;
+      if (!enabled) releaseSpacePan();
+    },
+    setTheme(next) {
+      theme = next;
+      repaint();
+    },
+    exportImage,
+    resetEditorState,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const off of disposers.splice(0)) off();
+      destroyDrawDims();
+      destroyStairOffer();
+      handlers.clear();
+    },
+  };
+  return engine;
 }
 
 /** Hydrate the store from autosaved data (validated) or start clean. */

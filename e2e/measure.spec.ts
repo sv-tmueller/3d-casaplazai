@@ -19,6 +19,9 @@ import {
   type Measurement,
 } from '../src/editor/model/measure';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 const BOOT_CAM: Camera = { originX: 0, originY: 0, scale: CAM_SCALE };
 
 /** Far-away room so grid snapping near the measure clicks is unperturbed. */

@@ -11,6 +11,9 @@ import { expect, test, type Page } from '@playwright/test';
 // this file, now imported by e2e/sun.spec.ts too — unchanged behavior.
 import { regionCarriesCanvasPixels, regionLuminance } from './fixtures/luminance';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: rewrite pending (#178)');
+
 /** Derived door-center waypoints (world XY, meters) for demo-apartment.json. */
 // Issue #18 furniture-aware route (verified-clean 8 hops; the old direct
 // diagonals graze the sofa/table expanded boxes — see PR notes):

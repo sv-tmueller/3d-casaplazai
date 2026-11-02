@@ -1,13 +1,13 @@
 /**
  * Anti-drift (issue #7): EVERY row of the README's "Keyboard shortcuts"
- * table must correspond to an entry in src/editor/shortcuts.ts, and vice
+ * table must correspond to an entry in src/app/shortcuts.ts (backed by the command registry), and vice
  * versa. Greps the checked-in Markdown against the registry so a stray
  * edit on either side fails CI.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SHORTCUTS } from '../../src/editor/shortcuts';
+import { SHORTCUTS } from '../../src/app/shortcuts';
 
 const readme = (): string =>
   readFileSync(join(process.cwd(), 'README.md'), 'utf8');
