@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isHighQuality } from '../../src/viewer/quality';
+import { isHighQuality, qualityFromSearch } from '../../src/viewer/quality';
 import { isPerfEnabled } from '../../src/viewer/appController';
 
 describe('isPerfEnabled — end-anchored parse (issue #94)', () => {
@@ -47,5 +47,13 @@ describe('isHighQuality — ratified default-HIGH semantics', () => {
     expect(isHighQuality('?quality=medium')).toBe(true);
     expect(isHighQuality('?quality=')).toBe(true);
     expect(isHighQuality('?quantity=low')).toBe(true); // different param
+  });
+});
+
+describe('qualityFromSearch — boot level for AppState (issue #178)', () => {
+  it('maps the param onto the builder level union, default high', () => {
+    expect(qualityFromSearch('')).toBe('high');
+    expect(qualityFromSearch('?quality=low&view=3d')).toBe('low');
+    expect(qualityFromSearch('?quality=lowest')).toBe('high');
   });
 });

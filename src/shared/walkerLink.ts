@@ -1,16 +1,21 @@
 /**
- * walkerLink (issue #147 CP1): the runtime viewer ⇄ editor channel for
- * walk-mode navigation aids.
+ * walkerLink (issue #147 CP1; reworked by #178): the runtime pose channel
+ * between the 3D engine and the Plan view's walker glyph.
  *
  * Why not window.__casaplaza? That bridge is the FROZEN editor→viewer
  * DATA contract (FloorplanData payloads, see editor/wire.ts). The
  * walker's live pose is runtime chatter, and per docs/schema.md's
  * out-of-schema doctrine it must never enter FloorplanData — which is
- * also why the glyph can never reach a share link. A tiny, DI-free,
- * module-level hub keeps the two panes honest:
+ * also why the glyph can never reach a share link.
  *
- *   viewer → editor : publishPose  (glyph position + heading + floor)
- *   editor → viewer : sendCommand  (place / gotoRoom teleports)
+ *   3D engine → Plan glyph : publishPose (position + heading + storey)
+ *
+ * Issue #178: the editor→viewer command stream (place / gotoRoom) is
+ * gone — the workspace shell owns the view switch (gap G3), so place
+ * camera and Go-to-room are shell actions. Leaving Walk now PARKS the
+ * pose (mode 'overview') instead of retracting it, so the glyph keeps
+ * showing where the camera stood (gap G4); the app clears it with
+ * publishPose(null) when the plan is replaced.
  *
  * Test hygiene: resetWalkerLink() drops every subscriber + the pose.
  */
@@ -24,39 +29,22 @@ export interface WalkerPose {
   /** Index into FloorplanData.floors — the storey the walker stands on. */
   floorIdx: number;
   /**
-   * Viewer mode the pose was sampled in. Today the viewer publishes
-   * 'walk' poses and RETRACTS by publishing null when the rig goes away
-   * (leaving walk mode must not strand a marker); 'overview' is reserved
-   * for a future parked/dimmed marker and the editor hides the glyph on
-   * either.
+   * 'walk' while the walker is live; 'overview' for the PARKED pose the
+   * 3D engine leaves behind when Walk ends (issue #178, G4). The glyph
+   * draws either.
    */
   mode: 'walk' | 'overview';
 }
 
-/** Editor→viewer teleports. */
-export type WalkerCommand =
-  | {
-      kind: 'place';
-      x: number;
-      y: number;
-      /** Plan-space heading for the teleported walker. */
-      yaw: number;
-      /** Target storey (the editor's active floor at click time). */
-      floorIdx: number;
-    }
-  | { kind: 'gotoRoom'; roomId: string };
-
 export type PoseListener = (pose: WalkerPose | null) => void;
-export type CommandListener = (command: WalkerCommand) => void;
 
 const poseListeners = new Set<PoseListener>();
-const commandListeners = new Set<CommandListener>();
 let currentPose: WalkerPose | null = null;
 
 /**
- * Viewer → editor: publish the walker's plan pose (or null to clear).
- * Same-reference republishes are swallowed so a caller can publish
- * every frame without a listener storm.
+ * Publish the walker's plan pose (or null to clear). Same-reference
+ * republishes are swallowed so a caller can publish every frame without
+ * a listener storm.
  */
 export function publishPose(pose: WalkerPose | null): void {
   if (pose === currentPose) return;
@@ -70,17 +58,15 @@ export function publishPose(pose: WalkerPose | null): void {
   }
 }
 
-/** The last published pose (null before the viewer has ever walked). */
+/** The last published pose (null before anyone walked). */
 export function getPose(): WalkerPose | null {
   return currentPose;
 }
 
 /**
- * Editor → viewer: subscribe to pose updates. A LIVE pose is replayed
- * immediately so a late subscriber (an editor remounted while walk mode
- * is running) paints the glyph without waiting a frame; null is never
- * replayed — "no walker yet" is the subscriber's own initial state.
- * Returns the unsubscribe.
+ * Subscribe to pose updates. A LIVE pose is replayed immediately so a
+ * late subscriber paints the glyph without waiting a frame; null is
+ * never replayed. Returns the unsubscribe.
  */
 export function subscribePose(listener: PoseListener): () => void {
   poseListeners.add(listener);
@@ -96,37 +82,8 @@ export function subscribePose(listener: PoseListener): () => void {
   };
 }
 
-/** Editor → viewer: publish a teleport command (no-op with no viewer). */
-export function sendCommand(command: WalkerCommand): void {
-  for (const listener of [...commandListeners]) {
-    try {
-      listener(command);
-    } catch {
-      /* see publishPose */
-    }
-  }
-}
-
-/** Viewer: subscribe to teleport commands. Returns the unsubscribe. */
-export function subscribeCommands(listener: CommandListener): () => void {
-  commandListeners.add(listener);
-  return () => {
-    commandListeners.delete(listener);
-  };
-}
-
-/**
- * True while a viewer is attached — the editor gates the "C"
- * place-camera arming on this (the standalone editor route has no 3D
- * pane to place a camera into).
- */
-export function hasViewerSubscriber(): boolean {
-  return commandListeners.size > 0;
-}
-
 /** TEST-ONLY: drop the pose and every subscriber. */
 export function resetWalkerLink(): void {
   currentPose = null;
   poseListeners.clear();
-  commandListeners.clear();
 }

@@ -21,9 +21,10 @@ import { createCanvasEngine, hydrateFromAutosave } from '../editor/canvasEngine'
 import { safeLocalStorage } from '../editor/model/settings';
 import { EditorStore, emptyPlan } from '../editor/store';
 import { normalizeIncoming, toLegacyWire } from '../editor/wire';
+import { ViewerApp } from '../viewer/appController';
 import { createAppState, type AppState } from './state';
 import { createPlanOps } from './planOps';
-import { mountShell, type Shell, type ViewerPort, type ViewerSink } from './shell';
+import { mountShell, type Shell } from './shell';
 
 declare global {
   interface Window {
@@ -49,8 +50,8 @@ export interface WorkspaceOptions {
   search?: string;
   hash?: string;
   autosaveDebounceMs?: number;
-  /** The 3D engine factory (stage 4); absent = Plan view only. */
-  createViewer?: (canvas: HTMLCanvasElement, sink: ViewerSink, ctx: { store: EditorStore; app: AppState; shell: () => Shell | null }) => ViewerPort;
+  /** Mount the 3D engine (default true). */
+  withViewer?: boolean;
 }
 
 export interface Workspace {
@@ -99,9 +100,25 @@ export function mountWorkspace(root: HTMLElement, opts: WorkspaceOptions = {}): 
     store,
     plan,
     createEngine: (canvas) => createCanvasEngine({ canvas, store, theme: app.get().theme }),
-    createViewer: opts.createViewer
-      ? (canvas, sink) => opts.createViewer!(canvas, sink, { store, app, shell: () => shell })
-      : undefined,
+    // Design §8.4: the 3D engine subscribes to the store directly (no
+    // bridge poll); its settings come from AppState.
+    createViewer:
+      opts.withViewer === false
+        ? undefined
+        : (canvas, sink) => {
+            const viewer = new ViewerApp({
+              canvas,
+              sink,
+              settings: app.get().viewer,
+              source: {
+                current: () => store.getState().data,
+                subscribe: (listener) => store.subscribe(() => listener()),
+              },
+              gestureInProgress: () => shell?.engine.gestureInProgress() ?? false,
+            });
+            viewer.start();
+            return viewer;
+          },
   });
   const theShell = shell;
 

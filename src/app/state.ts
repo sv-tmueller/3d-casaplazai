@@ -8,7 +8,7 @@
  * existing casaplaza.theme.v1 key via model/theme.ts).
  */
 import { loadTheme, saveTheme, type ThemePreference } from '../editor/model/theme';
-import { isHighQuality } from '../viewer/quality';
+import { qualityFromSearch } from '../viewer/quality';
 import { DEFAULT_SUN_SETTINGS } from '../viewer/sun';
 import type { SunSettings } from '../viewer/types';
 import type { WalkerPose } from '../shared/walkerLink';
@@ -160,7 +160,7 @@ export function createAppState(opts: { storage: Storage | null; search?: string 
         roofs: true,
         ceilings: 'auto',
         wallsAlpha: 0,
-        quality: isHighQuality(search) ? 'high' : 'low',
+        quality: qualityFromSearch(search),
         sun: { ...DEFAULT_SUN_SETTINGS },
       },
     },

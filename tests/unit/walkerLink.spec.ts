@@ -4,20 +4,16 @@
  * editor→viewer DATA contract (schema payloads) — live pose/commands
  * do not belong in it, so this tiny DI-free module owns the chatter.
  *
- * Two directions:
- *   viewer → editor : pose stream (glyph) + mode (glyph gating)
- *   editor → viewer : place / gotoRoom commands (teleport engine)
+ * One direction since issue #178: the 3D engine publishes the pose
+ * stream (glyph), live ('walk') or parked ('overview'); place camera and
+ * Go-to-room are shell actions now, so the command stream is gone.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getPose,
-  hasViewerSubscriber,
   publishPose,
   resetWalkerLink,
-  sendCommand,
-  subscribeCommands,
   subscribePose,
-  type WalkerCommand,
   type WalkerPose,
 } from '../../src/shared/walkerLink';
 
@@ -80,56 +76,7 @@ describe('poser stream: viewer → editor', () => {
   });
 });
 
-describe('command stream: editor → viewer', () => {
-  it('reports whether a viewer is listening (the "C" arming gate)', () => {
-    expect(hasViewerSubscriber()).toBe(false);
-    const off = subscribeCommands(() => {});
-    expect(hasViewerSubscriber()).toBe(true);
-    off();
-    expect(hasViewerSubscriber()).toBe(false);
-  });
-
-  it('delivers place commands with point + heading + floor', () => {
-    const seen: WalkerCommand[] = [];
-    subscribeCommands((cmd) => seen.push(cmd));
-    sendCommand({ kind: 'place', x: 2, y: 3, yaw: 0.5, floorIdx: 1 });
-    expect(seen).toEqual([{ kind: 'place', x: 2, y: 3, yaw: 0.5, floorIdx: 1 }]);
-  });
-
-  it('delivers gotoRoom commands by id', () => {
-    const seen: WalkerCommand[] = [];
-    subscribeCommands((cmd) => seen.push(cmd));
-    sendCommand({ kind: 'gotoRoom', roomId: 'room-kitchen' });
-    expect(seen).toEqual([{ kind: 'gotoRoom', roomId: 'room-kitchen' }]);
-  });
-
-  it('is a no-op with no viewer attached (editor pane standalone)', () => {
-    expect(() => sendCommand({ kind: 'gotoRoom', roomId: 'x' })).not.toThrow();
-  });
-
-  it('fans out to every subscriber and honours unsubscribe', () => {
-    const a = vi.fn();
-    const b = vi.fn();
-    const offA = subscribeCommands(a);
-    subscribeCommands(b);
-    sendCommand({ kind: 'gotoRoom', roomId: 'r' });
-    offA();
-    sendCommand({ kind: 'gotoRoom', roomId: 'r2' });
-    expect(a).toHaveBeenCalledTimes(1);
-    expect(b).toHaveBeenCalledTimes(2);
-  });
-
-  it('a throwing subscriber never starves its siblings', () => {
-    const bad = vi.fn(() => {
-      throw new Error('boom');
-    });
-    const good = vi.fn();
-    subscribeCommands(bad);
-    subscribeCommands(good);
-    expect(() => sendCommand({ kind: 'gotoRoom', roomId: 'r' })).not.toThrow();
-    expect(good).toHaveBeenCalledTimes(1);
-  });
-
+describe('pose stream robustness', () => {
   it('a throwing pose subscriber never starves its siblings', () => {
     const bad = vi.fn(() => {
       throw new Error('boom');
@@ -142,10 +89,20 @@ describe('command stream: editor → viewer', () => {
   });
 });
 
+describe('parked pose (issue #178, G4)', () => {
+  it('carries the overview mode and stays until the app clears it', () => {
+    const seen: Array<WalkerPose | null> = [];
+    subscribePose((p) => seen.push(p));
+    publishPose({ ...POSE, mode: 'overview' });
+    expect(getPose()?.mode).toBe('overview');
+    publishPose(null);
+    expect(seen.map((p) => p?.mode ?? null)).toEqual(['overview', null]);
+  });
+});
+
 describe('resetWalkerLink (test hygiene)', () => {
-  it('drops pose, subscribers, and the viewer flag', () => {
+  it('drops the pose and every subscriber', () => {
     publishPose(POSE);
-    subscribeCommands(() => {});
     const spy = vi.fn();
     subscribePose(spy);
     // The late-subscribe replay already fired once; measure only what
@@ -153,7 +110,6 @@ describe('resetWalkerLink (test hygiene)', () => {
     spy.mockClear();
     resetWalkerLink();
     expect(getPose()).toBeNull();
-    expect(hasViewerSubscriber()).toBe(false);
     publishPose({ ...POSE, x: 3 });
     expect(spy).not.toHaveBeenCalled();
   });

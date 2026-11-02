@@ -1,14 +1,17 @@
 /**
  * Quality knob (issue #87): owns the ?quality= URL-param read for the
- * viewer. Kept in a tiny standalone module (rather than inside
- * appController) so #86's upcoming lighting knob can consume the same
- * parser without either package owning the other's call sites.
+ * viewer. Issue #178 moved the live setting into AppState (the View tab's
+ * Quality segment switches it at runtime); this module keeps the boot
+ * parser that seeds it.
  *
  * Semantics (ratified on batch #85): default HIGH when the param is
  * absent — preserves today's textured look with zero visual churn;
  * ?quality=low is the OPT-IN fast path that flattens procedural
  * textures (color-only materials, same roughness budget).
  */
+
+/** The scene builder's quality union (sceneBuilder.QualityLevel). */
+export type QualityLevel = 'high' | 'low';
 
 /**
  * True when the viewer should render the expensive material pass
@@ -27,4 +30,9 @@ export function isHighQuality(
   // Absent/unrecognized ⇒ HIGH (ratified default); only an explicit
   // "low" opts OUT of the textured pass.
   return !(m && m[1] === 'low');
+}
+
+/** Boot quality level for AppState (issue #178). */
+export function qualityFromSearch(search: string = window.location.search): QualityLevel {
+  return isHighQuality(search) ? 'high' : 'low';
 }

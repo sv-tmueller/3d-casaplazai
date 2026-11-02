@@ -23,14 +23,15 @@ import { mountToolCard } from './panels/toolCard';
 import { describeSelection, mountInspector } from './panels/inspector';
 import { mountStatusBar } from './panels/statusBar';
 import { mountEmpty3d, mountEmptyState, planIsEmpty } from './panels/emptyState';
-import { mountWalkOverlay, type RoomPickerFloor } from './panels/walkOverlay';
+import { mountWalkOverlay } from './panels/walkOverlay';
 import { playFade } from './panels/fade';
 import type { EditorEngine } from '../editor/engine';
 import type { EditorStore } from '../editor/store';
 import { activeFloorPlan } from '../editor/store';
 import { formatTotal, totalLivableAreaM2 } from '../editor/measures';
 import type { DemoId } from '../editor/demos';
-import type { WalkerPose } from '../shared/walkerLink';
+import { getPose, type WalkerPose } from '../shared/walkerLink';
+import type { ViewerUiSink } from '../viewer/uiSink';
 
 /** File operations implemented by the app entry (autosave-aware). */
 export interface PlanOps {
@@ -42,20 +43,7 @@ export interface PlanOps {
 }
 
 /** What the 3D engine tells the shell (gap G9: replaces the HUD writes). */
-export interface ViewerSink {
-  toast(text: string, variant: 'info' | 'error'): void;
-  dismissErrors(): void;
-  hint(text: string): void;
-  walkAffordances(s: { overlay: boolean; reticle: boolean }): void;
-  roomReadout(name: string | null): void;
-  roomList(floors: RoomPickerFloor[]): void;
-  emptyState(visible: boolean): void;
-  fade(): Promise<void>;
-  /** The viewer left/entered walk on its own (e.g. the plan emptied). */
-  modeChanged(mode: 'overview' | 'walk'): void;
-  /** Mount point for the ?perf=1 overlay. */
-  readonly perfHost: HTMLElement;
-}
+export type ViewerSink = ViewerUiSink & { readonly perfHost: HTMLElement };
 
 export interface ViewerPort {
   setActive(active: boolean): void;
@@ -85,7 +73,7 @@ export interface Shell {
   readonly registry: CommandRegistry;
   readonly toasts: ToastStackHandle;
   readonly viewer: ViewerPort | null;
-  requestView(view: ViewId, opts?: { seated?: boolean }): boolean;
+  requestView(view: ViewId, opts?: { seated?: boolean; pose?: WalkerPose | null }): boolean;
   refresh(): void;
   notify(text: string, variant?: 'info' | 'error'): void;
   dispose(): void;
@@ -249,7 +237,7 @@ export function mountShell(opts: ShellOptions): Shell {
     if (v === 'plan') engine.resize();
   }
 
-  function requestView(v: ViewId, o: { seated?: boolean } = {}): boolean {
+  function requestView(v: ViewId, o: { seated?: boolean; pose?: WalkerPose | null } = {}): boolean {
     const cur = app.get().view;
     if (v === cur && !o.seated) return true;
     if (!canEnterView(v)) {
@@ -257,17 +245,21 @@ export function mountShell(opts: ShellOptions): Shell {
       return false;
     }
     if (v === 'plan') {
-      viewer?.requestMode('overview');
+      // Leaving the 3D views ends walking (the viewer parks the pose).
       viewer?.setActive(false);
     } else if (viewer) {
+      // Show the 3D pane first so the viewer measures a real canvas (G6).
+      applyView(v);
       viewer.setActive(true);
-      const ok = viewer.requestMode(v === 'walk' ? 'walk' : 'overview', {
-        autoLock: v === 'walk' && !o.seated,
-        pose: v === 'walk' ? app.get().walkPose : null,
-      });
-      if (!ok && v === 'walk') return false;
+      if (v === 'walk') {
+        // G4 / G15: spawn from the placed pose, else the parked one.
+        const ok = viewer.requestMode('walk', { autoLock: !o.seated, pose: o.pose ?? getPose() ?? app.get().walkPose });
+        if (!ok) return false;
+      } else {
+        viewer.requestMode('overview');
+      }
     }
-    app.set({ view: v });
+    app.set({ view: v, walkPose: getPose() ?? app.get().walkPose });
     applyView(v);
     refresh();
     if (v === 'plan') engine.canvas.focus();
@@ -334,7 +326,8 @@ export function mountShell(opts: ShellOptions): Shell {
     on('overlaps', ({ count }) => status.setOverlaps(count)),
     on('walkerPlaced', ({ pose, roomName }) => {
       app.set({ walkPose: pose });
-      if (!requestView('walk', { seated: true })) notify(`Walker placed in ${roomName}.`);
+      if (requestView('walk', { seated: true, pose })) notify(`Camera placed in ${roomName}.`);
+      else notify(`Walker placed in ${roomName}.`);
     }),
   );
   disposers.push(store.subscribe(() => refresh()));
@@ -384,7 +377,7 @@ export function mountShell(opts: ShellOptions): Shell {
       fade: () => playFade(veil),
       modeChanged: (mode) => {
         if (mode === 'overview' && app.get().view === 'walk') {
-          app.set({ view: '3d' });
+          app.set({ view: '3d', walkPose: getPose() });
           applyView('3d');
         }
         refresh();

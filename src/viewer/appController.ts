@@ -1,12 +1,25 @@
 /**
- * App controller (issue #6): the SINGLE OWNER of the viewer runtime —
- * requestAnimationFrame loop, the OVERVIEW⇄WALK FSM, the 250 ms
- * debounced polling of the pkg-2 bridge (window.__casaplaza.getData()),
- * validate-before-render with LAST-GOOD retention (an INVALID
- * intermediate state keeps rendering the previous good scene and raises
+ * App controller (issue #6; reworked for the workspace by #178): the
+ * SINGLE OWNER of the 3D runtime — requestAnimationFrame loop, the
+ * OVERVIEW⇄WALK FSM, validate-before-render with LAST-GOOD retention (an
+ * INVALID intermediate keeps rendering the previous good scene and raises
  * a toast — never a crash), camera-pose preservation across recompiles,
- * respawn only when the disc's footing goes illegal, and the full
- * dispose chain (renderer → scene graph → HUD → listeners → timers).
+ * respawn only when the disc's footing goes illegal, and the full dispose
+ * chain.
+ *
+ * Issue #178 (design §8.4 / §8.5):
+ *  - the plan arrives through a PlanSource subscription on the editor
+ *    store (debounced; the 250 ms JSON poll over window.__casaplaza is
+ *    gone). Reducers mutate the plan in place, so the signature decides
+ *    and the compiler works on a snapshot (gap G7); rebuilds wait while a
+ *    2D gesture is in flight;
+ *  - every piece of UI goes to a ViewerUiSink the shell implements (the
+ *    HUD is retired, gap G9); the 3D settings (roofs, ceilings, walls
+ *    transparency, quality, sun) come from AppState via applySettings and
+ *    survive rebuilds (gap G5);
+ *  - the viewer only ticks while its view is shown (gap G6); leaving Walk
+ *    parks the walker pose instead of retracting it (gap G4); Esc releases
+ *    the pointer and stays in Walk (lead ruling C3).
  */
 
 import {
@@ -25,38 +38,10 @@ import { compilePlan, parseValidatedPlan } from '../geom';
 import type { FloorplanData, Room } from '../shared/schema';
 import { flatOpenings, flatRooms, migrate } from '../shared/schema';
 import { adaptScene, sceneHasNaN } from './adapter';
-import {
-  buildHud,
-  destroyHud,
-  onBindCollapse,
-  onBindModeSegment,
-  onBindGotoRoom,
-  onBindRoofToggle,
-  dismissErrorToasts,
-  onBindSunNorth,
-  onBindSunTime,
-  onBindWallsAlpha,
-  PerfOverlay,
-  playFade,
-  reflectCollapsed,
-  reflectFloorName,
-  populateRoomPicker,
-  reflectMode,
-  reflectRoomReadout,
-  reflectRoofVisibility,
-  reflectSunSettings,
-  reflectWallsAlpha,
-  saveHudState,
-  setEmptyState,
-  setWalkAffordances,
-  setWalkDisabled,
-  showHint,
-  toast,
-  type HudHandles,
-} from './hud';
 import { OrbitRig } from './orbitMode';
 import { setMaxAnisotropy } from './materials';
-import { isHighQuality } from './quality';
+import { PerfOverlay } from './perf';
+import type { QualityLevel } from './quality';
 import {
   INTERIOR_LIGHT_COLOR,
   INTERIOR_LIGHTS_INTERVAL_TICKS,
@@ -78,7 +63,6 @@ import {
   paintSky,
 } from './sceneBuilder';
 import {
-  DEFAULT_SUN_SETTINGS,
   interiorFillIntensity,
   normalizeBearingDeg,
   normalizeSunSettings,
@@ -92,11 +76,8 @@ import {
   type SunSettings,
   type ViewMode,
 } from './types';
-import {
-  publishPose,
-  subscribeCommands,
-  type WalkerCommand,
-} from '../shared/walkerLink';
+import type { ViewerSettings, ViewerUiSink } from './uiSink';
+import { publishPose, type WalkerPose } from '../shared/walkerLink';
 import { attributeFloorIdx, roomReadoutAt } from './walkNav';
 import {
   activeCollisions,
@@ -105,34 +86,43 @@ import {
   WalkRig,
 } from './walkMode';
 
-/** Shape of the pkg-2 bridge hung off window.__casaplaza. */
-export interface DataBridge {
-  /**
-   * Current plan. May arrive in EITHER shape: the bridge's published
-   * wire format is frozen v1 (converted at the editor door), so the
-   * consumer migrates before validating (see refreshAdaptation).
-   */
-  getData(): unknown;
-  /**
-   * CURRENT-schema (v2) plan, all storeys (issue #76 bridge addition).
-   * Preferred when present: the frozen v1 getData flattens to the
-   * ground floor, dropping upper storeys the multi-floor viewer needs.
-   */
-  getCurrent?(): unknown;
+/**
+ * Where the plan comes from (issue #178): the editor store in the
+ * workspace, a fake in unit tests. `current()` may return the plan
+ * object the store mutates in place.
+ */
+export interface PlanSource {
+  current(): unknown;
+  subscribe(listener: () => void): () => void;
 }
 
 /** Runtime knobs injected for testability (defaults = production). */
 export interface ControllerOpts {
-  /** Bridge supplier; sampled on the debounced cadence. */
-  readonly bridge: () => DataBridge | undefined;
+  readonly source: PlanSource;
   /** Canvas hosting the GL context. */
   readonly canvas: HTMLCanvasElement;
-  /** Pane hosting the HUD overlay. */
-  readonly pane: HTMLElement;
+  /** UI reports (toasts, walk overlay, empty card, fade). */
+  readonly sink: ViewerUiSink;
+  /** Initial 3D settings (AppState.viewer). */
+  readonly settings: ViewerSettings;
+  /** True while a 2D gesture is in flight (rebuilds wait). */
+  readonly gestureInProgress?: () => boolean;
   /** rAF-like scheduler seam (unit tests inject manual pumps). */
   readonly scheduleTick?: (cb: (now: number) => void) => (() => void) | void;
   /** Timer seam for the debounce (tests advance manually). */
   readonly setTimeoutFn?: typeof window.setTimeout;
+}
+
+/** Options for a mode request. */
+export interface ModeRequest {
+  /**
+   * Try to lock the pointer straight away (a user gesture: the Walk
+   * segment or key 3). Seated walks (place camera, go to room) pass false
+   * — no requestPointerLock until the user clicks the 3D view (#147).
+   */
+  autoLock?: boolean;
+  /** Spawn from this pose when it is legal (G4 / G15). */
+  pose?: WalkerPose | null;
 }
 
 /** Internal FSM phases; 'transition' parks input during fades. */
@@ -163,10 +153,7 @@ export function isEmptyPlan(plan: FloorplanData): boolean {
  * Not-composed readings for the plan-parity probes (issue #148). While
  * the empty state is up the scene holds the sky/ground backdrop — scenery,
  * NOT a plan — so `__viewerStats` reports exactly what it reported before
- * any plan was composed: no meshes, no slots, null wall/roof, −1
- * roughness. The e2e waits gate on `meshCount > 0`, so this keeps that
- * predicate meaning "the real plan is on screen" instead of latching onto
- * the backdrop at boot. Live-only channels (quality, frame median, sun
+ * any plan was composed. Live-only channels (quality, frame median, sun
  * pose, atlas generations) are never masked.
  */
 const EMPTY_VIEWER_STATS = {
@@ -184,14 +171,16 @@ const EMPTY_VIEWER_STATS = {
   wallVisible: null,
 };
 
+const WALK_HINT = 'WASD to move · Esc to release';
+
 /**
- * The viewer application controller. Instantiate once per page; call
- * dispose() on teardown.
+ * The 3D engine. Instantiate once per page; call dispose() on teardown.
  */
 export class ViewerApp {
   private readonly canvas: HTMLCanvasElement;
-  private readonly pane: HTMLElement;
-  private readonly bridgeSupplier: () => DataBridge | undefined;
+  private readonly source: PlanSource;
+  private readonly sink: ViewerUiSink;
+  private readonly gestureGate: () => boolean;
   private readonly scheduleTick: (
     cb: (now: number) => void,
   ) => (() => void) | void;
@@ -199,108 +188,49 @@ export class ViewerApp {
 
   private renderer: WebGLRenderer | null = null;
   private sceneRoot: ReturnType<typeof buildViewerScene> | null = null;
-  private hud!: HudHandles;
   private perf: PerfOverlay;
-  private unbindToggle: (() => void) | null = null;
-  private unbindCollapse: (() => void) | null = null;
 
-  /**
-   * Quality tier resolved at boot (#87's quality.ts — absorbed #86's
-   * inline parse per the batch-#85 arbitration); surfaces in
-   * __viewerStats. HIGH default, hostile values fail open to HIGH.
-   */
-  private readonly hiQuality: boolean;
-  private unbindRoofToggle: (() => void) | null = null;
-  private unbindSunTime: (() => void) | null = null;
-  private unbindSunNorth: (() => void) | null = null;
+  /** Live 3D settings (AppState.viewer, gap G5). */
+  private current: ViewerSettings;
+  /** Quality level the current scene was built at. */
+  private quality: QualityLevel;
 
-  /**
-   * Manual roof-visibility state (HUD toggle, issue #86).
-   */
+  /** Manual roof-visibility state (View tab toggle, issue #86). */
   private roofsShown = true;
 
-  /**
-   * Empty-plan state (issue #148): true while the plan has no rooms and
-   * the sky/ground backdrop + centered prompt stand in for the scene.
-   * Entered from refreshAdaptation BEFORE the validator sees the plan;
-   * left on the first successful compile.
-   */
+  /** Empty-plan state (issue #148). */
   private emptyStateActive = false;
 
-  /**
-   * Canvas-click listener of the LIVE walk rig (issue #147 CP2): rigs
-   * are swapped on respawn/teleport, so the previous listener's teardown
-   * is tracked here instead of accumulating in `disposers` (a stale
-   * listener would keep the dead rig reachable).
-   */
+  /** Canvas-click listener of the LIVE walk rig (issue #147 CP2). */
   private walkClickDisposer: (() => void) | null = null;
 
-  /** Unsubscribe thunk for the walkerLink command feed (issue #147). */
-  private unsubscribeWalkerCommands: (() => void) | null = null;
-
-  /** Unbind thunk for the go-to-room picker (issue #147 CP3). */
-  private unbindGotoRoom: (() => void) | null = null;
-
-  /**
-   * Newest plan that passed validation (issue #147 CP3): the readout and
-   * the room picker both describe ACCEPTED geometry, so they read from
-   * here instead of re-migrating the bridge's raw plan every frame.
-   * Main's `lastGood.adapted` already caches the ADAPTED scene; this
-   * field keeps the RAW validated plan for name/geometry lookups.
-   */
+  /** Newest plan that passed validation (issue #147 CP3). */
   private lastGoodPlan: FloorplanData | null = null;
 
-  /**
-   * Last string written to the HUD room readout (issue #147 CP3). The
-   * pump runs every frame, so the DOM only hears about transitions —
-   * write-on-change, same discipline as the walker pose publish.
-   */
-  private lastRoomReadout: string | null = null;
+  /** Last value sent to the room readout (write-on-change). */
+  private lastRoomReadout: string | null | undefined = undefined;
 
-  /** Walls-transparency slider (issue #120): unbind + normalized state. */
-  private unbindWallsAlpha: (() => void) | null = null;
+  /** Walls transparency (issue #120), normalised. */
   private wallsAlpha = 0;
 
-  /**
-   * Interior fill lights (issue #152): a FIXED pool of shadowless point
-   * lights, at most MAX_INTERIOR_LIGHTS of them, created once per scene
-   * build. Lights are only ever MOVED (position + intensity) — adding or
-   * removing one re-compiles every material in the scene.
-   */
+  /** Interior fill lights (issue #152). */
   private roomLightSpots: readonly RoomLightSpot[] = [];
   private interiorLights: PointLight[] = [];
-  /** Dusk-derived pool level (0 while the sun is up); see paintSun. */
   private interiorFillLevel = 0;
-  /** Pool lights currently carrying a room (stats + AC3 probe). */
   private interiorAssigned = 0;
-  /** Forces the next walk frame to re-pick the nearest rooms. */
   private interiorAssignDirty = true;
   private interiorTick = 0;
 
-  /** Sun/time-of-day settings (issue #121); defaults = the noon perch. */
-  private sunSettings: SunSettings = { ...DEFAULT_SUN_SETTINGS };
+  /** Sun/time-of-day settings (issue #121). */
+  private sunSettings: SunSettings;
 
-  /**
-   * Shadow-atlas generation counter (issue #121 fix round): increments
-   * once per rendered frame that regenerates the shadow atlas. The atlas
-   * is static unless needsUpdate asks (autoUpdate is OFF, #86) and the
-   * frame's render() consumes that flag; reading it immediately before
-   * render() therefore counts real regenerations, not intent — a stale
-   * refresh freezes this counter while the light pose still moves.
-   */
+  /** Shadow-atlas generation counter (issue #121 fix round). */
   private shadowAtlasGenerations = 0;
 
-  /**
-   * Autofade machinery (issue #86): upward-eye-ray raycaster against
-   * roof-slot meshes only, throttled to every Nth tick. Opacity tweens
-   * on the roof material; `transparent` is flipped on ONLY while an
-   * actual fade is in flight (restored to false at the extremes so the
-   * opaque fast path keeps its draw order).
-   */
+  /** Roof autofade machinery (issue #86). */
   private readonly roofRaycaster = new Raycaster();
   private roofFadeState: 'shown' | 'fading' | 'hidden' = 'shown';
   private tickCounter = 0;
-  /** Cached indoor verdict between throttled raycasts. */
   private indoor = false;
 
   private phase: Phase = 'overview';
@@ -311,168 +241,137 @@ export class ViewerApp {
 
   private lastGood: GoodSnapshot | null = null;
   private lastAcceptedSignature: string | null = null;
+  private accepted = 0;
 
-  /** Debounced poll machinery. */
-  private pollTimer: ReturnType<Window['setTimeout']> | null = null;
+  /** Store-driven rebuild debounce (gap G7). */
+  private rebuildTimer: ReturnType<Window['setTimeout']> | null = null;
 
+  /** Gap G6: the view is shown (the loop ticks only while true). */
+  private active = false;
   private rafCancel: (() => void) | null = null;
   private disposed = false;
   private lastFrameTime = -1;
-  /**
-   * Rolling RAW frame-time samples (#87), most recent last, capped at
-   * 60 — feeds the medianFrameMs stats probe. Raw (uncapped) values:
-   * the 0.1 s simulation-clamp must not hide real render cost.
-   */
   private readonly frameTimes: number[] = [];
   private readonly disposers: Array<() => void> = [];
 
   public constructor(opts: ControllerOpts) {
     this.canvas = opts.canvas;
-    this.pane = opts.pane;
-    this.bridgeSupplier = opts.bridge;
+    this.source = opts.source;
+    this.sink = opts.sink;
+    this.gestureGate = opts.gestureInProgress ?? (() => false);
     this.scheduleTick = opts.scheduleTick ?? defaultSchedule;
     this.setTimeoutFn = opts.setTimeoutFn ?? window.setTimeout.bind(window);
-    // Absorb #86's inline parse into #87's shared resolver (batch-#85
-    // arbitration): one owner of the ?quality param. Boot-time state.
     this.perf = new PerfOverlay(isPerfEnabled());
-    this.hiQuality = isHighQuality();
+    this.current = { ...opts.settings, sun: { ...opts.settings.sun } };
+    this.quality = opts.settings.quality;
+    this.roofsShown = opts.settings.roofs;
+    this.wallsAlpha = opts.settings.wallsAlpha;
+    this.sunSettings = normalizeSunSettings(opts.settings.sun);
   }
 
-  /** Boot: renderer, HUD, initial adaptation, RAF loop, poll timer. */
+  /** Boot: renderer, initial adaptation, store subscription, seams. */
   public start(): void {
     this.renderer = makeRenderer(this.canvas);
     // Wire the renderer's real anisotropy ceiling into the texture
-    // cache (#87). Conservative baked-in 4 until this point; harmless
-    // no-op when the environment lacks a GL context.
+    // cache (#87). Harmless no-op without a GL context.
     if (this.renderer) {
       setMaxAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
+      configureRenderer(this.renderer, this.quality);
     }
+    this.perf.mount(this.sink.perfHost);
 
-    this.hud = buildHud(this.pane);
-    this.perf.mount(this.hud);
-    // Mode segment (#146): each click requests the CLICKED mode — not a
-    // blind flip — so double clicks stay idempotent; reflectMode (boot
-    // and post-swap) marks the CURRENT segment.
-    this.unbindToggle = onBindModeSegment(this.hud, (next: ViewMode) =>
-      this.requestMode(next),
-    );
-    // Panel collapse (#146): reflect + persist per browser. buildHud
-    // already applied the persisted state, so a reload boots collapsed.
-    this.unbindCollapse = onBindCollapse(this.hud, (collapsed) => {
-      reflectCollapsed(this.hud, collapsed);
-      saveHudState(this.hud.storage, { collapsed });
-    });
-    // Roof visibility toggle (issue #86): flips every roof-slot mesh;
-    // reflection keeps the button label/aria in step with reality.
-    this.unbindRoofToggle = onBindRoofToggle(
-      this.hud,
-      () => this.roofsShown,
-      (visible) => this.setRoofsVisible(visible),
-    );
-    reflectRoofVisibility(this.hud, this.roofsShown);
-    // Walls-transparency slider (issue #120): normalized alpha →
-    // wall-material applier; reflect the boot state like the roof pair.
-    this.unbindWallsAlpha = onBindWallsAlpha(this.hud, (alpha) =>
-      this.setWallsAlpha(alpha),
-    );
-    reflectWallsAlpha(this.hud, this.wallsAlpha);
-    // Sun controls (issue #121): time-of-day + north-offset sliders —
-    // the same single-owner binder pattern; reflect so the HUD always
-    // mirrors the controller's state.
-    this.unbindSunTime = onBindSunTime(this.hud, (hours) => {
-      this.applySunSettings({ timeHours: hours });
-    });
-    this.unbindSunNorth = onBindSunNorth(this.hud, (deg) => {
-      this.applySunSettings({ northOffsetDeg: deg });
-    });
-    reflectSunSettings(this.hud, this.sunSettings);
-
-    // Issue #147 CP3: go-to-room picker. The editor's teleports have a
-    // keyboard path; the viewer needs one of its own — a native select
-    // fed from the ACCEPTED plan (populateRoomPicker runs inside
-    // refreshAdaptation). Choices ride the same walkerLink command feed
-    // the 2D pane uses, so the teleport semantics (autoLock=false,
-    // storey resolution) are shared, never duplicated.
-    this.unbindGotoRoom = onBindGotoRoom(this.hud, (roomId) => {
-      void this.handleWalkerCommand({ kind: 'gotoRoom', roomId });
-    });
+    // Issue #178 (G7): the editor store drives rebuilds.
+    const off = this.source.subscribe(() => this.onPlanChanged());
+    this.disposers.push(off);
     this.disposers.push(() => {
-      this.unbindGotoRoom?.();
-      this.unbindGotoRoom = null;
-    });
-
-    // Tab toggles overview ⇄ walk (README-promised; formerly unwired —
-    // the e2e descended vacuously). Skipped while typing in form fields.
-    const onTabKey = (ev: KeyboardEvent): void => {
-      if (ev.key !== 'Tab' || ev.ctrlKey || ev.altKey || ev.metaKey) return;
-      const tgt = ev.target as HTMLElement | null;
-      if (
-        tgt &&
-        (tgt.tagName === 'INPUT' ||
-          tgt.tagName === 'TEXTAREA' ||
-          tgt.isContentEditable)
-      ) {
-        return; // let accessibility-focused Tab behave normally
-      }
-      ev.preventDefault();
-      this.requestMode(this.phase === 'walk' ? 'overview' : 'walk');
-    };
-    window.addEventListener('keydown', onTabKey);
-    this.disposers.push(() =>
-      window.removeEventListener('keydown', onTabKey),
-    );
-
-    // Issue #147 CP2: listen for 2D-pane walk commands (place camera,
-    // go-to-room). Subscribed at start, so a command arriving before the
-    // first frame is still honoured; the initial null publication tells a
-    // late editor subscriber that no walker exists yet.
-    this.unsubscribeWalkerCommands = subscribeCommands((cmd) => {
-      void this.handleWalkerCommand(cmd);
-    });
-    this.disposers.push(() => {
-      this.unsubscribeWalkerCommands?.();
-      this.unsubscribeWalkerCommands = null;
-      publishPose(null);
+      if (this.rebuildTimer !== null) clearTimeout(this.rebuildTimer);
+      this.rebuildTimer = null;
     });
 
     this.refreshAdaptation(true);
-    reflectMode(this.hud, 'overview');
     this.seatRig('overview');
 
-    // Issue #30: controller-level pointer-lock watcher. On lock the walk
-    // entry prompt gives way to the reticle; the unlock side is handled
-    // by the rig's onUnlock→overview path (which clears both).
+    // Issue #30: on lock the entry prompt gives way to the reticle; the
+    // unlock side is the rig's onUnlock path (wireWalkRig).
     const onLockChange = (): void => {
       if (this.phase !== 'walk' || !this.walkCam) return;
       if (this.walkCam.locked) {
-        setWalkAffordances(this.hud, { overlay: false, reticle: true });
-        // Entry prompt gives way to the controls hint (#146); the strip
-        // stays bottom-center, OUTSIDE the docked panel.
-        showHint(this.hud, 'WASD to move · Esc to release');
+        this.sink.walkAffordances({ overlay: false, reticle: true });
+        this.sink.hint(WALK_HINT);
       }
     };
     document.addEventListener('pointerlockchange', onLockChange);
-    this.disposers.push(() =>
-      document.removeEventListener('pointerlockchange', onLockChange),
-    );
-    // Publish the debug seams BEFORE the first RAF so a probe arriving
-    // between start() and frame one never observes them missing.
+    this.disposers.push(() => document.removeEventListener('pointerlockchange', onLockChange));
+
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => this.resizeRenderer()) : null;
+    ro?.observe(this.canvas);
+    this.disposers.push(() => ro?.disconnect());
+
+    // Publish the debug seams before the first frame so a probe arriving
+    // early never observes them missing.
     this.publishDebugSeams(this.liveCamera());
-    this.startLoop();
-    this.armDebouncePoll();
   }
 
-  /* ---------------------------------- FSM ---------------------------------- */
+  /* ---------------------------- workspace API ------------------------------ */
 
-  /** Mode request from the HUD toggle (ignored mid-transition). */
-  public requestMode(next: ViewMode): void {
-    if (this.disposed || this.phase === 'transition') return;
-    // Issue #148: nothing to walk in while the plan has no rooms. The
-    // toggle is parked in the empty state; this guard holds the same
-    // invariant for the Tab handler and programmatic callers.
-    if (next === 'walk' && this.lastGood === null) return;
-    if (next === this.viewMode()) return;
-    void this.swapModes(next);
+  /**
+   * Show / hide the 3D view (gap G6). Hidden: the loop stops ticking (the
+   * scene keeps rebuilding from store changes so a switch is instant)
+   * and a live walk ends at once, parking the pose (G4). Shown: resize,
+   * reframe the orbit rig against the real canvas, start ticking.
+   */
+  public setActive(active: boolean): void {
+    if (this.disposed || active === this.active) return;
+    this.active = active;
+    if (!active) {
+      this.rafCancel?.();
+      this.rafCancel = null;
+      if (this.phase === 'walk' || this.walkCam) this.leaveWalkNow();
+      return;
+    }
+    this.resizeRenderer();
+    const adapted = this.lastGood?.adapted ?? (this.emptyStateActive ? emptyAdaptedScene() : null);
+    if (adapted && this.orbitCam) this.orbitCam.reframe(adapted);
+    this.lastFrameTime = -1;
+    this.startLoop();
+  }
+
+  /** Mode request (Walk segment, keys 2/3, place camera). */
+  public requestMode(next: ViewMode, opts: ModeRequest = {}): boolean {
+    if (this.disposed || this.phase === 'transition') return false;
+    // Issue #148: nothing to walk in while the plan has no rooms.
+    if (next === 'walk' && this.lastGood === null) return false;
+    if (next === this.viewMode()) {
+      // Already walking: a pose request re-seats the walker there.
+      if (next === 'walk' && opts.pose) this.seatWalkerAt(opts.pose);
+      return true;
+    }
+    void this.swapModes(next, opts.autoLock ?? true, opts.pose ?? null);
+    return true;
+  }
+
+  /** Something can be walked in and no swap is under way. */
+  public canWalk(): boolean {
+    return !this.disposed && this.lastGood !== null && this.phase !== 'transition';
+  }
+
+  /** A mode transition is in flight. */
+  public busy(): boolean {
+    return this.phase === 'transition';
+  }
+
+  public mode(): ViewMode {
+    return this.viewMode();
+  }
+
+  /** Live 3D settings (copy). */
+  public settings(): ViewerSettings {
+    return { ...this.current, sun: { ...this.current.sun } };
+  }
+
+  /** Accepted compiles since boot (observability seam). */
+  public rebuildCount(): number {
+    return this.accepted;
   }
 
   /** Test/observability seam: signature of the currently ACCEPTED plan. */
@@ -480,29 +379,56 @@ export class ViewerApp {
     return this.lastAcceptedSignature;
   }
 
+  /** AppState.viewer changed (View tab). */
+  public applySettings(next: ViewerSettings): void {
+    const prev = this.current;
+    this.current = { ...next, sun: { ...next.sun } };
+    if (next.quality !== this.quality) {
+      this.quality = next.quality;
+      if (this.renderer) configureRenderer(this.renderer, this.quality);
+      const adapted = this.lastGood?.adapted ?? (this.emptyStateActive ? emptyAdaptedScene() : null);
+      if (adapted) this.renderScene(adapted, true);
+    }
+    if (next.roofs !== prev.roofs) this.setRoofsVisible(next.roofs);
+    if (next.wallsAlpha !== prev.wallsAlpha) this.setWallsAlpha(next.wallsAlpha);
+    if (next.ceilings !== prev.ceilings) this.applyCeilings();
+    if (next.sun.timeHours !== prev.sun.timeHours || next.sun.northOffsetDeg !== prev.sun.northOffsetDeg) {
+      this.applySunSettings(next.sun);
+    }
+  }
+
+  /**
+   * Go-to-room (the room pill's menu, issue #147 CP3): enters Walk seated
+   * when needed, then teleports into that room on its own storey.
+   */
+  public async gotoRoom(roomId: string): Promise<void> {
+    if (this.disposed || this.phase === 'transition') return;
+    if (this.phase !== 'walk') {
+      if (this.lastGood === null) return;
+      await this.swapModes('walk', false, null);
+    }
+    if (this.disposed || this.phase !== 'walk' || !this.walkCam) return;
+    this.gotoRoomNow(roomId);
+  }
+
+  /* ---------------------------------- FSM ---------------------------------- */
+
   private viewMode(): ViewMode {
     return this.phase === 'walk' ? 'walk' : 'overview';
   }
 
-  /**
-   * Swap rigs across the fade.
-   *
-   * `autoLock` (issue #147 CP2): the Walk-button path is a user gesture
-   * and tries to lock immediately; the command path (place-camera /
-   * go-to-room, seated from the 2D pane) must NOT — AC "pointer lock is
-   * not requested until the user clicks the 3D pane" — so it seats the
-   * rig with the overlay up and leaves the click-to-lock flow to the
-   * user.
-   */
-  private async swapModes(next: ViewMode, autoLock = true): Promise<void> {
+  /** Swap rigs across the fade. */
+  private async swapModes(next: ViewMode, autoLock: boolean, pose: WalkerPose | null): Promise<void> {
     this.phase = 'transition';
-    await playFade(this.hud);
+    await this.sink.fade();
     if (this.disposed) return;
 
     // Pose preservation across the seam (orbit azimuth survives walks).
     if (this.orbitCam && next === 'walk') {
       this.preservedAzimuth = this.orbitCam.azimuthDegrees;
     }
+    const leavingWalk = this.walkCam !== null;
+    if (leavingWalk) this.parkPose();
 
     this.rig?.deactivate();
     this.walkCam = null;
@@ -513,81 +439,97 @@ export class ViewerApp {
     if (!adapted) {
       this.phase = 'overview';
       this.seatRig('overview');
+      this.sink.modeChanged('overview');
       return;
     }
 
     if (next === 'walk') {
-      this.walkCam = this.makeWalkRig(adapted);
+      this.walkCam = this.makeWalkRig(adapted, pose);
       this.rig = this.walkCam;
       this.phase = 'walk';
-      // Ceilings policy (#152): the walker is inside the building, so the
-      // slats overhead are visible again (fresh meshes arrive visible;
-      // this re-shows them after an overview spell).
-      this.setCeilingsVisible(true);
-      showHint(this.hud, 'Click to walk');
-      // Issue #30: prompt for entry; reticle comes up on lock.
-      setWalkAffordances(this.hud, { overlay: true, reticle: false });
-      // The Walk-button click is a user gesture, so try to lock straight
-      // away. If the browser defers/refuses, the promise throws (or the
-      // call no-ops) and the overlay stays up — graceful fallback to the
-      // existing canvas-click re-lock flow below.
-      //
-      // Command-seated swaps (issue #147) pass autoLock=false and skip
-      // this entirely: no requestPointerLock attempt until the user
-      // clicks the 3D pane.
+      this.applyCeilings();
+      this.sink.hint('');
+      this.sink.walkAffordances({ overlay: true, reticle: false });
       if (autoLock) {
         try {
           this.walkCam.requestLock();
         } catch {
-          /* lock refused/deferred: overlay remains the entry affordance */
+          /* lock refused/deferred: the prompt remains the entry affordance */
         }
       }
     } else {
       this.orbitCam = this.makeOrbitRig(adapted);
       this.rig = this.orbitCam;
       this.phase = 'overview';
-      // Ceilings policy (#152): the dollhouse overview never shows the
-      // ceiling lid — roofs/upper-storey slabs are the overview lid, and
-      // hiding the slats is what lets the top-down camera see inside.
-      this.setCeilingsVisible(false);
-      // Exiting walk lifts any autofade: overview spectators always see
-      // the roofs at full opacity (manual-hide via the HUD still works).
-      for (const mesh of this.roofMeshes()) {
-        const mat = mesh.material as MeshStandardMaterial;
-        mat.opacity = 1;
-        mat.transparent = false;
-      }
-      this.roofFadeState = 'shown';
-      this.indoor = false;
-      showHint(this.hud, '');
-      // Leaving walk clears both affordances (toggling out is not an
-      // unlock event, so the pointerlockchange path cannot cover it).
-      setWalkAffordances(this.hud, { overlay: false, reticle: false });
+      this.applyCeilings();
+      this.resetRoofFade();
+      this.sink.hint('');
+      this.sink.walkAffordances({ overlay: false, reticle: false });
     }
-    reflectMode(this.hud, this.phase as ViewMode);
+    this.updateRoomReadout();
+    this.sink.modeChanged(this.viewMode());
+  }
+
+  /** Leave walk without a fade (the view was hidden). */
+  private leaveWalkNow(): void {
+    if (this.walkCam) this.parkPose();
+    this.rig?.deactivate();
+    this.walkCam = null;
+    this.orbitCam = null;
+    this.rig = null;
+    this.phase = 'overview';
+    const adapted = this.lastGood?.adapted ?? (this.emptyStateActive ? emptyAdaptedScene() : null);
+    if (adapted) {
+      this.orbitCam = this.makeOrbitRig(adapted);
+      this.rig = this.orbitCam;
+    }
+    this.applyCeilings();
+    this.resetRoofFade();
+    this.sink.hint('');
+    this.sink.walkAffordances({ overlay: false, reticle: false });
+    this.updateRoomReadout();
+    this.sink.modeChanged('overview');
+  }
+
+  /** Exiting walk lifts any roof autofade (overview sees full roofs). */
+  private resetRoofFade(): void {
+    for (const mesh of this.roofMeshes()) {
+      const mat = mesh.material as MeshStandardMaterial;
+      mat.opacity = 1;
+      mat.transparent = false;
+    }
+    this.roofFadeState = 'shown';
+    this.indoor = false;
   }
 
   private makeOrbitRig(adapted: AdaptedScene): OrbitRig {
     return new OrbitRig(this.canvas, adapted, this.preservedAzimuth);
   }
 
-  /** Fabricate a walk rig; solves spawn, surfacing typed failure. */
-  private makeWalkRig(adapted: AdaptedScene): WalkRig {
+  /**
+   * Fabricate a walk rig. Gap G4: spawn from the given pose when its
+   * storey exists (floorIdx clamped) and its footing is legal; otherwise
+   * solve a spawn on the ground storey as before.
+   */
+  private makeWalkRig(adapted: AdaptedScene, pose: WalkerPose | null = null): WalkRig {
     const plan = this.currentPlanSafe();
+    if (pose && plan && plan.floors.length > 0) {
+      const idx = Math.min(Math.max(Math.round(pose.floorIdx), 0), plan.floors.length - 1);
+      const elevation = plan.floors[idx]?.elevation ?? adapted.activeFloorElevation;
+      if (Number.isFinite(pose.x) && Number.isFinite(pose.y) && isStandingLegal(pose.x, pose.y, adapted, elevation)) {
+        const rig = new WalkRig(this.canvas, adapted, pose.x, pose.y, pose.yawRad, elevation);
+        this.wireWalkRig(rig);
+        return rig;
+      }
+    }
     let spawn = { x: 0, y: 0, yaw: 0 };
     if (plan) {
       try {
-        // Solve ONLY within the active storey's rooms (issue #76): the
-        // largest room ACROSS ALL FLOORS could sit upstairs, stranding
-        // the walker on the wrong storey. The walk rig grounds itself
-        // at the same floor via adapted.activeFloorElevation.
+        // Solve ONLY within the active storey's rooms (issue #76).
         spawn = solveSpawn(activeRooms(plan), adapted.collisions);
       } catch (err) {
-        if (err instanceof SpawnFailureError) {
-          toast(this.hud, err.message, 'error');
-        } else {
-          throw err;
-        }
+        if (err instanceof SpawnFailureError) this.sink.toast(err.message, 'error');
+        else throw err;
       }
     }
     const rig = new WalkRig(this.canvas, adapted, spawn.x, spawn.y, spawn.yaw);
@@ -596,89 +538,44 @@ export class ViewerApp {
   }
 
   /**
-   * Attach the walk-rig interaction wiring (issue #147 CP2 extraction):
-   * the unlock⇄overview path plus canvas-click re-lock. Shared by the
-   * fresh walk rig and every rig the teleports swap in — before the
-   * extraction a replaced rig lost its onUnlock wiring, which silently
-   * killed "ESC returns to orbit" after a respawn or a teleport.
+   * Walk-rig wiring shared by every rig (fresh, respawned, teleported).
+   * Lead ruling C3: an unlock (Esc) releases the pointer and STAYS in the
+   * Walk view with the "Click to walk" prompt; leaving Walk happens only
+   * through the view segment or keys 1 and 2.
    */
   private wireWalkRig(rig: WalkRig): void {
     rig.onUnlock(() => {
-      // ESC (or any unlock) RETURNS TO OVERVIEW per issue #6's AC
-      // ("ESC returns to orbit, lock released cleanly"). The prior
-      // auto-relock behavior trapped the user in walk mode.
-      setWalkAffordances(this.hud, { overlay: false, reticle: false });
-      void this.requestMode('overview');
+      if (this.walkCam !== rig) return;
+      this.sink.walkAffordances({ overlay: true, reticle: false });
+      this.sink.hint('');
     });
-
-    // Canvas click re-attempt locking (cooldown-gated inside the rig).
-    // Only the LIVE rig keeps a listener: rigs are swapped on respawn
-    // and teleport, and stacked listeners would pin the dead rig (and
-    // its camera) in memory.
     this.walkClickDisposer?.();
     const onClick = (): void => {
       if (this.phase === 'walk' && !rig.locked) rig.requestLock();
     };
     this.canvas.addEventListener('click', onClick);
-    this.walkClickDisposer = () =>
-      this.canvas.removeEventListener('click', onClick);
+    this.walkClickDisposer = () => this.canvas.removeEventListener('click', onClick);
   }
 
-  /* --------------------------- walker telemetry ---------------------------- */
-
-  /**
-   * Editor → viewer walk commands (issue #147 CP2): teleport the walker
-   * from the 2D plan. Handlers are fire-and-forget — the editor cannot
-   * await the mode fade and must not block its own UI — so the viewer's
-   * guards (disposed / mid-transition) drop commands that arrive during
-   * a swap.
-   *
-   * Sub-plan judgment: seating walk mode from a command passes
-   * autoLock=false, i.e. it performs ZERO requestPointerLock attempts
-   * (AC: pointer lock is not requested until the user clicks the 3D
-   * pane). The 'Click to walk' overlay stays up as the invitation —
-   * the same affordance the Walk button leaves behind when the browser
-   * defers the lock.
-   */
-  private async handleWalkerCommand(cmd: WalkerCommand): Promise<void> {
-    if (this.disposed || this.phase === 'transition') return;
-    if (this.phase !== 'walk') {
-      await this.swapModes('walk', false);
-    }
-    if (this.disposed || this.phase !== 'walk' || !this.walkCam) return;
-    if (cmd.kind === 'place') {
-      this.placeWalker(cmd.x, cmd.y, cmd.yaw, cmd.floorIdx);
-    } else {
-      this.gotoRoom(cmd.roomId);
-    }
-  }
-
-  /** Place-camera teleport: an explicit plan point on an explicit storey. */
-  private placeWalker(
-    x: number,
-    y: number,
-    yaw: number,
-    floorIdx: number,
-  ): void {
+  /** Re-seat a live walker at a pose (place camera while walking). */
+  private seatWalkerAt(pose: WalkerPose): void {
     const adapted = this.lastGood?.adapted;
     if (!adapted) return;
-    const plan = this.currentPlanSafe();
-    const elevation =
-      plan?.floors[floorIdx]?.elevation ?? adapted.activeFloorElevation;
-    this.replaceWalkRig(x, y, yaw, elevation);
+    this.walkCam?.deactivate();
+    const rig = this.makeWalkRig(adapted, pose);
+    this.walkCam = rig;
+    this.rig = rig;
+    this.sink.walkAffordances({ overlay: true, reticle: false });
   }
 
   /**
    * Go-to-room teleport: resolve the room's OWN storey, solve a spawn
-   * inside that room (never the plan-wide largest room) and seat the
-   * walker there. Satisfies "choosing one spawns the walker at that
-   * room's centroid, switching floors as needed".
+   * inside that room and seat the walker there.
    */
-  private gotoRoom(roomId: string): void {
+  private gotoRoomNow(roomId: string): void {
     const adapted = this.lastGood?.adapted;
     const plan = this.currentPlanSafe();
     if (!adapted || !plan) return;
-
     let floor: FloorplanData['floors'][number] | undefined;
     let room: FloorplanData['floors'][number]['rooms'][number] | undefined;
     for (const f of plan.floors) {
@@ -690,56 +587,53 @@ export class ViewerApp {
       }
     }
     if (!floor || !room) {
-      toast(this.hud, 'That room is not in the current plan.', 'error');
+      this.sink.toast('That room is not in the current plan.', 'error');
       return;
     }
-
     try {
-      const pose = solveSpawnInRoom(
-        room,
-        activeCollisions(adapted, floor.elevation),
-      );
+      const pose = solveSpawnInRoom(room, activeCollisions(adapted, floor.elevation));
       this.replaceWalkRig(pose.x, pose.y, pose.yaw, floor.elevation);
     } catch (err) {
-      if (err instanceof SpawnFailureError) {
-        toast(this.hud, err.message, 'error');
-      } else {
-        throw err;
-      }
+      if (err instanceof SpawnFailureError) this.sink.toast(err.message, 'error');
+      else throw err;
     }
   }
 
-  /**
-   * Publish the walker pose to the 2D pane (issue #147 CP2): disc x/y,
-   * runtime heading yaw, attributed storey, mode. Publishing null while
-   * no walk rig is live RETRACTS the editor glyph — leaving walk mode
-   * must not strand a marker on the plan.
-   */
-  private publishWalkerPose(): void {
+  /* --------------------------- walker telemetry ---------------------------- */
+
+  /** The live walker's pose (null when not walking). */
+  private livePose(): WalkerPose | null {
+    return this.phase === 'walk' ? this.rigPose() : null;
+  }
+
+  /** The walk rig's pose in plan space, whatever the phase. */
+  private rigPose(): WalkerPose | null {
     const walk = this.walkCam;
-    if (this.phase !== 'walk' || !walk) {
-      publishPose(null);
-      return;
-    }
+    if (!walk) return null;
     const plan = this.currentPlanSafe();
     const disc = walk.discPosition;
-    const z = walk.currentZ;
-    publishPose({
+    return {
       x: disc.x,
       y: disc.y,
       yawRad: walk.headingYaw,
-      floorIdx: plan ? attributeFloorIdx(plan.floors, z) : 0,
+      floorIdx: plan ? attributeFloorIdx(plan.floors, walk.currentZ) : 0,
       mode: 'walk',
-    });
+    };
   }
 
-  /**
-   * Issue #147 CP3: HUD room readout. Shows the name of the room the
-   * walker stands in on its ATTRIBUTED storey (walkNav.roomReadoutAt —
-   * the same query the pose publish uses, never a second copy of the
-   * rule), or hides entirely when there is no live walker. Runs per
-   * frame but writes only on change.
-   */
+  /** Publish the walker pose to the Plan glyph every walk frame. */
+  private publishWalkerPose(): void {
+    const pose = this.livePose();
+    if (pose) publishPose(pose);
+  }
+
+  /** Gap G4: leaving walk keeps the last pose, marked as parked. */
+  private parkPose(): void {
+    const pose = this.rigPose();
+    if (pose) publishPose({ ...pose, mode: 'overview' });
+  }
+
+  /** Room readout (issue #147 CP3): write-on-change, null off walk. */
   private updateRoomReadout(): void {
     const walk = this.walkCam;
     let text: string | null = null;
@@ -749,21 +643,14 @@ export class ViewerApp {
     }
     if (text === this.lastRoomReadout) return;
     this.lastRoomReadout = text;
-    reflectRoomReadout(this.hud, text);
+    this.sink.roomReadout(text);
   }
 
-  /**
-   * Issue #147 CP5: programmatic twin of the room readout for the e2e
-   * seam (`__viewerStats`). Shares roomReadoutAt/attributeFloorIdx with
-   * the HUD path — one attribution rule, two readers. Null/blank when
-   * walk mode is not live (mirrors the hidden span).
-   */
+  /** Programmatic twin of the room readout for `__viewerStats`. */
   private walkNavProbe(): { roomName: string | null; floorIdx: number | null } {
     const walk = this.walkCam;
     const plan = this.lastGoodPlan;
-    if (this.phase !== 'walk' || !walk || !plan) {
-      return { roomName: null, floorIdx: null };
-    }
+    if (this.phase !== 'walk' || !walk || !plan) return { roomName: null, floorIdx: null };
     const disc = walk.discPosition;
     return {
       roomName: roomReadoutAt(plan, disc.x, disc.y, walk.currentZ),
@@ -771,35 +658,28 @@ export class ViewerApp {
     };
   }
 
-  /** Issue #147 CP3: rebuild the go-to-room picker from an accepted plan. */
-  private populateRoomPickerFrom(plan: FloorplanData): void {
-    populateRoomPicker(
-      this.hud,
-      plan.floors.map((floor) => ({
-        name: floor.name,
-        rooms: floor.rooms.map((room) => ({ id: room.id, name: room.name })),
-      })),
-    );
-  }
-
   /* ------------------------------- adaptation ------------------------------- */
 
-  /**
-   * Latest plan from the bridge, MIGRATED to the current schema
-   * (undefined when unavailable/dirty/unmigratable). Single choke
-   * point: every internal consumer gets current-shape v2 data.
-   * Prefers getCurrent() (all storeys, issue #76); falls back to the
-   * frozen v1 getData() for bridges that predate it.
-   */
+  /** Store notify → debounced rebuild; waits out 2D gestures (G7). */
+  private onPlanChanged(): void {
+    if (this.disposed) return;
+    if (this.rebuildTimer !== null) clearTimeout(this.rebuildTimer);
+    const fire = (): void => {
+      this.rebuildTimer = null;
+      if (this.disposed) return;
+      if (this.gestureGate()) {
+        this.rebuildTimer = this.setTimeoutFn(fire, RECOMPILE_DEBOUNCE_MS);
+        return;
+      }
+      this.refreshAdaptation(false);
+    };
+    this.rebuildTimer = this.setTimeoutFn(fire, RECOMPILE_DEBOUNCE_MS);
+  }
+
+  /** Latest plan, migrated to the current schema (undefined if unusable). */
   private currentPlanSafe(): FloorplanData | undefined {
-    const bridge = this.bridgeSupplier();
-    if (!bridge) return undefined;
     try {
-      const raw =
-        bridge.getCurrent !== undefined
-          ? bridge.getCurrent()
-          : bridge.getData();
-      const mig = migrate(raw);
+      const mig = migrate(this.source.current());
       return mig.ok && mig.data ? mig.data : undefined;
     } catch {
       return undefined;
@@ -807,37 +687,25 @@ export class ViewerApp {
   }
 
   /**
-   * Validate-before-render: compile+adapt the freshest plan; on ANY
-   * failure retain the last GOOD adaptation (toast + keep rendering),
-   * never propagate upward.
+   * Validate-before-render: compile + adapt a SNAPSHOT of the freshest
+   * plan; on ANY failure keep the last GOOD adaptation (toast) and never
+   * propagate upward.
    */
   private refreshAdaptation(initial: boolean): void {
-    const plan = this.currentPlanSafe();
-    if (!plan) {
-      if (initial) toast(this.hud, 'Waiting for the editor bridge…', 'info');
-      return;
-    }
+    const live = this.currentPlanSafe();
+    if (!live) return;
+    const sig = planSignature(live);
 
-    const sig = planSignature(plan);
-
-    // Issue #148: a room-less plan is NOT an error. Classify before the
-    // validator is consulted (its ≥1-room rule stays intact) and stand
-    // the scene down to the empty state instead of re-toasting every
-    // 250ms poll.
-    if (isEmptyPlan(plan)) {
+    // Issue #148: a room-less plan is the empty state, not an error.
+    if (isEmptyPlan(live)) {
       this.enterEmptyState();
       return;
     }
+    if (!initial && sig === this.lastAcceptedSignature) return;
 
-    if (!initial && sig === this.lastAcceptedSignature) {
-      return; // unchanged since the last accepted compile
-    }
-
+    // Gap G7: reducers mutate the store's plan in place — compile a copy.
+    const plan = JSON.parse(sig) as FloorplanData;
     try {
-      // currentPlanSafe() already ran migrate-at-the-door (the bridge's
-      // wire format is frozen v1 — see editor/wire.ts), so the
-      // validator only ever sees current-shape data; raw v1 is still
-      // rejected by validateFloorplan itself (unsupported-version).
       const validated = parseValidatedPlan(plan);
       const compiled = compilePlan(validated);
       const adapted = adaptScene(
@@ -847,195 +715,122 @@ export class ViewerApp {
         validated.wallThickness,
         validated,
       );
-
       if (sceneHasNaN(adapted.buckets.map((b) => b.positions))) {
         throw new Error('compiled scene contains NaN coordinates');
       }
-
       const changedShape = this.lastGood !== null;
-      // Issue #148: a successful compile means the plan is valid again —
-      // leave the empty state if it was active, retract the failure toast
-      // it superseded, and seat an eye when none survived the empty or
-      // failed stretch, so the accepted scene is really in frame.
       this.exitEmptyState();
       this.lastGood = { adapted, planSignature: sig };
       this.lastAcceptedSignature = sig;
-      // Floor readout (#146): the viewer pins floors[0] — the lowest
-      // storey the adapter grounds every rig on — so the readout names
-      // THAT floor: truthful about what is RENDERED (sub-plan decision a).
-      reflectFloorName(this.hud, validated.floors[0]?.name ?? '');
-      // Issue #148: the plan is valid again — retract the stale failure
-      // toast and reseat the overview rig if the empty stretch unseated it.
-      dismissErrorToasts(this.hud);
-      if (this.phase === 'overview' && !this.orbitCam) {
-        this.seatRig('overview');
-      }
-      // Issue #147 CP3: the ACCEPTED plan feeds the walk-nav aids. Kept
-      // beside lastGood (same acceptance point) so an invalid
-      // intermediate never moves the room readout or the picker.
+      this.accepted += 1;
+      this.sink.dismissErrors();
+      if (this.phase === 'overview' && !this.orbitCam) this.seatRig('overview');
       this.lastGoodPlan = validated;
-      this.populateRoomPickerFrom(validated);
+      this.sink.roomList(
+        validated.floors.map((floor) => ({
+          name: floor.name,
+          rooms: floor.rooms.map((room) => ({ id: room.id, name: room.name })),
+        })),
+      );
       this.renderScene(adapted, changedShape);
     } catch (err) {
-      // INVALID INTERMEDIATE: keep rendering the last good scene.
       const msg = err instanceof Error ? err.message : String(err);
-      if (this.lastGood === null) {
-        toast(this.hud, `Cannot render plan: ${msg}`, 'error');
-      } else {
-        toast(this.hud, 'Recompile failed — keeping last good view', 'error');
-      }
+      if (this.lastGood === null) this.sink.toast(`Cannot render plan: ${msg}`, 'error');
+      else this.sink.toast('Recompile failed — keeping last good view', 'error');
     }
   }
 
   /**
-   * Enter the empty-plan state (issue #148): a room-less plan gets the
-   * sky/ground backdrop, the centered prompt and a parked Walk toggle —
-   * never a validator toast. Idempotent: the poll reaches this branch on
-   * every cycle while the plan stays empty.
-   *
-   * lastGood/lastAcceptedSignature are cleared so the first real room
-   * re-seats fully instead of reframing a scene the user has deleted.
+   * Enter the empty-plan state (issue #148): the backdrop scene, the 3D
+   * empty card, no walk. Idempotent.
    */
   private enterEmptyState(): void {
     if (this.emptyStateActive) return;
     this.emptyStateActive = true;
-
+    if (this.walkCam) this.parkPose();
     this.lastGood = null;
     this.lastAcceptedSignature = null;
-
-    // Tear the live rig down FIRST — a walk rig has no rooms to stand in
-    // (same deactivate pattern as a mode swap). The rebuilt backdrop rig
-    // below takes its place.
     this.rig?.deactivate();
     this.walkCam = null;
     this.orbitCam = null;
     this.rig = null;
+    const wasWalk = this.phase === 'walk';
     this.phase = 'overview';
-    // Mirrors the walk-exit reset: no autofade can be mid-flight.
     this.roofFadeState = 'shown';
     this.indoor = false;
-
-    setEmptyState(this.hud, true);
-    setWalkDisabled(this.hud, true);
-    setWalkAffordances(this.hud, { overlay: false, reticle: false });
-    showHint(this.hud, '');
-    reflectMode(this.hud, 'overview');
-
-    // Backdrop: the normal builder fed the neutral, geometry-free scene
-    // (defined in sceneBuilder), then an orbit rig framed on its plot so
-    // the empty stage still renders and orbits.
+    this.sink.emptyState(true);
+    this.sink.walkAffordances({ overlay: false, reticle: false });
+    this.sink.hint('');
+    this.sink.roomList([]);
+    this.updateRoomReadout();
+    if (wasWalk) this.sink.modeChanged('overview');
     const empty = emptyAdaptedScene();
     this.renderScene(empty, false);
     this.orbitCam = this.makeOrbitRig(empty);
     this.rig = this.orbitCam;
   }
 
-  /**
-   * Leave the empty state (issue #148): the prompt goes away, Walk
-   * becomes available again and the toggle mirrors overview. Returns
-   * true only when this call actually left the state.
-   */
+  /** Leave the empty state (issue #148); true when it was active. */
   private exitEmptyState(): boolean {
     if (!this.emptyStateActive) return false;
     this.emptyStateActive = false;
-
-    // The backdrop rig is display-only scenery, not the plan's camera.
-    // Tear it down (and drop the azimuth it carried), so the first real
-    // plan re-seats from the cold-boot path — otherwise the backdrop's
-    // plot-derived pose leaks into the plan's overview framing.
     this.rig?.deactivate();
     this.orbitCam = null;
     this.walkCam = null;
     this.rig = null;
     this.phase = 'overview';
     this.preservedAzimuth = undefined;
-
-    setEmptyState(this.hud, false);
-    setWalkDisabled(this.hud, false);
-    reflectMode(this.hud, this.phase as ViewMode);
+    this.sink.emptyState(false);
     return true;
   }
 
   /** Swap the drawn scene graph for a freshly adapted one. */
   private renderScene(adapted: AdaptedScene, preservePose: boolean): void {
     if (!this.renderer) return;
+    if (preservePose && this.orbitCam) this.preservedAzimuth = this.orbitCam.azimuthDegrees;
 
-    if (preservePose && this.orbitCam) {
-      this.preservedAzimuth = this.orbitCam.azimuthDegrees;
-    }
-
-    // Quality as #87's boolean resolver → the builder's level union
-    // (absorbed inline parse, batch-#85 arbitration).
-    const rebuilt = buildViewerScene(adapted, this.hiQuality ? 'high' : 'low');
+    // buildViewerScene(adapted, quality, forceLowMaterials) — the quality
+    // level now comes from AppState (View tab), seeded by ?quality=.
+    const rebuilt = buildViewerScene(adapted, this.quality);
     paintSky(rebuilt.scene);
-
     if (this.sceneRoot) {
       disposeObject(this.sceneRoot.lightGroup);
       disposeObject(this.sceneRoot.scene);
     }
     this.sceneRoot = rebuilt;
-    // Re-apply the live sun settings onto the fresh lights (issue #121):
-    // every rebuild recreates the light group, so the pose — and the
-    // HIGH-tier shadow atlas (autoUpdate is OFF, #86) — must be rewired.
+    // Every rebuild recreates the light group: rewire the sun (#121).
     this.paintSun();
-
-    // Walls transparency (#120): fresh materials arrive opaque, so the
-    // viewer-local slider state resets to 0 with them — keeps the UI
-    // and the scene honest after every rebuild (no schema coupling).
-    this.setWallsAlpha(0);
-
-    // Interior fill lights (#152): the rebuild disposed the old pool with
-    // the old light group, so stand a fresh fixed-size pool up against the
-    // fresh spots. Fresh meshes also arrive VISIBLE, so the ceiling policy
-    // must be re-applied to them (issue #152) — and the fill level carries
-    // over from the sun settings that paintSun() just rewired.
+    // Gap G5: fresh materials arrive opaque and visible — re-apply the
+    // View tab's walls transparency and roofs state, not a reset.
+    this.setWallsAlpha(this.wallsAlpha);
+    this.setRoofsVisible(this.roofsShown);
+    // Interior fill pool (#152) for the fresh scene.
     this.roomLightSpots = adapted.roomLights;
     this.rebuildInteriorLightPool(rebuilt.lightGroup);
-    this.setCeilingsVisible(this.phase === 'walk');
-
+    this.applyCeilings();
     // Reframe/refoot whatever rig is live against the new geometry.
     if (this.orbitCam) this.orbitCam.reframe(adapted);
     if (this.walkCam) this.respawnIfNeeded(adapted);
   }
 
-  /**
-   * Respawn ONLY when the disc's current footing went illegal (its room
-   * vanished or collisions swallowed it); otherwise HOLD the pose.
-   */
+  /** Respawn ONLY when the disc's footing went illegal. */
   private respawnIfNeeded(adapted: AdaptedScene): void {
     const walk = this.walkCam;
     if (!walk) return;
     const plan = this.currentPlanSafe();
     if (!plan) return;
     const { x, y } = walk.discPosition;
-    // Issue #147 CP2: judge legality on the walker's OWN storey — the
-    // unbanded test called an upper-floor spot illegal whenever a
-    // ground-floor slab shared its x/y footprint.
     if (isStandingLegal(x, y, adapted, walk.currentZ)) return;
-
     try {
       const spawn = solveSpawn(activeRooms(plan), adapted.collisions);
       this.replaceWalkRig(spawn.x, spawn.y, spawn.yaw);
     } catch (err) {
-      if (err instanceof SpawnFailureError) {
-        toast(this.hud, err.message, 'error');
-      }
+      if (err instanceof SpawnFailureError) this.sink.toast(err.message, 'error');
     }
   }
 
-  /**
-   * Fresh walk rig at a new spawn (old one torn down first).
-   *
-   * `elevation` (issue #147 CP2) seeds the rig's storey plane — omit it
-   * for the recompile-respawn path, which returns the walker to the
-   * adapted ground floor, and pass the target storey for a teleport.
-   */
-  private replaceWalkRig(
-    x: number,
-    y: number,
-    yaw: number,
-    elevation?: number,
-  ): void {
+  /** Fresh walk rig at a new spawn (old one torn down first). */
+  private replaceWalkRig(x: number, y: number, yaw: number, elevation?: number): void {
     const adapted = this.lastGood?.adapted;
     if (!adapted) return;
     this.walkCam?.deactivate();
@@ -1043,10 +838,8 @@ export class ViewerApp {
     this.wireWalkRig(rig);
     this.walkCam = rig;
     this.rig = rig;
-    // A replacement rig always starts OUTSIDE pointer lock (and the old
-    // rig's unlock is not routed into the new one), so re-seat the walk
-    // entry affordance: overlay up, reticle down.
-    setWalkAffordances(this.hud, { overlay: true, reticle: false });
+    // A replacement rig starts OUTSIDE pointer lock.
+    this.sink.walkAffordances({ overlay: true, reticle: false });
   }
 
   /* --------------------- roof affordances (issue #86) ---------------------- */
@@ -1064,7 +857,6 @@ export class ViewerApp {
    */
   private setRoofsVisible(visible: boolean): void {
     this.roofsShown = visible;
-    reflectRoofVisibility(this.hud, visible);
     for (const mesh of this.roofMeshes()) {
       mesh.visible = visible;
       const mat = mesh.material as MeshStandardMaterial;
@@ -1108,7 +900,7 @@ export class ViewerApp {
       const mat = mesh.material as MeshStandardMaterial;
       const target = indoor ? ROOFS_FADE_MIN_OPACITY : 1;
       if (
-        this.hiQuality === false ||
+        this.quality === 'low' ||
         this.roofFadeState === (indoor ? 'hidden' : 'shown')
       ) {
         // Snap: LOW quality, or the tween already finished — avoid
@@ -1151,12 +943,11 @@ export class ViewerApp {
   /**
    * Apply the normalized wallsAlpha (SH3D convention: 0 = opaque,
    * 1 = invisible) to every wall mesh; the threshold mapping lives in
-   * the pure wallAlphaSettings export (unit-pinned). Also reflects the
-   * state back onto the slider — one sync point for init/reset/drag.
+   * the pure wallAlphaSettings export (unit-pinned). The View tab owns
+   * the slider; rebuilds re-apply the value (issue #178, G5).
    */
   private setWallsAlpha(alpha: number): void {
     this.wallsAlpha = alpha;
-    reflectWallsAlpha(this.hud, alpha);
     const settings = wallAlphaSettings(alpha);
     for (const mesh of this.wallMeshes()) {
       mesh.visible = settings.visible;
@@ -1186,6 +977,15 @@ export class ViewerApp {
    */
   private setCeilingsVisible(visible: boolean): void {
     for (const mesh of this.ceilingMeshes()) mesh.visible = visible;
+  }
+
+  /**
+   * Issue #178: the View tab's Ceilings segment. 'auto' keeps the #152
+   * policy (visible iff walking); 'on' / 'off' force it either way.
+   */
+  private applyCeilings(): void {
+    const mode = this.current.ceilings;
+    this.setCeilingsVisible(mode === 'on' || (mode === 'auto' && this.phase === 'walk'));
   }
 
   /** First ceiling-slot mesh's live visibility (e2e probe, #152). */
@@ -1294,7 +1094,6 @@ export class ViewerApp {
    */
   private applySunSettings(patch: Partial<SunSettings>): void {
     this.sunSettings = normalizeSunSettings({ ...this.sunSettings, ...patch });
-    reflectSunSettings(this.hud, this.sunSettings);
     this.paintSun();
   }
 
@@ -1318,7 +1117,7 @@ export class ViewerApp {
     // blend the sky dome uses, so the fill fades in exactly as the sky
     // dims. Zero while the sun is up — the daylight shot stays untouched.
     this.applyInteriorFillLevel(state.duskBlend);
-    if (this.hiQuality && this.renderer) {
+    if (this.quality === 'high' && this.renderer) {
       this.renderer.shadowMap.needsUpdate = true;
     }
   }
@@ -1368,25 +1167,16 @@ export class ViewerApp {
 
   /* --------------------------------- loop ----------------------------------- */
 
+  /** Gap G6: the pump runs only while the 3D view is shown. */
   private startLoop(): void {
-    // Size the renderer ONCE to the canvas's laid-out CSS size, then keep
-    // it synced on resize. Without this the drawing buffer stays at the
-    // canvas default (300x150) and the picture stretches/blanks.
-    if (this.renderer) {
-      configureRenderer(this.renderer, this.hiQuality ? 'high' : 'low');
-      this.resizeRenderer();
-    }
-    const ro = new ResizeObserver(() => this.resizeRenderer());
-    ro.observe(this.canvas);
-    this.disposers.push(() => ro.disconnect());
-
+    if (this.rafCancel !== null || !this.active) return;
     const pump = (now: number): void => {
-      if (this.disposed) return;
+      this.rafCancel = null;
+      if (this.disposed || !this.active) return;
       if (this.lastFrameTime < 0) this.lastFrameTime = now;
       const dtMs = now - this.lastFrameTime;
       this.lastFrameTime = now;
-      // Frame-cost sample (#87): AFTER the timestamp bookkeeping, BEFORE
-      // the sim clamp — the probe measures render cadence, not physics.
+      // Frame-cost sample (#87): render cadence, not physics.
       this.frameTimes.push(dtMs);
       if (this.frameTimes.length > 60) this.frameTimes.shift();
       const dt = Math.min(Math.max(dtMs, 0) / 1000, 0.1);
@@ -1398,27 +1188,19 @@ export class ViewerApp {
 
       const camera = this.liveCamera();
       if (this.renderer && this.sceneRoot && camera) {
-        // Atlas-refresh accounting (#121 fix round): mirrors
-        // WebGLShadowMap.render's own gate, evaluated just before the
-        // frame's render() — a set flag here means THIS frame
-        // regenerates the atlas (the flag is consumed by that call).
+        // Atlas-refresh accounting (#121 fix round).
         const shadowMap = this.renderer.shadowMap;
-        if (
-          shadowMap.enabled &&
-          (shadowMap.autoUpdate || shadowMap.needsUpdate)
-        ) {
+        if (shadowMap.enabled && (shadowMap.autoUpdate || shadowMap.needsUpdate)) {
           this.shadowAtlasGenerations += 1;
         }
         this.renderer.render(this.sceneRoot.scene, camera);
       }
       this.publishDebugSeams(camera);
       this.publishWalkerPose();
-      // Issue #147 CP3: the room readout rides the same frame tick as the
-      // pose publish (write-on-change; the DOM sees transitions only).
       this.updateRoomReadout();
-      this.rafCancel = this.scheduleTick(pump) ?? null;
+      this.rafCancel = this.scheduleTick(pump) ?? (() => {});
     };
-    this.rafCancel = this.scheduleTick(pump) ?? null;
+    this.rafCancel = this.scheduleTick(pump) ?? (() => {});
   }
 
   /** Sync the drawing buffer to the canvas's current CSS box. */
@@ -1428,6 +1210,15 @@ export class ViewerApp {
     const h = this.canvas.clientHeight;
     if (w > 0 && h > 0) {
       this.renderer.setSize(w, h, false);
+      // Issue #178 (G6): an orbit rig seated while the canvas was hidden
+      // took a fallback aspect; keep its frustum in step with the canvas.
+      if (this.orbitCam) {
+        const ortho = this.orbitCam.camera;
+        const half = ortho.top;
+        ortho.left = -half * (w / h);
+        ortho.right = half * (w / h);
+        ortho.updateProjectionMatrix();
+      }
       for (const rig of [this.orbitCam, this.walkCam]) {
         if (rig && 'camera' in rig) {
           const cam = rig.camera as PerspectiveCamera & { aspect?: number };
@@ -1493,7 +1284,7 @@ export class ViewerApp {
       // the e2e parity figure for shed/gable presence (0 when absent).
       roofTriangleCount: this.countSlotTriangles('roof'),
       // Quality tier (#87): 'high' unless ?quality=low opted out.
-      qualityLevel: this.hiQuality ? 'high' : 'low',
+      qualityLevel: this.quality,
       // Populated slots carrying a procedural MAP (#87): the high-tier
       // texture probe — 0 on the low path (nothing uploads).
       texturedSlotCount: this.countMappedSlots(),
@@ -1700,45 +1491,24 @@ export class ViewerApp {
     return null;
   }
 
-  /* -------------------------------- polling --------------------------------- */
-
-  /** Self-rescheduling 250 ms debounced bridge poll. */
-  private armDebouncePoll(): void {
-    const cycle = (): void => {
-      this.pollTimer = this.setTimeoutFn(() => {
-        if (this.disposed) return;
-        this.refreshAdaptation(false);
-        cycle();
-      }, RECOMPILE_DEBOUNCE_MS);
-    };
-    cycle();
-    this.disposers.push(() => {
-      if (this.pollTimer !== null) clearTimeout(this.pollTimer);
-    });
-  }
-
   /* -------------------------------- dispose --------------------------------- */
 
-  /** Full teardown: rig → RAF → timers/listeners → scene → HUD → GL. */
+  /** Full teardown: rig → RAF → timers/listeners → scene → GL. */
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.walkCam) this.parkPose();
     this.rig?.deactivate();
+    this.walkClickDisposer?.();
     this.rafCancel?.();
+    this.rafCancel = null;
     for (const off of this.disposers.splice(0, this.disposers.length)) off();
     if (this.sceneRoot) {
       disposeObject(this.sceneRoot.lightGroup);
       disposeObject(this.sceneRoot.scene);
       this.sceneRoot = null;
     }
-    this.unbindToggle?.();
-    this.unbindCollapse?.();
-    this.unbindRoofToggle?.();
-    this.unbindWallsAlpha?.();
-    this.unbindSunTime?.();
-    this.unbindSunNorth?.();
     this.perf.destroy();
-    destroyHud(this.hud);
     this.renderer?.dispose();
     this.renderer = null;
   }
