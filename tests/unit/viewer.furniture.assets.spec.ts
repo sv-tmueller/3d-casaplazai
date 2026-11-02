@@ -10,6 +10,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { FurnitureType } from '../../src/shared/schema';
+import { createFurnitureLibrary, placeFurniture } from '../../src/viewer/furniture';
 
 const TYPES: FurnitureType[] = [
   'bed',
@@ -37,6 +38,7 @@ function glbJson(path: string): { extensionsRequired?: string[]; extensionsUsed?
 
 /** Parsed scene in plan orientation (the same axis fix place.ts applies). */
 const planSpace = new Map<FurnitureType, Object3D>();
+const scenes = new Map<FurnitureType, Object3D>();
 
 beforeAll(async () => {
   await MeshoptDecoder.ready;
@@ -46,6 +48,7 @@ beforeAll(async () => {
     const bytes = readFileSync(file(t));
     const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     const gltf = await loader.parseAsync(ab as ArrayBuffer, '');
+    scenes.set(t, gltf.scene);
     const fix = new Group();
     fix.rotation.x = Math.PI / 2;
     fix.add(gltf.scene);
@@ -104,6 +107,41 @@ describe('furniture model assets', () => {
       });
       expect(n).toBeGreaterThan(0);
       expect(sum / n).toBeGreaterThan(0);
+    });
+  }
+});
+
+describe('placeFurniture with the real GLBs', () => {
+  for (const t of TYPES) {
+    it(`${t}: fits the footprint and sits on zMin`, async () => {
+      const lib = createFurnitureLibrary(async (url) => {
+        const name = url.split('/').pop()!.replace('.glb', '');
+        return scenes.get(name as FurnitureType)!;
+      });
+      await lib.load(t);
+      const g = placeFurniture(
+        {
+          furniture: [
+            {
+              itemId: 'x',
+              type: t,
+              position: [4, -2],
+              rotationDeg: 0,
+              footprint: [1.5, 0.9],
+              zMin: 2.6,
+              zMax: 3.4,
+            },
+          ],
+        },
+        { library: lib },
+      );
+      g.updateMatrixWorld(true);
+      const box = new Box3().setFromObject(g);
+      expect(box.min.x).toBeCloseTo(4 - 0.75, 3);
+      expect(box.max.x).toBeCloseTo(4 + 0.75, 3);
+      expect(box.min.y).toBeCloseTo(-2 - 0.45, 3);
+      expect(box.max.y).toBeCloseTo(-2 + 0.45, 3);
+      expect(box.min.z).toBeCloseTo(2.6, 3);
     });
   }
 });
