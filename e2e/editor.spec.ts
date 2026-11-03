@@ -10,6 +10,7 @@ import { BTN_ZOOM, CAM_SCALE, FIT_MARGIN } from './fixtures/camConstants';
 import {
   CANVAS,
   TOOLCARD_INSET,
+  type Cam,
   aim,
   canvasKey,
   command,
@@ -24,6 +25,43 @@ type Plan = { rooms: Array<{ id: string; name: string; polygon: number[][] }> };
 
 const getPlan = (page: Page): Promise<Plan> =>
   page.evaluate(() => (window as unknown as { __casaplaza: { getData(): Plan } }).__casaplaza.getData());
+
+// ROOM_STROKE is #2563eb = rgb(37,99,235) in src/editor/render.ts. These
+// thresholds admit it and reject the pale room fill (r≈221): the stroke's
+// blue (235) dominates, its red (37) stays low.
+const STROKE_MIN_BLUE = 170;
+const STROKE_MAX_RED = 160;
+const STROKE_MAX_GREEN = 200;
+
+/**
+ * Count projected room corners whose canvas pixels carry the room stroke,
+ * projected through the live camera. Reads the 2D canvas' own backing
+ * store, so the floating tool card over its left edge does not interfere.
+ */
+async function strokeHits(page: Page, cam: Cam, corners: number[][]): Promise<number> {
+  return page.evaluate(
+    ({ c, pts, minB, maxR, maxG }) => {
+      const cv = document.querySelector('.editor-canvas') as HTMLCanvasElement;
+      const ctx = cv.getContext('2d')!;
+      const dpr = cv.width / cv.getBoundingClientRect().width;
+      const rad = 3;
+      let hits = 0;
+      for (const [wx, wy] of pts) {
+        const sx = Math.round((wx - c.originX) * c.scale * dpr);
+        const sy = Math.round((c.originY - wy) * c.scale * dpr);
+        const img = ctx.getImageData(sx - rad, sy - rad, rad * 2 + 1, rad * 2 + 1).data;
+        for (let i = 0; i < img.length; i += 4) {
+          if (img[i + 2] > minB && img[i] < maxR && img[i + 1] < maxG) {
+            hits += 1;
+            break;
+          }
+        }
+      }
+      return hits;
+    },
+    { c: cam, pts: corners, minB: STROKE_MIN_BLUE, maxR: STROKE_MAX_RED, maxG: STROKE_MAX_GREEN },
+  );
+}
 
 const room = (id: string, polygon: number[][]) => ({ id, name: id, polygon, floorTexture: null, wallsOverride: [] });
 const plan = (rooms: unknown[]) => ({ schemaVersion: 1, units: 'meters', wallHeight: 2.7, wallThickness: 0.24, rooms, openings: [], furniture: [] });
@@ -118,6 +156,9 @@ test.describe('navigation controls (#46, View tab)', () => {
     // The plan centre sits in the middle of the free region.
     expect((3 - cam.originX) * cam.scale).toBeCloseTo(TOOLCARD_INSET + freeW / 2, 4);
     expect((cam.originY - -2) * cam.scale).toBeCloseTo(box.height / 2, 4);
+    // The fitted plan is really painted where the camera says: the room
+    // stroke sits under at least 3 of the 4 projected corners.
+    expect(await strokeHits(page, cam, poly)).toBeGreaterThanOrEqual(3);
     // Clicking the framed room selects it (it is really under the cursor;
     // Select is still the armed tool).
     const inside = await aim(page, 3, -2);
