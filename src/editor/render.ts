@@ -85,6 +85,9 @@ export function paintScene(
   // Issue #126: canvas theme (trailing optional, append-only precedent).
   // The export painter deliberately omits it — exports stay white.
   theme: ThemePreference = DEFAULT_THEME,
+  // Issue #178: the View tab's Grid toggle (trailing optional, append-
+  // only precedent; the export painter omits it and keeps the grid).
+  showGrid = true,
 ): void {
   const palette = theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE;
   ctx.clearRect(0, 0, cssW, cssH);
@@ -96,7 +99,7 @@ export function paintScene(
   // entirely when hidden keeps the canvas bit-identical to pre-#99.
   if (underlay && !underlay.hidden) drawUnderlay(ctx, cam, underlay, underlayImg, underlaySelected);
 
-  drawGrid(ctx, cssW, cssH, cam, gridPitch, palette);
+  if (showGrid) drawGrid(ctx, cssW, cssH, cam, gridPitch, palette);
 
   for (const room of flatRooms(plan)) {
     drawRoomShape(

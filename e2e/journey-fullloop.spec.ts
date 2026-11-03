@@ -1,189 +1,95 @@
 /**
- * Full-loop journey (issue #7): the ONE consolidated end-to-end test —
- * boot, seed a 4-room plan, furnish through the REAL UI, walk in 3D,
- * export a PNG, and check the golden area sum. Wired into
- * `npm run verify` (< 3 min budget).
+ * Full-loop journey (issue #7, on the single workspace since #178): seed a
+ * 4-room plan, furnish it through the real tool card, read the golden area
+ * total, look at it in 3D, walk it, come back to the Plan view and export
+ * a PNG — one page, no route changes.
  */
-
 import { expect, test, type Page } from '@playwright/test';
-import { CAM_SCALE as SCALE } from './fixtures/camConstants';
+import { aim, command, fitPlan, seedPlan, switchView, viewerCam, waitForScene, waitForWalker, openWorkspace } from './fixtures/workspace';
 
-
-/** Demo fixture + a 4th room, seeded through the editor bridge. */
 const FOUR_ROOMS = {
   schemaVersion: 1,
   units: 'meters',
   wallHeight: 2.7,
   wallThickness: 0.24,
   rooms: [
-    {
-      id: 'living',
-      name: 'Living',
-      polygon: [[0.5, -3.5], [3.5, -3.5], [3.5, -0.5], [0.5, -0.5]],
-      floorTexture: 'wood',
-    },
-    {
-      id: 'kitchen',
-      name: 'Kitchen',
-      polygon: [[3.5, -3.5], [6.5, -3.5], [6.5, -0.5], [3.5, -0.5]],
-      floorTexture: 'tile',
-    },
-    {
-      id: 'study',
-      name: 'Study',
-      polygon: [[0.5, -6.5], [3.5, -6.5], [3.5, -3.5], [0.5, -3.5]],
-      floorTexture: 'carpet',
-    },
-    {
-      id: 'den',
-      name: 'Den',
-      polygon: [[3.5, -6.5], [6.5, -6.5], [6.5, -3.5], [3.5, -3.5]],
-      floorTexture: 'concrete',
-    },
+    { id: 'living', name: 'Living', polygon: [[0.5, -3.5], [3.5, -3.5], [3.5, -0.5], [0.5, -0.5]], floorTexture: 'wood' },
+    { id: 'kitchen', name: 'Kitchen', polygon: [[3.5, -3.5], [6.5, -3.5], [6.5, -0.5], [3.5, -0.5]], floorTexture: 'tile' },
+    { id: 'study', name: 'Study', polygon: [[0.5, -6.5], [3.5, -6.5], [3.5, -3.5], [0.5, -3.5]], floorTexture: 'carpet' },
+    { id: 'den', name: 'Den', polygon: [[3.5, -6.5], [6.5, -6.5], [6.5, -3.5], [3.5, -3.5]], floorTexture: 'concrete' },
   ],
   openings: [],
   furniture: [],
 };
 
-async function aim(page: Page, wx: number, wy: number): Promise<{ x: number; y: number }> {
-  const b = await page.locator('.editor-canvas').boundingBox();
-  return { x: b!.x + wx * SCALE, y: b!.y - wy * SCALE };
+type Wire = { rooms: Array<{ polygon: number[][] }>; openings: unknown[]; furniture: Array<{ type: string }> };
+const getData = (page: Page): Promise<Wire> =>
+  page.evaluate(() => (window as unknown as { __casaplaza: { getData(): Wire } }).__casaplaza.getData());
+
+async function clickWorld(page: Page, wx: number, wy: number): Promise<void> {
+  const p = await aim(page, wx, wy);
+  await page.mouse.move(p.x, p.y);
+  await page.waitForTimeout(120); // hover preview before commit
+  await page.mouse.click(p.x, p.y);
 }
 
-test('journey: seed -> furnish via UI -> walk in 3D -> export PNG -> golden total', async ({
-  page,
-}) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
+test('journey: seed → furnish via the tool card → 3D → walk → back to Plan → export PNG', async ({ page }) => {
+  test.setTimeout(90_000);
+  await openWorkspace(page);
 
-  // ---- 1. Seed the 4-room plan via the debug bridge ----
-  await page.evaluate((plan) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__casaplaza.loadPlan(plan);
-  }, FOUR_ROOMS);
+  // 1. Seed through the bridge, then frame it clear of the tool card.
+  await seedPlan(page, FOUR_ROOMS);
+  await fitPlan(page);
 
-  // ---- 2. Place a door THROUGH the real UI (shared wall x=3.5) ----
-  await page.getByRole('button', { name: 'Door' }).click();
-  const doorHit = await aim(page, 3.5, -2.0);
-  await page.mouse.move(doorHit.x, doorHit.y);
-  await page.waitForTimeout(120);
-  await page.mouse.click(doorHit.x, doorHit.y);
+  // 2. A door on the shared wall x = 3.5, through the real tool card.
+  await command(page, 'tool.door').click();
+  await clickWorld(page, 3.5, -2.0);
 
-  // ---- 3. Stamp a sofa THROUGH the real UI ----
-  await page.getByRole('button', { name: 'Furnish' }).click();
+  // 3. A sofa, south of the living-room centre (the spawn cell stays free).
+  await command(page, 'tool.stamp').click();
+  await expect(page.getByTestId('ws-furniture')).toBeVisible();
   await page.getByRole('button', { name: 'Sofa' }).click();
-  // Drop the sofa SOUTH of centre: plopping it exactly on the living
-  // centroid (the walk spawn cell) saturates the room once furniture is
-  // solid (issue #18) — spawn would honestly fail. Real users furnish
-  // against a wall, not atop their own feet.
-  const drop = await aim(page, 2, -1.1);
-  await page.mouse.move(drop.x, drop.y);
-  await page.waitForTimeout(120);
-  await page.mouse.click(drop.x, drop.y);
+  await clickWorld(page, 2, -1.1);
 
-  const plan = await page.evaluate(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__casaplaza.getData(),
-  );
+  const plan = await getData(page);
   expect(plan.openings.length).toBeGreaterThanOrEqual(1);
   expect(plan.furniture).toHaveLength(1);
   expect(plan.furniture[0].type).toBe('sofa');
 
-  // ---- 4. Area sum in the status bar (journey plan: 4 squares à 9 m²) ----
-  await expect(page.getByTestId('status-total')).toContainText('36.0');
+  // 4. Golden total in the status bar: 4 squares of 9 m².
+  await expect(page.getByTestId('ws-status-total')).toContainText('36.0');
 
-  // ---- 5. Jump to 3D and assert walk spawn inside a room ----
-  await page.goto('/viewer');
-  await page.locator('.viewer-gl-canvas').waitFor();
-  // The viewer boots beside the editor on this route; the bridge carries
-  // the furnished plan. Wait for the first accepted compile.
-  await page.waitForFunction(
-    () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const s = (window as any).__viewerStats?.();
-      return typeof s === 'object' && s !== null && s.meshCount > 0;
-    },
-    { timeout: 15_000 },
-  );
-
-  // Descend into walk mode via the HUD mode segment (headless pointer
-  // lock is unreliable; the camera seam is the dependable signal).
-  await page.getByTestId('hud-mode-segment-walk').click();
-  // Wait for the WALK rig specifically: the overview camera lacks the
-  // disc fields; catching the transition mid-fade yields undefined.
-  await page.waitForFunction(
-    () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const c = (window as any).__viewerCam?.() ?? null;
-      return c !== null && typeof c.discX === 'number';
-    },
-    { timeout: 10_000 },
-  );
-  const cam = await page.evaluate(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (window as any).__viewerCam?.() ?? null;
-  });
-  expect(cam).not.toBeNull();
+  // 5. The same page shows it in 3D, then walks it from the segment.
+  await switchView(page, '3d');
+  await waitForScene(page);
+  await switchView(page, 'walk');
+  await waitForWalker(page);
+  const cam = (await viewerCam(page))!;
   expect(Math.abs(cam.eyeY - 1.65)).toBeLessThan(0.05);
+  const inside = plan.rooms.some(({ polygon }) => {
+    let hit = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const [xi, yi] = polygon[i];
+      const [xj, yj] = polygon[j];
+      if (yi > cam.discY! !== yj > cam.discY! && cam.discX! < ((xj - xi) * (cam.discY! - yi)) / (yj - yi) + xi) hit = !hit;
+    }
+    return hit;
+  });
+  expect(inside, `disc=(${cam.discX},${cam.discY})`).toBe(true);
+  await expect(page.getByTestId('ws-walk-pill')).toBeVisible();
 
-  // Point-in-polygon against the seeded plan: spawn must sit INSIDE a room.
-  const spawnOk = await page.evaluate(
-    ([planJson]) => {
-      const p = JSON.parse(planJson as string);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const c = (window as any).__viewerCam();
-      // plan-X = world X, plan-Y = world Z (Z-up conversion)
-      const px = c.discX;
-      const py = c.discY;
-      for (const room of p.rooms) {
-        const poly = room.polygon;
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-          const [xi, yi] = poly[i];
-          const [xj, yj] = poly[j];
-          if (
-            yi > py !== yj > py &&
-            px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
-          ) {
-            inside = !inside;
-          }
-        }
-        if (inside) return true;
-      }
-      return false;
-    },
-    [JSON.stringify(plan)],
-  );
-  const toastsSeen = await page.evaluate(() =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    [...document.querySelectorAll('.hud-toast')].map((t) => t.textContent),
-  );
-  expect(
-    spawnOk,
-    `disc=(${(cam as { discX?: number }).discX},${(cam as { discY?: number }).discY}) toasts=${toastsSeen.join(' | ')}`,
-  ).toBe(true);
-
-  // ---- 6. Back in the editor: export the plan as PNG ----
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  // pkg #142: Export image lives in the File menu — open it first.
-  await page.getByTestId('btn-file').click();
-  await page.getByRole('button', { name: 'Export' }).click();
-  // Dialog: pick PNG scale 2 (defaults should suffice; assert dialog UI).
-  await expect(page.locator('[data-testid="export-dialog"]')).toBeVisible();
+  // 6. Back in the Plan view (key 1: the pointer is locked while walking)
+  //    and export the plan as a PNG from the top bar.
+  await switchView(page, 'plan', 'key');
+  await page.getByTestId('ws-export').click();
+  await expect(page.getByTestId('ws-export-dialog')).toBeVisible();
   const downloadPromise = page.waitForEvent('download', { timeout: 15_000 });
-  await page.getByTestId('export-confirm').click();
-  const download = await downloadPromise;
-  const path = await download.path();
-  const fs = await import('node:fs/promises');
-  const bytes = await fs.readFile(path!);
-  // PNG magic + IHDR dims nonzero + content floor.
-  expect(bytes.subarray(0, 8)).toEqual(
-    Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  );
-  const ihdrW = bytes.readUInt32BE(16);
-  const ihdrH = bytes.readUInt32BE(20);
-  expect(ihdrW).toBeGreaterThan(0);
-  expect(ihdrH).toBeGreaterThan(0);
+  await page.getByTestId('ws-export-confirm').click();
+  const path = await (await downloadPromise).path();
+  const { readFile } = await import('node:fs/promises');
+  const bytes = await readFile(path!);
+  expect(bytes.subarray(0, 8)).toEqual(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  expect(bytes.readUInt32BE(16)).toBeGreaterThan(0);
+  expect(bytes.readUInt32BE(20)).toBeGreaterThan(0);
   expect(bytes.byteLength).toBeGreaterThan(1000);
 });

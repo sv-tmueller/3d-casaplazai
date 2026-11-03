@@ -4,10 +4,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CasaPlazAI — Viewer</title>
+    <title>CasaPlazAI — opening the 3D view…</title>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/viewer/main.ts"></script>
+    <!-- Issue #178: the viewer page is retired. This stub redirects to the
+         workspace with the 3D view active (/?view=3d), keeping the query
+         and any #plan= share fragment. -->
+    <noscript><a href="/?view=3d">Open CasaPlazAI in the 3D view</a></noscript>
+    <script type="module" src="/src/app/viewerRedirect.ts"></script>
   </body>
 </html>

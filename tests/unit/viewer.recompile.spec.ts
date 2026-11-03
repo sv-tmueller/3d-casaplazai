@@ -1,14 +1,18 @@
 // @vitest-environment happy-dom
 /**
- * Recompile pipeline spec (issue #6): the debounced bridge poll must
- * reflect unsaved editor edits, and an INVALID intermediate plan must
- * retain the last-good scene (toast, no crash).
+ * Recompile pipeline (issue #6; store-driven since #178, gap G7): the 3D
+ * engine subscribes to the EditorStore instead of polling the window
+ * bridge. A notify debounces a rebuild; reducers mutate the plan IN
+ * PLACE, so the signature (not the reference) decides; an INVALID
+ * intermediate keeps the last-good scene with a toast; rebuilds wait
+ * while a 2D drag is in flight (ported from the retired mini 3D inset).
  */
-
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { planSignature, ViewerApp, type DataBridge } from '../../src/viewer/appController';
+import { afterEach, describe, expect, it } from 'vitest';
+import { planSignature } from '../../src/viewer/appController';
+import { RECOMPILE_DEBOUNCE_MS } from '../../src/viewer/types';
 import type { FloorplanData } from '../../src/shared/schema';
 import { migrate } from '../../src/shared/schema';
+import { bootViewer, type Harness } from './helpers/viewerHarness';
 
 function basePlan(): FloorplanData {
   return migrate({
@@ -16,96 +20,23 @@ function basePlan(): FloorplanData {
     units: 'meters',
     wallHeight: 2.7,
     wallThickness: 0.24,
-    rooms: [
-      {
-        id: 'big',
-        name: 'Big',
-        polygon: [[0, 0], [6, 0], [6, 5], [0, 5]],
-        floorTexture: 'wood',
-      },
-    ],
+    rooms: [{ id: 'big', name: 'Big', polygon: [[0, 0], [6, 0], [6, 5], [0, 5]], floorTexture: 'wood' }],
     openings: [],
     furniture: [],
   }).data!;
 }
 
-/** Happy-dom has no WebGL: stub the renderer factory seam. */
-vi.mock('../../src/viewer/sceneBuilder', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('../../src/viewer/sceneBuilder')>();
-  return {
-    ...mod,
-    makeRenderer: () => ({
-      render: vi.fn(),
-      setSize: vi.fn(),
-      setPixelRatio: vi.fn(),
-      dispose: vi.fn(),
-      domElement: undefined,
-      shadowMap: {},
-    }),
-  };
-});
-
-interface Harness {
-  app: ViewerApp;
-  bridges: DataBridge[];
-  advance: (ms: number) => void;
-  pump: () => void;
-  dispose: () => void;
-}
-
-function boot(initial: FloorplanData): Harness {
-  const bridges: DataBridge[] = [{ getData: () => initial }];
-  const current = 0;
-  const bridgeAt = (): DataBridge | undefined => bridges[current];
-
-  const timers: Array<{ at: number; cb: () => void }> = [];
-  let now = 0;
-  const advance = (ms: number): void => {
-    now += ms;
-    for (let i = timers.length - 1; i >= 0; i--) {
-      if (timers[i].at <= now) {
-        const cb = timers[i].cb;
-        timers.splice(i, 1);
-        cb();
-      }
-    }
-  };
-  const setTimeoutFn = ((cb: () => void, ms: number) => {
-    timers.push({ at: now + ms, cb });
-    return timers.length;
-  }) as unknown as typeof window.setTimeout;
-
-  const ticks: Array<(t: number) => void> = [];
-  const pump = (): void => {
-    for (const cb of [...ticks]) cb(now);
-  };
-
-  const pane = document.createElement('div');
-  const canvas = document.createElement('canvas');
-  pane.appendChild(canvas);
-  document.body.appendChild(pane);
-
-  const app = new ViewerApp({
-    bridge: bridgeAt,
-    canvas,
-    pane,
-    scheduleTick: (cb) => {
-      ticks.push(cb);
-      return () => {};
-    },
-    setTimeoutFn,
+function breakPlan(plan: FloorplanData): void {
+  plan.floors[0].openings.push({
+    id: 'boom',
+    kind: 'door',
+    roomId: 'big',
+    segmentIndex: 0,
+    tCenter: 0.5,
+    width: -1,
+    sillHeight: 0,
+    headHeight: 2.05,
   });
-  app.start();
-  return {
-    app,
-    bridges,
-    advance,
-    pump,
-    dispose: () => {
-      app.dispose();
-      pane.remove();
-    },
-  };
 }
 
 describe('viewer recompile pipeline', () => {
@@ -113,80 +44,92 @@ describe('viewer recompile pipeline', () => {
   afterEach(() => h?.dispose());
 
   it('boots on the initial plan and adapts it', () => {
-    h = boot(basePlan());
-    h.pump();
+    h = bootViewer(basePlan());
     expect(h.app.currentSignature()).toBe(planSignature(basePlan()));
   });
 
-  it('reflects an UNSAVED editor edit after the 250ms debounce', () => {
-    h = boot(basePlan());
-    h.pump();
-    const sigBefore = h.app.currentSignature();
+  it('rebuilds on a store notify after the debounce, catching IN-PLACE edits', () => {
+    h = bootViewer(basePlan());
+    const before = h.app.currentSignature();
+    // Reducers mutate state.data in place: same object, new content.
+    h.plan().floors[0].rooms[0].polygon = [[0, 0], [8, 0], [8, 5], [0, 5]];
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS - 1);
+    expect(h.app.currentSignature()).toBe(before);
+    h.advance(1);
+    expect(h.app.currentSignature()).toBe(planSignature(h.plan()));
+    expect(h.app.currentSignature()).not.toBe(before);
+  });
 
-    // Editor mutates (unsaved): swap the plan the bridge hands out.
-    const edited = basePlan();
-    edited.floors[0].rooms[0].polygon = [[0, 0], [8, 0], [8, 5], [0, 5]];
-    h.bridges.unshift({ getData: () => edited });
-    h.advance(300); // > RECOMPILE_DEBOUNCE_MS
-    h.pump();
+  it('coalesces a burst of notifies into one rebuild', () => {
+    h = bootViewer(basePlan());
+    const rebuilds = h.app.rebuildCount();
+    for (let i = 0; i < 5; i += 1) {
+      h.plan().floors[0].rooms[0].name = `Big ${i}`;
+      h.notify();
+      h.advance(50);
+    }
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.rebuildCount()).toBe(rebuilds + 1);
+  });
 
-    expect(h.app.currentSignature()).toBe(planSignature(edited));
-    expect(sigBefore).not.toBe(h.app.currentSignature());
+  it('skips the rebuild when a notify leaves the plan unchanged (selection)', () => {
+    h = bootViewer(basePlan());
+    const rebuilds = h.app.rebuildCount();
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.rebuildCount()).toBe(rebuilds);
+  });
+
+  it('flush() applies a pending rebuild at once (a Walk request cannot wait)', () => {
+    h = bootViewer(basePlan());
+    h.plan().floors[0].rooms[0].name = 'Flushed';
+    h.notify();
+    h.app.flush();
+    expect(h.app.currentSignature()).toBe(planSignature(h.plan()));
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.rebuildCount()).toBe(2);
+  });
+
+  it('postpones the rebuild while a 2D gesture is in progress', () => {
+    h = bootViewer(basePlan());
+    h.setBusy(true);
+    h.plan().floors[0].rooms[0].name = 'Dragging';
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS * 4);
+    expect(h.app.currentSignature()).toBe(planSignature(basePlan()));
+    h.setBusy(false);
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.currentSignature()).toBe(planSignature(h.plan()));
+  });
+
+  it('compiles a snapshot, so a later in-place edit cannot reach the built scene', () => {
+    h = bootViewer(basePlan());
+    const accepted = h.app.currentSignature();
+    h.plan().floors[0].rooms[0].name = 'Mutated after';
+    expect(h.app.currentSignature()).toBe(accepted);
   });
 
   it('INVALID intermediate retains the last-good scene with a toast', () => {
-    h = boot(basePlan());
-    h.pump();
-    const goodSig = h.app.currentSignature();
-
-    // Break the plan: negative width opening violates the schema.
-    const bad = basePlan();
-    bad.floors[0].openings.push({
-      id: 'boom',
-      kind: 'door',
-      roomId: 'big',
-      segmentIndex: 0,
-      tCenter: 0.5,
-      width: -1,
-      sillHeight: 0,
-      headHeight: 2.05,
-    });
-    h.bridges.unshift({ getData: () => bad });
-    h.advance(300);
-    h.pump();
-
-    // Signature stays pinned to the last GOOD plan.
-    expect(h.app.currentSignature()).toBe(goodSig);
-    // Toast surfaced.
-    const toasts = [...document.querySelectorAll('.hud-toast')];
-    expect(toasts.length).toBeGreaterThan(0);
+    h = bootViewer(basePlan());
+    const good = h.app.currentSignature();
+    breakPlan(h.plan());
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.currentSignature()).toBe(good);
+    expect(h.sink.toasts.at(-1)).toEqual({ text: 'Recompile failed — keeping last good view', variant: 'error' });
   });
 
-  it('recovers when the bridge returns a valid plan again', () => {
-    h = boot(basePlan());
-    h.pump();
-
-    const bad = basePlan();
-    bad.floors[0].openings.push({
-      id: 'boom',
-      kind: 'door',
-      roomId: 'big',
-      segmentIndex: 0,
-      tCenter: 0.5,
-      width: -1,
-      sillHeight: 0,
-      headHeight: 2.05,
-    });
-    h.bridges.unshift({ getData: () => bad });
-    h.advance(300);
-    h.pump();
-
+  it('recovers when the plan becomes valid again', () => {
+    h = bootViewer(basePlan());
+    breakPlan(h.plan());
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS);
     const good2 = basePlan();
     good2.floors[0].rooms[0].name = 'Renamed';
-    h.bridges.unshift({ getData: () => good2 });
-    h.advance(300);
-    h.pump();
-
+    h.setPlan(good2);
+    h.advance(RECOMPILE_DEBOUNCE_MS);
     expect(h.app.currentSignature()).toBe(planSignature(good2));
+    expect(h.sink.dismissed).toBeGreaterThan(0);
   });
 });

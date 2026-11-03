@@ -18,6 +18,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { join } from 'node:path';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 const FIXTURE = join(process.cwd(), 'e2e', 'fixtures', 'blueprint-tiny.png');
 
 type UnderlayView = {

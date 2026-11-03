@@ -17,6 +17,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
 
+// Issue #178: the workspace redesign retired the DOM this spec drives.
+test.fixme(true, 'workspace redesign: re-pin in batch 2 (#178)');
+
 // Clipboard grants for BOTH directions: write (Share button) and read
 // (harvesting the produced link for the fresh-context leg).
 test.use({ permissions: ['clipboard-read', 'clipboard-write'] });

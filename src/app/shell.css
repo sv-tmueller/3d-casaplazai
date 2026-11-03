@@ -1,0 +1,837 @@
+/*
+ * Workspace shell (issue #178, design §6). Layout + panel styles; every
+ * value comes from src/ui/tokens.css. Replaces the retired 1,800-line
+ * src/style.css wholesale (no per-issue CSS layered on top).
+ */
+
+/* ------------------------------ frame ------------------------------- */
+#root {
+  height: 100%;
+}
+
+.ws {
+  display: grid;
+  grid-template-rows: var(--topbar-h) 1fr var(--statusbar-h);
+  height: 100vh;
+  min-width: 1024px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* ----------------------------- top bar ------------------------------ */
+.ws-topbar {
+  display: grid;
+  /* Side clusters size to their content so they can never slide under
+   * the view segment (1280 px is the design width). */
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.ws-topbar-start,
+.ws-topbar-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ws-topbar-end {
+  justify-content: flex-end;
+}
+
+.ws-topbar-center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.ws-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: var(--text-title);
+  cursor: pointer;
+}
+
+.ws-logo .ui-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+
+.ws-logo:hover {
+  background: var(--surface-2);
+}
+
+.ws-project {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ws-project-name {
+  width: 160px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-1);
+  background: transparent;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.ws-project-name:hover {
+  border-color: var(--line);
+}
+
+.ws-project-name:focus {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.ws-unsaved-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.ws-stepper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ws-level {
+  max-width: 220px;
+  font-size: var(--text-caption);
+}
+
+.ws-level-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-1);
+  background: var(--line);
+}
+
+/* ------------------------------ stage ------------------------------- */
+.ws-stage {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.ws-plan-pane,
+.ws-3d-pane {
+  position: absolute;
+  inset: 0;
+}
+
+.editor-canvas,
+.viewer-gl-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.editor-canvas:focus-visible,
+.viewer-gl-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.editor-canvas.pan-armed {
+  cursor: grab;
+}
+
+.editor-canvas.pan-dragging {
+  cursor: grabbing;
+}
+
+.ws-fade {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: var(--surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease);
+}
+
+.ws-fade.ws-fade-active {
+  opacity: 1;
+}
+
+.ws-perf:empty {
+  display: none;
+}
+
+.ws-perf {
+  position: absolute;
+  right: var(--space-3);
+  top: var(--space-3);
+  z-index: 6;
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  font: 11px/1.3 var(--font-mono);
+}
+
+.ws-perf pre {
+  margin: 0;
+}
+
+/* ---------------------------- tool card ----------------------------- */
+.ws-toolcard {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  bottom: 12px;
+  z-index: 10;
+  width: var(--toolcard-w);
+  max-height: calc(100% - 24px);
+  height: fit-content;
+  overflow: hidden;
+}
+
+.ws-toolcard .ui-tabs {
+  max-height: 100%;
+}
+
+.ws-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.ws-tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+}
+
+.ws-tool {
+  justify-content: flex-start;
+  height: 36px;
+}
+
+.ws-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+
+.ws-section-title {
+  margin: 0 0 var(--space-1);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ws-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ws-chip-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+}
+
+.ws-chip {
+  justify-content: flex-start;
+}
+
+.ws-disclosure {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ws-disclosure:hover {
+  background: var(--surface-2);
+}
+
+.ws-disclosure .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ws-disclosure-label {
+  flex: 1;
+  text-align: left;
+}
+
+.ws-disclosure[aria-expanded='true'] .ui-icon:last-child {
+  transform: rotate(180deg);
+}
+
+.ws-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1);
+}
+
+.ws-field-label {
+  color: var(--ink);
+}
+
+.ws-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ws-north-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ws-north-row .ui-slider {
+  flex: 1;
+}
+
+.ws-compass {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-2);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.ws-compass-n {
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ws-note {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+}
+
+.ws-measure-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-measure-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ws-measure-show {
+  flex: 1;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-measure-show:hover {
+  background: var(--surface-2);
+}
+
+/* Walk: the card shrinks to its tab strip and reopens on hover/focus. */
+.ws[data-view='walk'] .ws-toolcard:not(:hover):not(:focus-within) .ui-tabpanel {
+  display: none;
+}
+
+.ws[data-view='walk'] .ws-toolcard {
+  bottom: auto;
+}
+
+/* ---------------------------- inspector ----------------------------- */
+.ws-inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: var(--inspector-w);
+  max-height: calc(100% - 24px);
+  animation: ws-slide-in var(--dur-base) var(--ease);
+}
+
+.ws-inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.ws-inspector-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-inspector-body {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+/* The retained inspector panel (editor/inspectorPanel.ts), re-skinned. */
+.inspector-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.inspector-heading {
+  display: none;
+}
+
+.inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.inspector-section-title {
+  margin-top: var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.inspector-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+
+.inspector-summary dt {
+  color: var(--ink-2);
+}
+
+.inspector-summary dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.inspector-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.inspector-field input,
+.dim-field input {
+  width: 96px;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-1);
+  background: var(--surface-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.inspector-field input:focus,
+.dim-field input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.inspector-hint {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+}
+
+.inspector-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.inspector-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.inspector-radio:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.inspector-radio input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.editor-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.editor-btn:hover {
+  background: var(--surface-2);
+}
+
+/* Type-in dims while drawing (issue #100) and the stair offer (#118). */
+.draw-dims {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 12;
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.dim-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+}
+
+.stair-offer {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+/* ---------------------------- empty state --------------------------- */
+.ws-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 8;
+  width: min(420px, calc(100% - 2 * var(--toolcard-w)));
+  padding: var(--space-5);
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.ws-empty button {
+  pointer-events: auto;
+}
+
+.ws-empty-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-dialog);
+}
+
+.ws-empty-text {
+  margin: 0 0 var(--space-4);
+  color: var(--ink-2);
+}
+
+.ws-empty-actions,
+.ws-empty-demos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.ws-empty-demos {
+  margin-top: var(--space-3);
+}
+
+/* ---------------------------- walk overlay -------------------------- */
+.ws-walk {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.ws[data-view='3d'] .ws-walk,
+.ws[data-view='plan'] .ws-walk {
+  display: none;
+}
+
+.ws-walk-pill {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  transform: translateX(-50%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.ws-walk-pill .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.ws-walk-prompt {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  font-weight: 600;
+}
+
+.ws-walk-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgb(255 255 255 / 90%);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+}
+
+.ws-walk-hint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  padding: var(--space-1) var(--space-3);
+  transform: translateX(-50%);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+}
+
+/* ------------------------------ toasts ------------------------------ */
+.ws-toasts {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.ws[data-inspector='open'] .ws-toasts {
+  right: calc(var(--inspector-w) + 24px);
+}
+
+/* ---------------------------- status bar ---------------------------- */
+.ws-statusbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+}
+
+.ws-status-start {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ws-status-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-status-warn {
+  flex: none;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.ws-status-end {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ----------------------------- dialogs ------------------------------ */
+.ws-dialog-text {
+  margin: 0 0 var(--space-3);
+}
+
+.ws-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--ink);
+}
+
+.ws-shortcuts-table th,
+.ws-shortcuts-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ws-shortcuts-group th {
+  padding-top: var(--space-3);
+  color: var(--ink-2);
+  font-size: var(--text-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ws-shortcuts-table kbd {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font: 12px/1.4 var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ---------------------------- loading splash ------------------------ */
+.loading-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: var(--bg);
+  transition: opacity var(--dur-slow) var(--ease);
+}
+
+.loading-splash.leaving {
+  opacity: 0;
+  /* The exit fade must never swallow the first click on the workspace. */
+  pointer-events: none;
+}
+
+.loading-splash-title {
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.loading-splash-bar {
+  width: 120px;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) 0 40%, var(--line) 40% 100%);
+}
+
+@keyframes ws-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

@@ -24,6 +24,8 @@ export class AutosaveManager {
   constructor(
     private storage: Storage,
     private debounceMs: number = DEBOUNCE_MS_DEFAULT,
+    /** Issue #178 (G8): a write landed — the shell clears the unsaved dot. */
+    private onPersisted: () => void = () => {},
   ) {}
 
   scheduleSave(plan: StoredPlanPayload): void {
@@ -50,6 +52,7 @@ export class AutosaveManager {
    */
   persistSync(plan: StoredPlanPayload): void {
     this.storage.setItem(AUTOSAVE_KEY, JSON.stringify(plan, null, 2));
+    this.onPersisted();
   }
 
   /** Drop the pending write without saving (e.g. plan invalidated). */
@@ -68,6 +71,7 @@ export class AutosaveManager {
     } finally {
       this.pendingPlan = null;
     }
+    this.onPersisted();
   }
 
   /**

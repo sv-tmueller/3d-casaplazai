@@ -26,10 +26,17 @@ npm run preview      # serves dist/ (port 4173)
 
 Pages served:
 
-| Route     | What you get                                            |
-| --------- | ------------------------------------------------------- |
-| `/`       | 2D editor                                               |
-| `/viewer` | 2D editor + 3D viewer side-by-side (shares your plan)   |
+| Route     | What you get                                                        |
+| --------- | ------------------------------------------------------------------- |
+| `/`       | The workspace: Plan, 3D and Walk views of one plan                  |
+| `/viewer` | Redirects to `/?view=3d`, keeping its query and any `#plan=` link   |
+
+The workspace has a top bar (file menu behind the logo, project name,
+the **Plan / 3D / Walk** segment, the level stepper, undo/redo, share,
+export, inspector, help, theme, fullscreen), a floating tool card on
+the left (**Build**, **View** and **Measure** tabs), an inspector on the
+right while something is selected, and a status bar (hint, cursor,
+area total, zoom).
 
 ## Feature tour
 
@@ -51,7 +58,7 @@ pairs in one atomic, single-undo step.
 
 ### Furniture
 
-Arm **Furnish**, pick a piece from the palette (bed, sofa, table,
+Arm **Furniture** (`F`), pick a piece in the tool card (bed, sofa, table,
 chair, counter, bathtub, toilet), then click inside a room. Pieces are
 constraint-checked: they must fit inside the room and not collide with
 other furniture. Press `R` to rotate the selected piece 90°.
@@ -63,98 +70,107 @@ centroid, and the status bar shows the **livable-area total**
 (`Total: 36.7 m²`). Overlapping rooms are counted twice in the total —
 the editor warns about overlaps but does not prevent them.
 
-### 3D viewer + walk mode
+### 3D and Walk views
 
-Open `/viewer` (or the bundled side-by-side page). The viewer compiles
-your plan into meshes and offers:
+The **3D** view (`2` or the segment) shows the plan compiled into
+meshes, framed after every change, as an orbit camera (drag to spin,
+wheel to zoom). Roofs, ceilings, walls transparency, quality and the
+sun live in the tool card's **View** tab.
 
-- **Overview** orbit camera (drag to spin, wheel to zoom).
-- **Walk mode** (`Tab` or the HUD toggle): WASD/arrows to move,
-  mouse-look with pointer lock, `Shift` to sprint. You spawn inside the
-  largest room at eye height and physically thread doorways —
-  collision-safe, with doorway gaps carved out of the walls.
+The **Walk** view (`3`) is first person: click to walk, WASD/arrows to
+move, mouse-look with pointer lock, `Shift` to sprint. You spawn where
+you last stood (or inside the largest room) at eye height and
+physically thread doorways — collision-safe, with doorway gaps carved
+out of the walls. `Esc` releases the mouse and keeps you in Walk; `1`
+or `2` (or the segment) leave it.
 
 ### Export
 
-**Export** (toolbar) downloads your plan as an image: choose PNG or
+**Export** (top bar) downloads the active floor as an image: choose PNG or
 JPEG and a 1×/2×/3× supersample scale. White background, measurement
 badges baked in. File name: `floorplan-YYYY-MM-DD.{png,jpg}`.
 
 ## Controls & keyboard shortcuts
 
 <!-- BEGIN SHORTCUTS -->
-| Keys             | Action                                              |
-| ---------------- | ---------------------------------------------------- |
-| ?                | Show keyboard shortcuts                              |
-| Esc              | Cancel current gesture / deselect                    |
-| Enter            | Close polygon while drawing                          |
-| Ctrl+Z           | Undo                                                 |
-| Ctrl+Shift+Z     | Redo                                                 |
-| Ctrl+Y           | Redo                                                 |
-| V                | Arm the Select tool                                  |
-| R                | Arm Rectangle (rotates selected furniture 90° while one is selected) |
-| P                | Arm the Polygon tool                                 |
-| D                | Arm the Door tool                                    |
-| W                | Arm the Window tool                                  |
-| F                | Arm the Furnish (stamp) tool                         |
-| T                | Arm the Stairs tool                                  |
-| M                | Arm the Measure tool                                 |
-| S                | Toggle the Snapping settings popover                 |
-| L                | Set the selected room’s wall lean (roof)             |
-| I                | Toggle the selection inspector panel                 |
-| 3                | Toggle the 3D inset preview                          |
-| C                | Place the 3D walk camera (click a room, drag to aim)  |
-| PageUp / [       | Switch to the floor below                            |
-| PageDown / ]     | Switch to the floor above                            |
-| Del / Backspace  | Delete selected room, opening, or furniture          |
-| 0                | Fit the whole plan in the viewport                   |
-| Space (hold)     | Temporarily switch to the Pan tool                    |
+| Keys | Action |
+| ---- | ------ |
+| ? | Show keyboard shortcuts |
+| Esc | Cancel current gesture / deselect |
+| Enter | Close polygon while drawing |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z | Redo |
+| Ctrl+Y | Redo |
+| V | Arm the Select tool |
+| R | Arm Rectangle (rotates selected furniture 90° while one is selected) |
+| P | Arm the Polygon tool |
+| D | Arm the Door tool |
+| W | Arm the Window tool |
+| F | Arm the Furniture (stamp) tool |
+| T | Arm the Stairs tool |
+| M | Arm the Measure tool |
+| S | Open the Build tab’s Snapping section |
+| L | Set the selected room’s wall lean (roof) in the inspector |
+| I | Toggle the inspector panel |
+| 1 | Switch to the Plan view |
+| 2 | Switch to the 3D view |
+| 3 | Switch to the Walk view |
+| C | Place the walk camera (click a room, drag to aim), then walk |
+| PageUp / [ | Switch to the floor below |
+| PageDown / ] | Switch to the floor above |
+| Del / Backspace | Delete selected room, opening, or furniture |
+| 0 | Fit the whole plan in the viewport |
+| Space (hold) | Temporarily switch to the Pan tool |
 | Drag on empty space | Marquee multi-select (bulk delete; bulk DRAG moves rooms and furniture — staircases stay put) |
-| Alt+Drag / Middle-Drag | Pan the canvas                                 |
-| Wheel            | Zoom at cursor                                       |
+| Alt+Drag / Middle-Drag | Pan the canvas |
+| Wheel | Zoom at cursor |
 <!-- END SHORTCUTS -->
 
-This table is kept in sync with `src/editor/shortcuts.ts` by
+This table is kept in sync with the command registry
+(`src/app/commands.ts`, rows exported by `src/app/shortcuts.ts`) by
 [`tests/unit/readme.shortcuts.sync.spec.ts`](tests/unit/readme.shortcuts.sync.spec.ts)
 — edit the registry, rerun tests, paste the failing expectation. The
-in-app cheat sheet (**?**) renders from the same registry.
+in-app cheat sheet (**?**) and every control's tooltip render from the
+same registry.
 
 ## Accessibility
 
-- **Keyboard**: the canvas is Tab-focusable and shows a focus ring; the toolbar
-  popovers (Snap / Floor / Underlay / Lean) and the export dialog keep Tab
-  inside while open and hand focus back to the control that opened them.
-  A popover opened mid-draw (shortcut) never steals canvas focus, so Escape
-  keeps its draw-gesture precedence: the first press cancels the draft, the
-  second closes the popover and hands focus back.
-- **Screen readers**: inline notices announce politely (`role="status"`) and
-  errors announce assertively (`role="alert"`); the viewer's toast stack is a
-  polite live region, with error toasts raised to `role="alert"`.
-- **Reduce motion** (`prefers-reduced-motion: reduce`): the splash exit, the
-  viewer's mode-transition veil, toast fades and the idle camera drift all
-  stop. Nothing is removed functionally — the 3D view simply stops moving on
-  its own.
+- **Keyboard**: every control is a named button, switch, slider or
+  segment reachable with Tab; segments, tabs and menus move with the arrow
+  keys; dialogs (export, shortcuts, confirm) keep Tab inside while open and
+  hand focus back to the control that opened them. The canvas is
+  Tab-focusable with a focus ring. A shortcut used mid-draw (`S`, `L`) never
+  takes canvas focus, so Escape keeps its draw-gesture precedence. Plan keys
+  are inert in the 3D and Walk views.
+- **Screen readers**: notices are toasts in a polite live region
+  (`role="status"`); errors announce assertively (`role="alert"`).
+- **Reduce motion** (`prefers-reduced-motion: reduce`): every transition
+  reads a duration token that drops to zero, so panel slides, the view
+  veil, toast fades, the splash exit and the idle camera drift all stop.
+  Nothing is removed functionally.
 - **Contrast**: the measurement-pill text and outline are pinned against every
   editor backdrop by [`tests/unit/contrast.spec.ts`](tests/unit/contrast.spec.ts).
 
-Viewer keys: `Tab` toggles overview ⇄ walk; in walk mode use
-`WASD`/arrows, mouse-look, `Shift` sprint, `Esc` to release the mouse.
+Walk keys: `WASD`/arrows, mouse-look, `Shift` sprint, `Esc` to release
+the mouse (you stay in Walk), `1` / `2` to leave.
 
-Walk navigation aids (issue #147): the HUD carries a live room readout
-(the name of the room the walker stands in on its storey, or `Outside`)
-and a **Go to room…** picker that teleports the walker to any room,
-switching floors as needed. From the editor, **C** arms **Place camera**
-— click inside a room to move the walker there, drag to aim it, `Esc`
-cancels; the editor mirrors the walker as a glyph on the plan (orange
-dot + heading wedge) whenever it is on the active floor.
+Walk navigation aids (issue #147): the room pill at the top of the Walk
+view names the room the walker stands in on its storey (or `Outside`);
+its menu, **Go to room**, teleports the walker to any room, switching
+floors as needed. In the Plan view, **C** arms **Place camera** — click
+inside a room to put the walker there, drag to aim it — and opens the
+Walk view seated there without grabbing the mouse; `Esc` cancels. The
+plan mirrors the walker as a glyph (orange dot + heading wedge) whenever
+it is on the active floor, also after you leave Walk.
 
 ## Development
 
 ```bash
-npm run dev        # vite dev server (editor at /)
-npm run verify     # lint + typecheck + vitest + Playwright journey (<3 min)
+npm run dev        # vite dev server (workspace at /, component kit at /dev/kit.html)
+npm run build      # e2e serves dist/: build before e2e / verify
+npm run verify     # lint + typecheck + vitest + Playwright e2e (the gate)
 npm run verify:fast  # lint + typecheck + vitest only (rapid iteration)
-npm run e2e        # Playwright suite alone (starts its own preview server)
+npm run e2e        # Playwright suite alone (serves the built dist/)
 ```
 
 Project layout:
@@ -165,10 +181,15 @@ src/
                    (see docs/schema.md)
   geom/            Dependency-light geometry kernel (triangulation,
                    connectivity, collision) — no DOM, no three.js
-  editor/          2D editor: store (reducer + undo), controller,
-                   render, openings/furniture, measures, export
-  viewer/          3D viewer: scene builder, adapter, orbit/walk rigs,
-                   spawn solver, HUD
+  ui/              Component kit + design tokens (light/dark), no app
+                   imports; showcase at /dev/kit.html
+  app/             Workspace shell: AppState, command registry,
+                   keyboard dispatcher, panels, dialogs, entry point
+  editor/          2D model and canvas engine (behind EditorEngine):
+                   store (reducer + undo), controller, render,
+                   openings/furniture, measures, export
+  viewer/          3D engine: scene builder, adapter, orbit/walk rigs,
+                   spawn solver, UI sink
 demo/              Demo apartment fixture (also loads in-app via the
                    editor bridge)
 e2e/               Playwright specs incl. the full-loop journey

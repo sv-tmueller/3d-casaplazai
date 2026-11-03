@@ -1,0 +1,91 @@
+/*
+ * Design tokens (issue #178, design §5.1). Every colour, spacing, radius,
+ * shadow, type and duration value the shell paints lives here; no
+ * component hardcodes a colour. Dark theme re-points the same names
+ * under :root[data-theme="dark"] (the casaplaza.theme.v1 preference,
+ * mirrored onto <html> by the app).
+ *
+ * Gap G11: the design gave no dark values for ink-2, ink-3, accent-ink,
+ * danger, warn and no on-accent token; the values below are chosen so
+ * every text pairing clears 4.5:1 (pinned by tests/ui/tokens.contrast).
+ * ink-3 is for disabled text only; placeholders use ink-2.
+ */
+:root {
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-2: #f1f4f8;
+  --line: #e3e8ef;
+  --ink: #111827;
+  --ink-2: #5b6472;
+  --ink-3: #9aa3af;
+  --accent: #0f766e;
+  --accent-soft: #d9f2ee;
+  --accent-ink: #0b5a54;
+  --on-accent: #ffffff;
+  --danger: #dc2626;
+  --warn: #b45309;
+  --danger-soft: #fdecec;
+  --warn-soft: #fdf3e6;
+  --scrim: rgb(15 19 24 / 36%);
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-3: 16px;
+  --radius-pill: 999px;
+  --shadow-1: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 10%);
+  --shadow-2: 0 4px 12px rgb(16 24 40 / 8%), 0 1px 3px rgb(16 24 40 / 6%);
+  --shadow-3: 0 16px 40px rgb(16 24 40 / 16%);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-caption: 12px;
+  --text-body: 13px;
+  --text-title: 14px;
+  --text-dialog: 16px;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 250ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --topbar-h: 56px;
+  --statusbar-h: 32px;
+  --toolcard-w: 280px;
+  --inspector-w: 300px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1318;
+  --surface: #161b22;
+  --surface-2: #1d242d;
+  --line: #2a323d;
+  --ink: #e6e9ee;
+  --ink-2: #a3adba;
+  --ink-3: #6b7480;
+  --accent: #2dd4bf;
+  --accent-soft: #113b37;
+  --accent-ink: #7ae8d6;
+  --on-accent: #042f2e;
+  --danger: #f87171;
+  --warn: #f5a524;
+  --danger-soft: #3a1c1f;
+  --warn-soft: #3a2a12;
+  --scrim: rgb(0 0 0 / 55%);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 40%), 0 1px 3px rgb(0 0 0 / 50%);
+  --shadow-2: 0 4px 12px rgb(0 0 0 / 45%), 0 1px 3px rgb(0 0 0 / 40%);
+  --shadow-3: 0 16px 40px rgb(0 0 0 / 60%);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}

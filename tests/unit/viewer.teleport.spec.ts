@@ -1,65 +1,25 @@
 // @vitest-environment happy-dom
 /**
- * Walker teleports from the 2D pane (issue #147 CP2): the viewer
- * subscribes to walkerLink commands, seats walk mode WITHOUT requesting
- * pointer lock, teleports the rig to the requested pose/storey, and
- * publishes the resulting pose back for the editor glyph.
- *
- * The pointer-lock assertion is the load-bearing one (AC: "the pointer
- * lock is not requested until the user clicks the 3D pane"): the
- * pre-#147 wiring would have used the Walk-button path, which calls
- * requestLock as a user gesture.
+ * Walk view behaviour of the 3D engine (issue #147 CP2, reworked by #178):
+ *  - seated walk from a pose (place camera, G15) never requests pointer
+ *    lock and lands on the pose's storey;
+ *  - leaving walk PARKS the pose (mode 'overview') instead of retracting
+ *    it, so the Plan glyph keeps showing where the camera stood (G4);
+ *  - an illegal pose falls back to the spawn solver; floorIdx clamps;
+ *  - Esc (pointer unlock) stays in Walk with the prompt (lead ruling C3);
+ *  - rebuilds re-apply the 3D settings (G5); a hidden viewer does not
+ *    tick (G6).
  */
-
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  ViewerApp,
-  type DataBridge,
-} from '../../src/viewer/appController';
-import {
-  getPose,
-  hasViewerSubscriber,
-  resetWalkerLink,
-  sendCommand,
-  subscribePose,
-} from '../../src/shared/walkerLink';
-import { EYE_HEIGHT } from '../../src/viewer/types';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getPose, resetWalkerLink } from '../../src/shared/walkerLink';
+import { EYE_HEIGHT, RECOMPILE_DEBOUNCE_MS } from '../../src/viewer/types';
 import type { FloorplanData } from '../../src/shared/schema';
+import { bootViewer, viewerStats, type Harness } from './helpers/viewerHarness';
 
-/** Happy-dom has no WebGL: stub the renderer factory seam. */
-vi.mock('../../src/viewer/sceneBuilder', async (importOriginal) => {
-  const mod =
-    await importOriginal<typeof import('../../src/viewer/sceneBuilder')>();
-  return {
-    ...mod,
-    makeRenderer: () => ({
-      render: vi.fn(),
-      setSize: vi.fn(),
-      setPixelRatio: vi.fn(),
-      dispose: vi.fn(),
-      domElement: undefined,
-      shadowMap: {},
-    }),
-  };
-});
+type Ring = [[number, number], [number, number], [number, number], [number, number]];
+const ring = (x1: number, y1: number, x2: number, y2: number): Ring => [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
 
-/**
- * Two-storey home: ground living + kitchen, one upper room whose
- * footprint overlaps the ground floor's (the stacked-storey case that
- * breaks z-naive attribution).
- */
 function twoStoreyPlan(): FloorplanData {
-  const ring = (
-    x1: number,
-    y1: number,
-    x2: number,
-    y2: number,
-  ): [[number, number], [number, number], [number, number], [number, number]] => [
-    [x1, y1],
-    [x2, y1],
-    [x2, y2],
-    [x1, y2],
-  ];
   return {
     schemaVersion: 2,
     units: 'meters',
@@ -71,18 +31,8 @@ function twoStoreyPlan(): FloorplanData {
         name: 'Ground',
         elevation: 0,
         rooms: [
-          {
-            id: 'living',
-            name: 'Living',
-            polygon: ring(0, 0, 6, 5),
-            floorTexture: 'wood',
-          },
-          {
-            id: 'kitchen',
-            name: 'Kitchen',
-            polygon: ring(0, 5, 3, 8),
-            floorTexture: 'tile',
-          },
+          { id: 'living', name: 'Living', polygon: ring(0, 0, 6, 5), floorTexture: 'wood' },
+          { id: 'kitchen', name: 'Kitchen', polygon: ring(0, 5, 3, 8), floorTexture: 'tile' },
         ],
         openings: [],
         furniture: [],
@@ -91,14 +41,7 @@ function twoStoreyPlan(): FloorplanData {
         id: 'floor-upper',
         name: 'Upper',
         elevation: 2.7,
-        rooms: [
-          {
-            id: 'belvedere',
-            name: 'Belvedere',
-            polygon: ring(0, 0, 4, 4),
-            floorTexture: 'wood',
-          },
-        ],
+        rooms: [{ id: 'belvedere', name: 'Belvedere', polygon: ring(0, 0, 4, 4), floorTexture: 'wood' }],
         openings: [],
         furniture: [],
       },
@@ -107,132 +50,63 @@ function twoStoreyPlan(): FloorplanData {
   } as unknown as FloorplanData;
 }
 
-interface Harness {
-  app: ViewerApp;
-  canvas: HTMLCanvasElement;
-  pump: () => void;
-  requestLock: ReturnType<typeof vi.fn>;
-  dispose: () => void;
-}
+const cam = () =>
+  (window as unknown as { __viewerCam?: () => { posZ: number; discX?: number; discY?: number } }).__viewerCam?.();
 
-function boot(initial: FloorplanData): Harness {
-  const bridge: DataBridge = {
-    getData: () => initial,
-    getCurrent: () => initial,
-  };
-
-  const timers: Array<{ at: number; cb: () => void }> = [];
-  const now = 0;
-  const setTimeoutFn = ((cb: () => void, ms: number) => {
-    timers.push({ at: now + ms, cb });
-    return timers.length;
-  }) as unknown as typeof window.setTimeout;
-
-  const ticks: Array<(t: number) => void> = [];
-  const pump = (): void => {
-    for (const cb of [...ticks]) cb(now);
-  };
-
-  const pane = document.createElement('div');
-  const canvas = document.createElement('canvas');
-  pane.appendChild(canvas);
-  document.body.appendChild(pane);
-
-  const requestLock = vi.fn();
-  (canvas as unknown as { requestPointerLock: unknown }).requestPointerLock =
-    requestLock;
-
-  const app = new ViewerApp({
-    bridge: () => bridge,
-    canvas,
-    pane,
-    scheduleTick: (cb) => {
-      ticks.push(cb);
-      return () => {};
-    },
-    setTimeoutFn,
-  });
-  app.start();
-  return {
-    app,
-    canvas,
-    pump,
-    requestLock,
-    dispose: () => {
-      app.dispose();
-      pane.remove();
-    },
-  };
-}
-
-/** Wait out the mode-swap fade (hud.playFade uses real 320 ms timers). */
-async function settleFade(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 420));
-}
-
-describe('walker teleports from the plan (issue #147 CP2)', () => {
+describe('walk view (issue #147 CP2, #178)', () => {
   let h: Harness | null = null;
+  beforeEach(() => resetWalkerLink());
   afterEach(() => {
     h?.dispose();
     h = null;
-    resetWalkerLink();
   });
 
-  it('registers as a viewer subscriber for the editor C-key gate', () => {
-    h = boot(twoStoreyPlan());
-    expect(hasViewerSubscriber()).toBe(true);
-    h.dispose();
-    h = null;
-    expect(hasViewerSubscriber()).toBe(false);
-  });
-
-  it('publishes no pose while the walker does not exist', () => {
-    h = boot(twoStoreyPlan());
+  it('publishes no pose before anyone walked', () => {
+    h = bootViewer(twoStoreyPlan());
     h.pump();
     expect(getPose()).toBeNull();
-
-    // A late editor subscriber must not receive a stale pose either:
-    // subscribing replays only a LIVE pose, so "no walker" means no
-    // callback at all (the editor's initial state is already glyph-less).
-    const seen: Array<unknown> = [];
-    subscribePose((pose) => seen.push(pose));
-    expect(seen).toEqual([]);
   });
 
-  it('seats walk without pointer lock and follows the place command', async () => {
-    h = boot(twoStoreyPlan());
+  it('seats walk from a placed pose without pointer lock, on the pose storey', async () => {
+    h = bootViewer(twoStoreyPlan());
+    expect(h.app.requestMode('walk', { autoLock: false, pose: { x: 2.25, y: 2.5, yawRad: 0.6, floorIdx: 1, mode: 'walk' } })).toBe(true);
+    await h.settle();
     h.pump();
-
-    sendCommand({ kind: 'place', x: 4.25, y: 2.5, yaw: 0.6, floorIdx: 1 });
-    await settleFade();
-    h.pump();
-
     const pose = getPose();
-    expect(pose).not.toBeNull();
     expect(pose?.mode).toBe('walk');
-    expect(pose?.x).toBeCloseTo(4.25, 6);
+    expect(pose?.x).toBeCloseTo(2.25, 6);
     expect(pose?.y).toBeCloseTo(2.5, 6);
     expect(pose?.yawRad).toBeCloseTo(0.6, 6);
     expect(pose?.floorIdx).toBe(1);
-
-    // AC: the teleport path must not ask for pointer lock.
     expect(h.requestLock).not.toHaveBeenCalled();
+    expect(cam()?.posZ).toBeCloseTo(2.7 + EYE_HEIGHT, 3);
+    expect(h.sink.modes.at(-1)).toBe('walk');
+    expect(h.sink.affordances.at(-1)).toEqual({ overlay: true, reticle: false });
+  });
 
-    // The rig materialised on the TARGET storey, not the ground floor.
-    const stats = (
-      window as unknown as Record<string, () => { posZ?: number } | null>
-    ).__viewerCam?.() as { posZ?: number } | undefined;
-    expect(stats?.posZ).toBeCloseTo(2.7 + EYE_HEIGHT, 3);
+  it('a user-initiated walk asks for the lock straight away', async () => {
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk');
+    await h.settle();
+    expect(h.requestLock).toHaveBeenCalled();
+  });
+
+  it('clamps an out-of-range floor and falls back to the solver for an illegal pose', async () => {
+    h = bootViewer(twoStoreyPlan());
+    // Far outside every room on a floor index that does not exist.
+    h.app.requestMode('walk', { autoLock: false, pose: { x: 2.0, y: -0.0, yawRad: 0, floorIdx: 9, mode: 'overview' } });
+    await h.settle();
+    h.pump();
+    const pose = getPose();
+    expect(pose).not.toBeNull();
+    expect(pose!.floorIdx).toBeLessThanOrEqual(1);
   });
 
   it('goto-room resolves the room storey and spawns inside that room', async () => {
-    h = boot(twoStoreyPlan());
+    h = bootViewer(twoStoreyPlan());
+    await h.app.gotoRoom('belvedere');
+    await h.settle();
     h.pump();
-
-    sendCommand({ kind: 'gotoRoom', roomId: 'belvedere' });
-    await settleFade();
-    h.pump();
-
     const pose = getPose();
     expect(pose?.floorIdx).toBe(1);
     expect(pose?.x).toBeGreaterThan(0);
@@ -243,33 +117,100 @@ describe('walker teleports from the plan (issue #147 CP2)', () => {
   });
 
   it('ignores an unknown room without moving the walker', async () => {
-    h = boot(twoStoreyPlan());
-    h.pump();
-
-    sendCommand({ kind: 'place', x: 2, y: 2, yaw: 0, floorIdx: 0 });
-    await settleFade();
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk', { autoLock: false, pose: { x: 2, y: 2, yawRad: 0, floorIdx: 0, mode: 'walk' } });
+    await h.settle();
     h.pump();
     const placed = getPose();
-
-    sendCommand({ kind: 'gotoRoom', roomId: 'does-not-exist' });
-    await settleFade();
+    await h.app.gotoRoom('does-not-exist');
     h.pump();
     expect(getPose()?.x).toBeCloseTo(placed!.x, 6);
-    expect(getPose()?.y).toBeCloseTo(placed!.y, 6);
+    expect(h.sink.toasts.at(-1)?.text).toBe('That room is not in the current plan.');
   });
 
-  it('retracts the pose when walk mode is left', async () => {
-    h = boot(twoStoreyPlan());
+  it('PARKS the pose when walk is left, so the plan glyph stays (G4)', async () => {
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk', { autoLock: false, pose: { x: 2, y: 2, yawRad: 0.3, floorIdx: 0, mode: 'walk' } });
+    await h.settle();
     h.pump();
-
-    sendCommand({ kind: 'place', x: 2, y: 2, yaw: 0, floorIdx: 0 });
-    await settleFade();
-    h.pump();
-    expect(getPose()).not.toBeNull();
-
     h.app.requestMode('overview');
-    await settleFade();
+    await h.settle();
     h.pump();
-    expect(getPose()).toBeNull();
+    const parked = getPose();
+    expect(parked).not.toBeNull();
+    expect(parked?.mode).toBe('overview');
+    expect(parked?.x).toBeCloseTo(2, 6);
+    expect(h.sink.modes.at(-1)).toBe('overview');
+  });
+
+  it('hiding the viewer mid-walk ends walking at once and parks the pose', async () => {
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk', { autoLock: false, pose: { x: 2, y: 2, yawRad: 0, floorIdx: 0, mode: 'walk' } });
+    await h.settle();
+    h.pump();
+    h.app.setActive(false);
+    expect(h.app.mode()).toBe('overview');
+    expect(getPose()?.mode).toBe('overview');
+  });
+
+  it('Esc (unlock) keeps the Walk view and brings the prompt back (ruling C3)', async () => {
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk', { autoLock: false });
+    await h.settle();
+    h.pump();
+    document.dispatchEvent(new Event('pointerlockchange'));
+    await h.settle();
+    expect(h.app.mode()).toBe('walk');
+    expect(h.sink.affordances.at(-1)).toEqual({ overlay: true, reticle: false });
+  });
+
+  it('refuses requests mid-transition and reports busy', () => {
+    h = bootViewer(twoStoreyPlan());
+    h.app.requestMode('walk', { autoLock: false });
+    expect(h.app.busy()).toBe(true);
+    expect(h.app.requestMode('overview')).toBe(false);
+  });
+});
+
+describe('3D settings (G5) and activity (G6)', () => {
+  let h: Harness | null = null;
+  afterEach(() => {
+    h?.dispose();
+    h = null;
+  });
+
+  it('keeps the applied settings across a rebuild', () => {
+    h = bootViewer(twoStoreyPlan(), { settings: { wallsAlpha: 0.5, roofs: false } });
+    expect(h.app.settings().wallsAlpha).toBe(0.5);
+    h.plan().floors[0].rooms[0].name = 'Renamed';
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.settings()).toMatchObject({ wallsAlpha: 0.5, roofs: false });
+  });
+
+  it('applySettings switches quality at runtime (the stats channel follows)', () => {
+    h = bootViewer(twoStoreyPlan());
+    expect(viewerStats().qualityLevel).toBe('high');
+    h.app.applySettings({ ...h.app.settings(), quality: 'low' });
+    expect(viewerStats().qualityLevel).toBe('low');
+  });
+
+  it('does not tick while hidden and resumes when shown', () => {
+    h = bootViewer(twoStoreyPlan(), { active: false });
+    h.pump();
+    h.pump();
+    expect(h.ticks()).toBe(0);
+    h.app.setActive(true);
+    h.pump();
+    h.pump();
+    expect(h.ticks()).toBe(2);
+  });
+
+  it('keeps rebuilding from store changes while hidden', () => {
+    h = bootViewer(twoStoreyPlan(), { active: false });
+    h.plan().floors[0].rooms[0].name = 'Hidden edit';
+    h.notify();
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.currentSignature()).toContain('Hidden edit');
   });
 });

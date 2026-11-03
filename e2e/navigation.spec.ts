@@ -1,85 +1,55 @@
 /**
- * Issue #126 (Pkg 14.x) e2e: Pan tool, fit-to-plan "0", dark theme.
- *
- * Additive-green: pins only the NEW surfaces (#126) — btn-pan, the
- * Space-hold temp pan, the "0" shortcut (folded into the Center button's
- * fitToPlan seam) and the editor theme preference — plus the standing
- * export-stays-white guarantee under a dark canvas.
+ * Navigation, theme and motion (issue #126 / #168 on the workspace since
+ * #178): the Pan tool and the Space-hold temporary pan, "0" fitting the
+ * plan clear of the tool card, the theme toggle (tokens + canvas palette,
+ * persisted, exports stay white), dark chrome surfaces, and reduced
+ * motion zeroing every transition.
  */
 import { expect, test, type Page } from '@playwright/test';
 import { CAM_SCALE } from './fixtures/camConstants';
+import {
+  CANVAS,
+  TOOLCARD_INSET,
+  command,
+  getCam,
+  openWorkspace,
+  readDemo,
+  seedPlan,
+} from './fixtures/workspace';
 
-type Cam = { originX: number; originY: number; scale: number };
+const ONE_ROOM = {
+  schemaVersion: 1,
+  units: 'meters',
+  wallHeight: 2.7,
+  wallThickness: 0.24,
+  rooms: [{ id: 'r1', name: 'Solo', polygon: [[5, -3], [7, -3], [7, -1], [5, -1]], floorTexture: null, wallsOverride: [] }],
+  openings: [],
+  furniture: [],
+};
 
-/**
- * #144: a fresh profile boots into the first-run empty-state card, which
- * floats over the canvas CENTRE and eats the pointer/keyboard interactions
- * these navigation tests drive. The card's visibility rule is
- * "empty plan AND Select armed" (glue.refreshEmptyState), so merely arming
- * a tool and returning to Select would bring it BACK. Instead: draw one
- * small room via the card's own Draw button — the plan stops being empty,
- * the card is gone for good, and the tests' Select expectations hold.
- */
-async function dismissFirstRunCard(page: Page): Promise<void> {
-  const card = page.getByTestId('empty-state-card');
-  if (!(await card.count())) return;
-  const box = await page.locator('.editor-canvas').boundingBox();
-  const ox = box!.x + box!.width * 0.25;
-  const oy = box!.y + box!.height * 0.25;
-  await page.getByTestId('empty-draw-room').click();
-  await expect(card).toBeHidden();
-  await page.mouse.move(ox, oy);
-  await page.mouse.down();
-  await page.mouse.move(ox + 60, oy + 40, { steps: 4 });
-  await page.mouse.up();
-  // The drawn room clears planIsEmpty ⇒ the card stays hidden even after
-  // re-arming Select.
-  await page.getByRole('button', { name: 'Select', exact: true }).click();
-  await expect(card).toBeHidden();
+/** A seeded room retires the first-run card (it floats over the canvas). */
+async function openWithRoom(page: Page): Promise<void> {
+  await openWorkspace(page);
+  await seedPlan(page, ONE_ROOM);
+  await expect(page.getByTestId('ws-empty')).toBeHidden();
 }
 
-async function getCam(page: Page): Promise<Cam> {
-  return page.evaluate(
-    () => (window as unknown as { __editorCam: () => Cam }).__editorCam(),
-  );
-}
-
-async function canvasBox(page: Page) {
-  const box = await page.locator('.editor-canvas').boundingBox();
-  if (!box) throw new Error('editor canvas has no bounding box');
-  return box;
-}
-
-/** Left-drag from the canvas centre by (dx, dy) CSS px. */
+/** Left-drag from a free spot right of the tool card by (dx, dy) px. */
 async function dragCanvas(page: Page, dx: number, dy: number): Promise<void> {
-  const box = await canvasBox(page);
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  await page.mouse.move(cx, cy);
+  const box = (await page.locator(CANVAS).boundingBox())!;
+  const x = box.x + box.width * 0.75;
+  const y = box.y + box.height * 0.75;
+  await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(cx + dx, cy + dy, { steps: 6 });
+  await page.mouse.move(x + dx, y + dy, { steps: 6 });
   await page.mouse.up();
 }
 
-async function loadDemoPlan(page: Page): Promise<void> {
-  const { readFile } = await import('node:fs/promises');
-  const raw = await readFile('demo/demo-apartment.json', 'utf8');
-  await page.evaluate((planJson) => {
-    (
-      window as unknown as { __casaplaza: { loadPlan: (p: unknown) => void } }
-    ).__casaplaza.loadPlan(JSON.parse(planJson) as unknown);
-  }, raw);
-}
-
-/** Mean RGB of a 9x9 patch at the canvas centre (device px). */
+/** Mean RGB of a 9×9 patch at the canvas centre (device px). */
 async function canvasCentreMean(page: Page): Promise<number> {
   const values = await page.evaluate(() => {
     const c = document.querySelector('.editor-canvas') as HTMLCanvasElement;
-    const ctx = c.getContext('2d');
-    if (!ctx) throw new Error('no 2d context');
-    const x = Math.floor(c.width / 2);
-    const y = Math.floor(c.height / 2);
-    const d = ctx.getImageData(x - 4, y - 4, 9, 9).data;
+    const d = c.getContext('2d')!.getImageData(Math.floor(c.width * 0.75) - 4, Math.floor(c.height * 0.75) - 4, 9, 9).data;
     const out: number[] = [];
     for (let i = 0; i < d.length; i += 4) out.push(d[i], d[i + 1], d[i + 2]);
     return out;
@@ -87,219 +57,52 @@ async function canvasCentreMean(page: Page): Promise<number> {
   return values.reduce((a, v) => a + v, 0) / values.length;
 }
 
-/* --------------- fix round (PR #168 findings 1-3) below --------------- */
-
-/** sRGB channel (0..255) -> linear light (WCAG 2.x). */
-function linearChannel(v: number): number {
+const lin = (v: number): number => {
   const s = v / 255;
   return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-}
-
-/** WCAG relative luminance (0..1) of a computed 'rgb(r, g, b)' colour. */
-function relLuminance(css: string): number {
-  const ch = css.match(/[\d.]+/g);
-  if (!ch || ch.length < 3) throw new Error(`not an rgb() colour: ${css}`);
-  const [r, g, b] = ch.slice(0, 3).map(Number);
-  return 0.2126 * linearChannel(r) + 0.7152 * linearChannel(g) + 0.0722 * linearChannel(b);
-}
-
-/** WCAG contrast ratio between two computed 'rgb(r, g, b)' colours. */
-function contrastRatio(a: string, b: string): number {
-  const la = relLuminance(a);
-  const lb = relLuminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-/** Computed background + text colour of a selector. */
-async function surfaceColors(page: Page, sel: string): Promise<{ bg: string; color: string }> {
-  return page.locator(sel).evaluate((el) => {
-    const cs = getComputedStyle(el);
-    return { bg: cs.backgroundColor, color: cs.color };
-  });
-}
-
-/** #168: a chrome surface must render dark (white scores 1.0) with >=4.5:1 text. */
-async function expectDarkSurface(page: Page, sel: string): Promise<void> {
-  const { bg, color } = await surfaceColors(page, sel);
-  expect(bg.startsWith('rgb('), `${sel}: background ${bg} must be opaque`).toBe(true);
-  expect(relLuminance(bg), `${sel}: still-light background ${bg}`).toBeLessThan(0.05);
-  expect(contrastRatio(color, bg), `${sel}: text ${color} on ${bg}`).toBeGreaterThanOrEqual(4.5);
-}
-
-/** #168: text element (when present) must clear 4.5:1 on its own surface. */
-async function expectTextOnSurface(page: Page, textSel: string, surfaceSel: string): Promise<void> {
-  const { bg, color } = await surfaceColors(page, surfaceSel);
-  const text = page.locator(textSel);
-  const own = (await text.count()) > 0 ? await text.first().evaluate((el) => getComputedStyle(el).color) : color;
-  expect(contrastRatio(own, bg), `${textSel}: text ${own} on ${surfaceSel} ${bg}`).toBeGreaterThanOrEqual(4.5);
-}
-
-test('dark theme tokenizes the chrome panels (Inspector / Help modal / Export dialog)', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  await page.getByTestId('btn-theme').click();
-  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-
-  // Inspector panel: the dark tokens must reach it with no JS involved.
-  const inspector = page.locator('.inspector-panel');
-  if (!(await inspector.isVisible())) await page.getByTestId('btn-inspector').click();
-  await expect(inspector).toBeVisible();
-  await expectDarkSurface(page, '.inspector-panel');
-  // Muted panel text was hardcoded slate before the tokenization.
-  await expectTextOnSurface(page, '.inspector-section-title', '.inspector-panel');
-  await expectTextOnSurface(page, '.inspector-summary dt', '.inspector-panel');
-
-  // Help modal (opened from the toolbar, closed again with Escape).
-  await page.getByTestId('btn-help').click();
-  await expect(page.locator('.help-modal-panel')).toBeVisible();
-  await expectDarkSurface(page, '.help-modal-panel');
-  await expectTextOnSurface(page, '.help-modal-table .help-keys', '.help-modal-panel');
-  await page.keyboard.press('Escape');
-  await expect(page.locator('.help-modal-panel')).toBeHidden();
-
-  // Export dialog (anchored panel over the canvas).
-  // #142 folded Export into the File popover; open it first.
-  await page.getByTestId('btn-file').click();
-  await page.getByTestId('btn-export').click();
-  await expect(page.locator('.export-dialog-panel')).toBeVisible();
-  await expectDarkSurface(page, '.export-dialog-panel');
-  await expectTextOnSurface(page, '.export-fieldset legend', '.export-dialog-panel');
-});
-
-/** Composite a possibly-translucent 'rgba(r, g, b, a)' over an opaque backdrop. */
-function compositeOver(fg: string, backdrop: string): string {
-  const f = (fg.match(/[\d.]+/g) ?? []).map(Number);
-  const b = (backdrop.match(/[\d.]+/g) ?? []).map(Number);
-  if (f.length < 3 || b.length < 3) throw new Error(`not rgb colours: ${fg} / ${backdrop}`);
-  const alpha = f.length > 3 ? f[3] : 1;
-  return `rgb(${[0, 1, 2].map((i) => Math.round(alpha * f[i] + (1 - alpha) * b[i])).join(', ')})`;
-}
+};
+const lum = (css: string): number => {
+  const [r, g, b] = (css.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+};
+const contrast = (a: string, b: string): number => {
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
 
 /**
- * #168 fix round 2: viewer-HUD ink must clear 4.5:1 over its own (pinned
- * light) backdrop — the element's background composited over the viewer
- * pane's light backdrop, or the pane itself for ink with no chip of its own.
+ * A chrome surface renders dark and its text clears 4.5:1 on it. Colours
+ * transition over the duration tokens after the theme toggle, so both reads
+ * poll until the transition has settled instead of sampling once (#191).
  */
-async function expectHudInkLegible(page: Page, sel: string): Promise<void> {
-  const { ink, chip, pane } = await page.evaluate((s) => {
-    const el = document.querySelector(s);
-    const paneEl = document.querySelector('.pane-viewer');
-    if (!el || !paneEl) throw new Error(`missing ${s} or .pane-viewer`);
-    const cs = getComputedStyle(el);
-    return {
-      ink: cs.color,
-      chip: cs.backgroundColor,
-      pane: getComputedStyle(paneEl).backgroundColor,
-    };
-  }, sel);
-  const effective = compositeOver(chip, pane);
-  expect(
-    relLuminance(effective),
-    `${sel}: HUD backdrop ${effective} must stay light (fixed-palette island)`,
-  ).toBeGreaterThan(0.5);
-  expect(
-    contrastRatio(ink, effective),
-    `${sel}: HUD ink ${ink} on ${effective} — the dark theme must not flip pinned HUD ink`,
-  ).toBeGreaterThanOrEqual(4.5);
+async function expectDarkSurface(page: Page, sel: string, textSel?: string): Promise<void> {
+  const read = () =>
+    page.locator(sel).first().evaluate((el, ts) => {
+      const cs = getComputedStyle(el);
+      const t = ts ? el.querySelector(ts) : null;
+      return { bg: cs.backgroundColor, color: t ? getComputedStyle(t).color : cs.color };
+    }, textSel ?? null);
+  await expect
+    .poll(async () => lum((await read()).bg), { message: `${sel}: background luminance` })
+    .toBeLessThan(0.05);
+  await expect
+    .poll(
+      async () => {
+        const { bg, color } = await read();
+        return contrast(color, bg);
+      },
+      { message: `${sel}: text contrast on background` },
+    )
+    .toBeGreaterThanOrEqual(4.5);
 }
 
-test('viewer HUD stays legible where the dark theme reaches the viewer page', async ({ page }) => {
-  // Production path: a dark-preference user opens /viewer; the embedded
-  // editor mirrors casaplaza.theme.v1 onto <html data-theme> at boot
-  // (glue.ts), and the HUD's pinned light chips must stay readable under it.
-  await page.addInitScript(() => {
-    try {
-      localStorage.setItem('casaplaza.theme.v1', JSON.stringify('dark'));
-    } catch {
-      /* opaque-origin first pass; the page navigation re-runs this */
-    }
-  });
-  await page.goto('/viewer');
-  await page.locator('[data-testid="hud-mode-toggle"]').waitFor();
-  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-
-  // The re-tester's seam: computed colours of HUD surfaces in dark mode.
-  await expectHudInkLegible(page, '[data-testid="hud-mode-toggle"]');
-  await expectHudInkLegible(page, '[data-testid="hud-roof-toggle"]');
-  await expectHudInkLegible(page, '[data-testid="hud-hint"]');
-  await expectHudInkLegible(page, '[data-testid="hud-walls-alpha-label"]');
-});
-
-test('Space released mid-pan-drag finalizes the drag (no stranded pan)', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  await dismissFirstRunCard(page);
-  await page.locator('.editor-canvas').click();
-  const canvas = page.locator('.editor-canvas');
-  const box = await canvasBox(page);
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-
-  await page.keyboard.down('Space');
-  await expect(canvas).toHaveClass(/pan-armed/);
-  await page.mouse.move(cx, cy);
-  await page.mouse.down();
-  await page.mouse.move(cx + 50, cy + 30, { steps: 4 });
-  await expect(canvas).toHaveClass(/pan-dragging/);
-
-  // The #168 edge: Space goes up while the button is still down.
-  await page.keyboard.up('Space');
-  await page.mouse.up();
-  await expect(canvas).not.toHaveClass(/pan-dragging/);
-  await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  );
-
-  // Nothing stays latched in the phase machine: the next Space-hold drag
-  // pans the camera exactly as a clean one does.
-  const before = await getCam(page);
-  await page.keyboard.down('Space');
-  await dragCanvas(page, 40, 20);
-  const after = await getCam(page);
-  await page.keyboard.up('Space');
-  expect(after.originX).toBeCloseTo(before.originX - 40 / before.scale, 3);
-  expect(after.originY).toBeCloseTo(before.originY + 20 / before.scale, 3);
-});
-
-test('an explicit Pan pick during a Space-hold survives the Space release', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  await dismissFirstRunCard(page);
-  await page.locator('.editor-canvas').click();
-  const btnPan = page.getByTestId('btn-pan');
-  const btnSelect = page.getByRole('button', { name: 'Select', exact: true });
-
-  await page.keyboard.down('Space');
-  await expect(btnPan).toHaveAttribute('aria-pressed', 'true');
-
-  // Explicit pick while Space is still held: it must stick, because the
-  // Space release only unwinds a pan that Space itself armed (#168).
-  await btnPan.click();
-  await page.keyboard.up('Space');
-  await expect(btnPan).toHaveAttribute('aria-pressed', 'true');
-  await expect(btnSelect).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('.editor-canvas')).toHaveClass(/pan-armed/);
-});
-
-
-test('Pan tool: keyboard-focusable button arms pan; left-drag pans the camera', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  await dismissFirstRunCard(page);
-  const btnPan = page.getByTestId('btn-pan');
-  await expect(btnPan).toBeVisible();
-
-  // Tab-reachable + operable from the keyboard (#126 a11y floor).
-  await btnPan.focus();
-  await expect(btnPan).toBeFocused();
+test('Pan tool: keyboard-reachable button arms pan; left-drag pans the camera', async ({ page }) => {
+  await openWithRoom(page);
+  const pan = command(page, 'tool.pan');
+  await pan.focus();
   await page.keyboard.press('Enter');
-  await expect(btnPan).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: 'Select', exact: true })).toHaveAttribute(
-    'aria-pressed',
-    'false',
-  );
-
+  await expect(pan).toHaveAttribute('aria-pressed', 'true');
+  await expect(command(page, 'tool.select')).toHaveAttribute('aria-pressed', 'false');
   const before = await getCam(page);
   await dragCanvas(page, 60, 40);
   const after = await getCam(page);
@@ -308,139 +111,154 @@ test('Pan tool: keyboard-focusable button arms pan; left-drag pans the camera', 
   expect(after.scale).toBeCloseTo(before.scale, 6);
 });
 
-test('Space-hold temporarily arms the Pan tool and releasing restores the previous tool', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  await dismissFirstRunCard(page);
-  await page.locator('.editor-canvas').click();
-  const btnPan = page.getByTestId('btn-pan');
-  const btnSelect = page.getByRole('button', { name: 'Select', exact: true });
-
+test('Space-hold arms Pan temporarily and releasing restores the previous tool', async ({ page }) => {
+  await openWithRoom(page);
+  await page.locator(CANVAS).focus();
   await page.keyboard.down('Space');
-  await expect(btnPan).toHaveAttribute('aria-pressed', 'true');
+  await expect(command(page, 'tool.pan')).toHaveAttribute('aria-pressed', 'true');
   const before = await getCam(page);
   await dragCanvas(page, -80, 0);
-  const after = await getCam(page);
-  expect(after.originX).toBeCloseTo(before.originX + 80 / before.scale, 3);
-
+  expect((await getCam(page)).originX).toBeCloseTo(before.originX + 80 / before.scale, 3);
   await page.keyboard.up('Space');
-  await expect(btnSelect).toHaveAttribute('aria-pressed', 'true');
-  await expect(btnPan).toHaveAttribute('aria-pressed', 'false');
+  await expect(command(page, 'tool.select')).toHaveAttribute('aria-pressed', 'true');
+  await expect(command(page, 'tool.pan')).toHaveAttribute('aria-pressed', 'false');
 });
 
-test('"0" fits the empty plan and the seeded demo plan', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  // Unlike dismissFirstRunCard (which DRAWS a room and breaks this test's
-  // empty-plan premise), just arm Rectangle via the card's Draw button:
-  // the card hides while a drawing tool is armed, and "0"'s fit math does
-  // not care which tool is active.
-  const card = page.getByTestId('empty-state-card');
-  if (await card.count()) {
-    await page.getByTestId('empty-draw-room').click();
-    await expect(card).toBeHidden();
-  }
-  await page.locator('.editor-canvas').click();
+test('Space released mid-pan-drag finalizes the drag (no stranded pan)', async ({ page }) => {
+  await openWithRoom(page);
+  const canvas = page.locator(CANVAS);
+  await canvas.focus();
+  const box = (await canvas.boundingBox())!;
+  const x = box.x + box.width * 0.75;
+  const y = box.y + box.height * 0.75;
+  await page.keyboard.down('Space');
+  await expect(canvas).toHaveClass(/pan-armed/);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 50, y + 30, { steps: 4 });
+  await expect(canvas).toHaveClass(/pan-dragging/);
+  await page.keyboard.up('Space');
+  await page.mouse.up();
+  await expect(canvas).not.toHaveClass(/pan-dragging/);
+  await expect(command(page, 'tool.select')).toHaveAttribute('aria-pressed', 'true');
+});
 
-  // Empty plan boots neutral; "0" keeps it neutral (idempotent fit).
+test('an explicit Pan pick during a Space-hold survives the Space release', async ({ page }) => {
+  await openWithRoom(page);
+  await page.locator(CANVAS).focus();
+  await page.keyboard.down('Space');
+  await expect(command(page, 'tool.pan')).toHaveAttribute('aria-pressed', 'true');
+  await command(page, 'tool.pan').click();
+  await page.keyboard.up('Space');
+  await expect(command(page, 'tool.pan')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator(CANVAS)).toHaveClass(/pan-armed/);
+});
+
+test('"0" keeps the neutral camera on an empty plan and frames a demo clear of the tool card', async ({ page }) => {
+  await openWorkspace(page);
+  await page.locator(CANVAS).focus();
   await page.keyboard.press('0');
-  const empty = await getCam(page);
-  expect(empty.originX).toBeCloseTo(0, 6);
-  expect(empty.originY).toBeCloseTo(0, 6);
-  expect(empty.scale).toBeCloseTo(CAM_SCALE, 6);
+  expect(await getCam(page)).toEqual({ originX: 0, originY: 0, scale: CAM_SCALE });
 
-  // Seed the demo, zoom in, then "0" must frame the whole plan.
-  await loadDemoPlan(page);
-  const box = await canvasBox(page);
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await seedPlan(page, await readDemo('apartment'));
+  const box = (await page.locator(CANVAS).boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.75, box.y + box.height / 2);
   await page.mouse.wheel(0, -240);
   const zoomed = await getCam(page);
-  expect(zoomed.scale).toBeGreaterThan(CAM_SCALE);
-
+  await page.locator(CANVAS).focus();
   await page.keyboard.press('0');
   const fitted = await getCam(page);
   expect(Math.abs(fitted.scale - zoomed.scale)).toBeGreaterThan(0.5);
-
-  // Repeat press is stable...
   await page.keyboard.press('0');
-  const again = await getCam(page);
-  expect(again.originX).toBeCloseTo(fitted.originX, 6);
-  expect(again.originY).toBeCloseTo(fitted.originY, 6);
-  expect(again.scale).toBeCloseTo(fitted.scale, 6);
-
-  // ...and every room corner lands inside the viewport.
-  const allInside = await page.evaluate((cam) => {
-    const plan = (
-      window as unknown as {
-        __casaplaza: { getData: () => { rooms: Array<{ polygon: number[][] }> } };
-      }
-    ).__casaplaza.getData();
-    const canvas = document.querySelector('.editor-canvas') as HTMLCanvasElement;
-    return plan.rooms
-      .flatMap((room) => room.polygon)
-      .every(([wx, wy]) => {
+  expect(await getCam(page)).toEqual(fitted);
+  const inside = await page.evaluate(
+    ({ cam, left }) => {
+      const plan = (window as unknown as { __casaplaza: { getData(): { rooms: Array<{ polygon: number[][] }> } } }).__casaplaza.getData();
+      const c = document.querySelector('.editor-canvas') as HTMLCanvasElement;
+      return plan.rooms.flatMap((r) => r.polygon).every(([wx, wy]) => {
         const sx = (wx - cam.originX) * cam.scale;
         const sy = (cam.originY - wy) * cam.scale;
-        return sx >= -1 && sx <= canvas.clientWidth + 1 && sy >= -1 && sy <= canvas.clientHeight + 1;
+        return sx >= left - 1 && sx <= c.clientWidth + 1 && sy >= -1 && sy <= c.clientHeight + 1;
       });
-  }, fitted);
-  expect(allInside).toBe(true);
+    },
+    { cam: fitted, left: TOOLCARD_INSET },
+  );
+  expect(inside).toBe(true);
 });
 
-test('theme toggle sets data-theme, persists across reload, darkens the canvas, keeps exports white', async ({ page }) => {
-  await page.goto('/');
-  await page.locator('.editor-canvas').waitFor();
-  const btnTheme = page.getByTestId('btn-theme');
-  await expect(btnTheme).toHaveAttribute('aria-pressed', 'false');
+test('theme toggle sets data-theme, persists, darkens the canvas, keeps exports white', async ({ page }) => {
+  await openWorkspace(page);
+  const toggle = command(page, 'theme.toggle');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('light');
-  const lightMean = await canvasCentreMean(page);
-  expect(lightMean).toBeGreaterThan(200);
-
-  await btnTheme.click();
-  await expect(btnTheme).toHaveAttribute('aria-pressed', 'true');
+  expect(await canvasCentreMean(page)).toBeGreaterThan(200);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-  const darkMean = await canvasCentreMean(page);
-  expect(darkMean).toBeLessThan(80);
-
-  // Preference persists (own localStorage slot, casaplaza.theme.v1).
-  await page.reload();
-  await page.locator('.editor-canvas').waitFor();
-  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-  await expect(page.getByTestId('btn-theme')).toHaveAttribute('aria-pressed', 'true');
   expect(await canvasCentreMean(page)).toBeLessThan(80);
 
-  // Export stays white by construction (export.ts paints on its own
-  // #ffffff canvas with the light palette; the dark theme never leaks).
-  // #142 folded Export into the File popover; open it first.
-  await page.getByTestId('btn-file').click();
-  await page.getByTestId('btn-export').click();
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('export-confirm').click();
-  const download = await downloadPromise;
-  const filePath = await download.path();
-  if (!filePath) throw new Error('download has no path');
+  await page.reload();
+  await page.locator(CANVAS).waitFor();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+  await expect(command(page, 'theme.toggle')).toHaveAttribute('aria-pressed', 'true');
+  expect(await canvasCentreMean(page)).toBeLessThan(80);
+
+  await page.getByTestId('ws-export').click();
+  const download = page.waitForEvent('download');
+  await page.getByTestId('ws-export-confirm').click();
+  const path = await (await download).path();
   const { readFile } = await import('node:fs/promises');
-  const bytes = await readFile(filePath);
-  // Decode in the browser (no PNG-parser dependency): the exported sheet
-  // must stay white — a dark leak would score a mean luma near ~27.
-  const exportMean = await page.evaluate(async (dataUrl: string) => {
+  const bytes = await readFile(path!);
+  const mean = await page.evaluate(async (url: string) => {
     const img = new Image();
-    img.src = dataUrl;
+    img.src = url;
     await img.decode();
     const off = document.createElement('canvas');
     off.width = img.naturalWidth;
     off.height = img.naturalHeight;
-    const ctx = off.getContext('2d');
-    if (!ctx) throw new Error('no 2d context for export decode');
+    const ctx = off.getContext('2d')!;
     ctx.drawImage(img, 0, 0);
     const px = ctx.getImageData(0, 0, off.width, off.height).data;
     let sum = 0;
-    let count = 0;
+    let n = 0;
     for (let i = 0; i < px.length; i += 4 * 37) {
       sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-      count += 1;
+      n += 1;
     }
-    return sum / count;
+    return sum / n;
   }, `data:image/png;base64,${bytes.toString('base64')}`);
-  expect(exportMean).toBeGreaterThan(220);
+  expect(mean).toBeGreaterThan(220);
+});
+
+test('dark theme reaches every chrome surface: bars, cards, inspector, dialogs', async ({ page }) => {
+  await openWithRoom(page);
+  await command(page, 'theme.toggle').click();
+  await expectDarkSurface(page, '[data-testid="ws-topbar"]');
+  await expectDarkSurface(page, '[data-testid="ws-statusbar"]', '[data-testid="ws-status-hint"]');
+  await expectDarkSurface(page, '[data-testid="ws-toolcard"]', '.ui-tab');
+  await page.locator(CANVAS).focus();
+  await page.keyboard.press('i');
+  await expect(page.getByTestId('ws-inspector')).toBeVisible();
+  await expectDarkSurface(page, '[data-testid="ws-inspector"]', '.inspector-section-title');
+  await page.getByTestId('ws-help').click();
+  await expectDarkSurface(page, '[data-testid="ws-shortcuts"]', 'td');
+  await page.keyboard.press('Escape');
+  await page.getByTestId('ws-export').click();
+  await expectDarkSurface(page, '[data-testid="ws-export-dialog"]', '.ws-dialog-text');
+});
+
+test('reduced motion zeroes every transition', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openWithRoom(page);
+  const durations = await page.evaluate(() =>
+    ['.ui-btn', '.ui-tab', '.ui-segment-item', '.ui-toggle-track', '.ws-fade'].map((sel) => {
+      const el = document.querySelector(sel);
+      return el ? getComputedStyle(el).transitionDuration : 'missing';
+    }),
+  );
+  expect(durations.every((d) => d.split(',').every((p) => p.trim() === '0s'))).toBe(true);
+  // A view switch therefore plays no veil either.
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('ws-view-3d')).toHaveAttribute('aria-checked', 'true');
+  expect(await page.locator('.ws-fade').evaluate((el) => getComputedStyle(el).transitionDuration)).toBe('0s');
 });

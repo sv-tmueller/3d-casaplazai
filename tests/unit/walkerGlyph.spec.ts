@@ -140,7 +140,7 @@ describe('glyph purity anti-drift (issue #147 CP4)', () => {
     readFileSync(join(process.cwd(), rel), 'utf8');
 
   it('paints the glyph from repaint() only — never from the export painter', () => {
-    const glue = read('src/editor/glue.ts');
+    const glue = read('src/editor/canvasEngine.ts');
 
     // Exactly one call site…
     const calls = [...glue.matchAll(/drawWalkerGlyph\(/g)].map((m) => m.index ?? -1);
