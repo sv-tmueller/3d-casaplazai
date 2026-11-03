@@ -70,15 +70,30 @@ const contrast = (a: string, b: string): number => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-/** A chrome surface renders dark and its text clears 4.5:1 on it. */
+/**
+ * A chrome surface renders dark and its text clears 4.5:1 on it. Colours
+ * transition over the duration tokens after the theme toggle, so both reads
+ * poll until the transition has settled instead of sampling once (#191).
+ */
 async function expectDarkSurface(page: Page, sel: string, textSel?: string): Promise<void> {
-  const { bg, color } = await page.locator(sel).first().evaluate((el, ts) => {
-    const cs = getComputedStyle(el);
-    const t = ts ? el.querySelector(ts) : null;
-    return { bg: cs.backgroundColor, color: t ? getComputedStyle(t).color : cs.color };
-  }, textSel ?? null);
-  expect(lum(bg), `${sel}: background ${bg}`).toBeLessThan(0.05);
-  expect(contrast(color, bg), `${sel}: text ${color} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+  const read = () =>
+    page.locator(sel).first().evaluate((el, ts) => {
+      const cs = getComputedStyle(el);
+      const t = ts ? el.querySelector(ts) : null;
+      return { bg: cs.backgroundColor, color: t ? getComputedStyle(t).color : cs.color };
+    }, textSel ?? null);
+  await expect
+    .poll(async () => lum((await read()).bg), { message: `${sel}: background luminance` })
+    .toBeLessThan(0.05);
+  await expect
+    .poll(
+      async () => {
+        const { bg, color } = await read();
+        return contrast(color, bg);
+      },
+      { message: `${sel}: text contrast on background` },
+    )
+    .toBeGreaterThanOrEqual(4.5);
 }
 
 test('Pan tool: keyboard-reachable button arms pan; left-drag pans the camera', async ({ page }) => {
