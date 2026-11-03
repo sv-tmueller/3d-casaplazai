@@ -80,7 +80,7 @@ import {
   type QualityLevel,
 } from './renderConstants';
 import { DEFAULT_SUN_SETTINGS, sunState, type SunState } from './sun';
-import type { AdaptedScene, SunSettings } from './types';
+import type { AdaptedScene, MaterialBucket, SunSettings } from './types';
 
 /** The light trio every built scene carries (issue #121 controller seam). */
 export interface ViewerLights {
@@ -595,17 +595,105 @@ export function buildGroundPlot(
   return plot;
 }
 
+/** Slots that are not floor surfaces (everything else in the union is a floor texture). */
+const NON_FLOOR_SLOTS: ReadonlySet<string> = new Set(['wall', 'ceiling', 'roof', 'glass', 'windowFrame']);
+/** Triangles within this height of the lowest floor count as the ground-floor footprint, meters. */
+const GROUND_FLOOR_BAND_M = 0.5;
+
+/** A footprint triangle in plan space: x0,y0,x1,y1,x2,y2. */
+type FootprintTri = readonly [number, number, number, number, number, number];
+
+/**
+ * The ground-floor footprint in plan space (issue #179, review round 1):
+ * the floor-bucket triangles within a band of the lowest floor, i.e. the
+ * room union the contact shadow should hug. Empty when there are no
+ * floor buckets.
+ */
+export function groundFootprint(buckets: readonly MaterialBucket[]): FootprintTri[] {
+  const tris: { z: number; tri: FootprintTri }[] = [];
+  let minZ = Infinity;
+  for (const bucket of buckets) {
+    if (NON_FLOOR_SLOTS.has(bucket.slot) || bucket.slot.startsWith('furn-')) continue;
+    const p = bucket.positions;
+    const idx = bucket.indices;
+    for (let t = 0; t + 2 < idx.length; t += 3) {
+      const a = idx[t] * 3;
+      const b = idx[t + 1] * 3;
+      const c = idx[t + 2] * 3;
+      const z = Math.max(p[a + 2], p[b + 2], p[c + 2]);
+      if (z < minZ) minZ = z;
+      tris.push({ z, tri: [p[a], p[a + 1], p[b], p[b + 1], p[c], p[c + 1]] });
+    }
+  }
+  return tris.filter((t) => t.z <= minZ + GROUND_FLOOR_BAND_M).map((t) => t.tri);
+}
+
+/** Squared distance from (px, py) to segment (ax, ay)-(bx, by). */
+function segDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const u = len2 > 0 ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+  const ex = px - (ax + u * dx);
+  const ey = py - (ay + u * dy);
+  return ex * ex + ey * ey;
+}
+
+/** Distance from (px, py) to the footprint: 0 inside, else to the nearest edge; capped at `cap`. */
+function footprintDistance(px: number, py: number, tris: readonly FootprintTri[], cap: number): number {
+  let best = cap * cap;
+  for (const [ax, ay, bx, by, cx, cy] of tris) {
+    // Cheap reject: the triangle's box, grown by the current best distance, misses the point.
+    const r = Math.sqrt(best);
+    if (
+      px < Math.min(ax, bx, cx) - r ||
+      px > Math.max(ax, bx, cx) + r ||
+      py < Math.min(ay, by, cy) - r ||
+      py > Math.max(ay, by, cy) + r
+    ) {
+      continue;
+    }
+    const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+    const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+    const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+    const neg = d1 < 0 || d2 < 0 || d3 < 0;
+    const pos = d1 > 0 || d2 > 0 || d3 > 0;
+    if (!(neg && pos)) return 0; // inside (or on an edge)
+    best = Math.min(
+      best,
+      segDistSq(px, py, ax, ay, bx, by),
+      segDistSq(px, py, bx, by, cx, cy),
+      segDistSq(px, py, cx, cy, ax, ay),
+    );
+  }
+  return Math.sqrt(best);
+}
+
 /**
  * Soft contact darkening around the building (issue #179): a black
- * overlay whose alpha peaks at the plan edge and fades to nothing over
- * the pad width. Alpha comes from a small procedural texture, so no
- * asset ships for it. HIGH tier only; the texture is released with the
+ * overlay whose alpha peaks inside the ground-floor footprint and fades
+ * to nothing over the pad width beyond its edge. Alpha comes from a
+ * small procedural texture, so no asset ships for it. The fade follows
+ * the footprint (floor triangles), not the plan bounding box, so a notch
+ * or an empty plot stays clear. With no floor triangles but a non-empty
+ * scene it falls back to the bounding box; with no buckets there is no
+ * overlay (null). HIGH tier only; the texture is released with the
  * material.
  */
 export function buildContactShadow(
   bounds: AdaptedScene['bounds'],
   floorElevation: number,
-): Mesh {
+  buckets: readonly MaterialBucket[],
+): Mesh | null {
+  if (buckets.length === 0) return null;
+  let footprint = groundFootprint(buckets);
+  if (footprint.length === 0) {
+    const { minX, minY, maxX, maxY } = bounds;
+    footprint = [
+      [minX, minY, maxX, minY, maxX, maxY],
+      [minX, minY, maxX, maxY, minX, maxY],
+    ];
+  }
   const x0 = bounds.minX - SHADOW_FRUSTUM_PAD_M;
   const x1 = bounds.maxX + SHADOW_FRUSTUM_PAD_M;
   const y0 = bounds.minY - SHADOW_FRUSTUM_PAD_M;
@@ -618,9 +706,8 @@ export function buildContactShadow(
     const y = y0 + ((j + 0.5) / n) * (y1 - y0);
     for (let i = 0; i < n; i += 1) {
       const x = x0 + ((i + 0.5) / n) * (x1 - x0);
-      const dx = Math.max(bounds.minX - x, 0, x - bounds.maxX);
-      const dy = Math.max(bounds.minY - y, 0, y - bounds.maxY);
-      const falloff = Math.max(0, 1 - Math.hypot(dx, dy) / SHADOW_FRUSTUM_PAD_M);
+      const dist = footprintDistance(x, y, footprint, SHADOW_FRUSTUM_PAD_M);
+      const falloff = Math.max(0, 1 - dist / SHADOW_FRUSTUM_PAD_M);
       data[(j * n + i) * 4 + 3] = Math.round(255 * CONTACT_SHADOW_MAX_ALPHA * falloff * falloff);
     }
   }
@@ -796,7 +883,12 @@ export function buildViewerScene(
     envBinding.ground = { material: plot.material as MeshBasicMaterial };
     shadeGround(envBinding.ground, 1); // default pose is noon; applySunPose retunes
     scene.add(plot);
-    scene.add(buildContactShadow(adapted.bounds, adapted.activeFloorElevation));
+    const contact = buildContactShadow(
+      adapted.bounds,
+      adapted.activeFloorElevation,
+      adapted.buckets,
+    );
+    if (contact) scene.add(contact);
   }
 
   paintSky(scene);

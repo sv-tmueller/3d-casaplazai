@@ -291,6 +291,55 @@ describe('ground plot', () => {
   });
 });
 
+describe('contact overlay follows the building footprint (review round 1, finding 2)', () => {
+  /** Alpha (0..255) of the contact overlay at plan point (x, y). */
+  function overlayAlpha(built: ReturnType<typeof buildViewerScene>, bounds: AdaptedScene['bounds'], x: number, y: number): number {
+    const mesh = built.scene.getObjectByName('ground-contact') as Mesh;
+    const map = (mesh.material as unknown as { map: { image: { data: Uint8Array; width: number } } }).map;
+    const n = map.image.width;
+    const x0 = bounds.minX - SHADOW_FRUSTUM_PAD_M;
+    const y0 = bounds.minY - SHADOW_FRUSTUM_PAD_M;
+    const span = (bounds.maxX - bounds.minX) + 2 * SHADOW_FRUSTUM_PAD_M;
+    const spanY = (bounds.maxY - bounds.minY) + 2 * SHADOW_FRUSTUM_PAD_M;
+    const i = Math.min(n - 1, Math.floor(((x - x0) / span) * n));
+    const j = Math.min(n - 1, Math.floor(((y - y0) / spanY) * n));
+    return map.image.data[(j * n + i) * 4 + 3];
+  }
+
+  const LBOUNDS = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+  // L-shaped footprint: the 10 x 10 box minus its upper-right 6 x 6 notch.
+  const L_BOTTOM = bucket('wood', [0, 0, 0, 10, 0, 0, 10, 4, 0, 0, 4, 0], [0, 1, 2, 0, 2, 3]);
+  const L_LEFT = bucket('wood', [0, 4, 0, 4, 4, 0, 4, 10, 0, 0, 10, 0], [0, 1, 2, 0, 2, 3]);
+
+  function lScene(): AdaptedScene {
+    return { ...emptyAdaptedScene(), buckets: [L_BOTTOM, L_LEFT, WALL_QUAD], bounds: LBOUNDS };
+  }
+
+  it('builds no overlay when there are no buckets (the empty-plan plot)', () => {
+    const built = buildViewerScene(emptyAdaptedScene(), 'high');
+    expect(built.scene.getObjectByName('ground-plot')).toBeDefined();
+    expect(built.scene.getObjectByName('ground-contact')).toBeUndefined();
+  });
+
+  it('is clear in a bounding-box notch the building does not cover', () => {
+    const built = buildViewerScene(lScene(), 'high');
+    // (8, 8) is 4 m from the footprint, beyond the 1.5 m pad, yet inside the plan bounding box.
+    expect(overlayAlpha(built, LBOUNDS, 8, 8)).toBe(0);
+    // Far outside the box stays clear too.
+    expect(overlayAlpha(built, LBOUNDS, 11.4, 11.4)).toBe(0);
+  });
+
+  it('still darkens under the building and just outside its edge', () => {
+    const built = buildViewerScene(lScene(), 'high');
+    expect(overlayAlpha(built, LBOUNDS, 2, 2)).toBeGreaterThan(100);
+    // 0.2 m off the notch edge (x = 4): close to the peak, fading with distance.
+    const near = overlayAlpha(built, LBOUNDS, 4.2, 7);
+    const far = overlayAlpha(built, LBOUNDS, 5.2, 7);
+    expect(near).toBeGreaterThan(far);
+    expect(far).toBeGreaterThan(0);
+  });
+});
+
 describe('forced-low materials issue no texture requests', () => {
   it('buildViewerScene(…, forceLowMaterials) never reaches the fetcher', () => {
     let calls = 0;
