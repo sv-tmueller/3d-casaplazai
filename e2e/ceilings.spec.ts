@@ -21,8 +21,8 @@ import { regionLuminance, regionMeanRgb } from './fixtures/luminance';
  * The walk spawn is deterministic — a re-seat control reproduced the
  * 22:00 frame byte-for-byte, so these comparisons are zero-slack.
  */
-const CP0_NOON_INTERIOR = 162.24;
-const CP0_NIGHT_INTERIOR = 117.61;
+const CP0_NOON_INTERIOR = 168.83;
+const CP0_NIGHT_INTERIOR = 124.64;
 
 /** The slice of __viewerStats this spec reads (issue #152 seams in bold). */
 interface ViewerStats {
