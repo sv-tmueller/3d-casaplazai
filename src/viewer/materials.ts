@@ -13,8 +13,8 @@
  * session-wide setter owned by the loader and re-exported here.
  */
 
-import { Color, MeshStandardMaterial } from 'three';
-import { createPbrMaterial } from './assets/loader';
+import { Color, MeshBasicMaterial, MeshStandardMaterial } from 'three';
+import { createMapBasicMaterial, createPbrMaterial } from './assets/loader';
 import { setForSlot } from './assets/manifest';
 import type { MaterialSlotId } from './types';
 
@@ -79,6 +79,16 @@ const MATTE_SLOTS: ReadonlySet<MaterialSlot> = new Set<MaterialSlot>([
   'carpet',
 ]);
 
+/**
+ * Slots that sample the colour map only (no normal, roughness or AO
+ * map, and none of those files are fetched). Walls, ceilings and roofs
+ * are the matte, largest-area surfaces: their plaster and shingle
+ * relief is faint under the soft indoor light, while two extra
+ * samplers per pixel cost several ms a frame under software GL (#179
+ * fix round 1). Floors, carpet and furniture keep the full set.
+ */
+const LEAN_SLOTS: ReadonlySet<MaterialSlot> = new Set<MaterialSlot>(['wall', 'ceiling', 'roof']);
+
 /** Tint colour for a linear gain; undefined keeps the loader's white. */
 function gainColor(gain: number | undefined): Color | undefined {
   return gain === undefined ? undefined : new Color().setScalar(gain);
@@ -87,24 +97,21 @@ function gainColor(gain: number | undefined): Color | undefined {
 /** Roughness scalar once the roughness map is in. Absent = 1 (map drives it). */
 const UPGRADED_ROUGHNESS: Partial<Record<MaterialSlot, number>> = {};
 
-/** Flat colour + roughness of the ground plot (LOW, and HIGH before the grass loads). */
+/** Flat colour of the ground plot while the grass colour map is still loading. */
 export const GROUND_FLAT_COLOR = '#6f8a4e';
-const GROUND_ROUGHNESS = 0.95;
 
-/** Material for the ground plot: grass on HIGH, flat colour on LOW. */
-export function buildGroundMaterial(hiQuality = true): MeshStandardMaterial {
-  if (!hiQuality) {
-    return new MeshStandardMaterial({
-      color: new Color(GROUND_FLAT_COLOR),
-      roughness: GROUND_ROUGHNESS,
-      metalness: 0,
-    });
-  }
-  return createPbrMaterial('grass', {
-    color: GROUND_FLAT_COLOR,
-    roughness: GROUND_ROUGHNESS,
-    ao: false,
-  });
+/**
+ * Material for the HIGH tier's ground plot: the grass colour map over a
+ * flat-colour start. UNLIT: the plot covers a large share of the
+ * overview, and a lit PBR (or Lambert) fragment costs about 3x an
+ * unlit one under software GL, which showed as +16 to 20 ms per frame
+ * (#179 fix round 1). Building shadows on the grass are not received;
+ * the contact-shadow overlay grounds the building instead. Its tint is
+ * owned by sceneBuilder, which dims it with the sun. LOW has no ground
+ * plot at all (it is a fill cost the flat tier does not pay).
+ */
+export function buildGroundMaterial(): MeshBasicMaterial {
+  return createMapBasicMaterial('grass', GROUND_FLAT_COLOR);
 }
 
 /**
@@ -144,6 +151,7 @@ export function buildMaterial(slot: MaterialSlot, hiQuality = true): MeshStandar
       upgradedColor: gainColor(UPGRADED_GAIN[slot]),
       upgradedRoughness: UPGRADED_ROUGHNESS[slot],
       ao: !MATTE_SLOTS.has(slot),
+      colorOnly: LEAN_SLOTS.has(slot),
     });
   }
   return new MeshStandardMaterial({

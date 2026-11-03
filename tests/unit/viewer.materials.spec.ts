@@ -46,9 +46,6 @@ describe('MaterialSlot', () => {
 
 describe('buildMaterial — slot routing', () => {
   it.each<MaterialSlot>([
-    'wall',
-    'ceiling',
-    'roof',
     'wood',
     'tile',
     'carpet',
@@ -61,6 +58,19 @@ describe('buildMaterial — slot routing', () => {
     expect(mat.roughnessMap).toBeTruthy();
     mat.dispose();
   });
+
+  it.each<MaterialSlot>(['wall', 'ceiling', 'roof'])(
+    'HIGH: %s is colour-mapped only (matte, large screen share: no normal or roughness sampler)',
+    (slot) => {
+      const mat = buildMaterial(slot, true);
+      expect(mat.map).toBeTruthy();
+      expect(mat.normalMap).toBeNull();
+      expect(mat.roughnessMap).toBeNull();
+      expect(mat.aoMap).toBeNull();
+      expect(requested).toEqual([setFileUrls(slot === 'wall' ? 'plaster-white' : slot === 'ceiling' ? 'plaster-ceiling' : 'roof-shingles').color]);
+      mat.dispose();
+    },
+  );
 
   it.each<MaterialSlot>([
     'glass',

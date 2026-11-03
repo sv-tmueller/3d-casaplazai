@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ACESFilmicToneMapping,
   BufferAttribute,
+  Color,
   Mesh,
   type MeshStandardMaterial,
   SRGBColorSpace,
@@ -16,12 +17,14 @@ import {
   type WebGLRenderer,
 } from 'three';
 import { clearAssetCaches, setTextureFetcher } from '../../src/viewer/assets/loader';
+import { setFileUrls } from '../../src/viewer/assets/manifest';
 import {
   applySunPose,
   buildViewerScene,
   configureRenderer,
   emptyAdaptedScene,
   ensureEnvironment,
+  GROUND_SHADE_NOON,
   TONE_MAPPING_EXPOSURE,
 } from '../../src/viewer/sceneBuilder';
 import { SHADOW_FRUSTUM_PAD_M } from '../../src/viewer/renderConstants';
@@ -64,6 +67,17 @@ const FLOOR_QUAD = bucket(
 const ROOF_QUAD = bucket(
   'roof',
   [0, 0, 3, 4, 0, 3, 4, 3, 5, 0, 3, 5],
+  [0, 1, 2, 0, 2, 3],
+);
+
+const GLASS_QUAD = bucket(
+  'glass',
+  [0, 0, 0, 2, 0, 0, 2, 0, 2.7, 0, 0, 2.7],
+  [0, 1, 2, 0, 2, 3],
+);
+const FRAME_QUAD = bucket(
+  'windowFrame',
+  [0, 0, 0, 2, 0, 0, 2, 0, 2.7, 0, 0, 2.7],
   [0, 1, 2, 0, 2, 3],
 );
 
@@ -187,6 +201,28 @@ describe('per-face UV projection (architectural slots)', () => {
   );
 });
 
+describe('LOW tier keeps the unsplit geometry (no maps, so no per-face UVs)', () => {
+  it('shares the four corners of a vertical wall quad', () => {
+    const built = buildViewerScene(scene([WALL_QUAD]), 'low', true);
+    expect(meshFor(built, 'wall').geometry.getAttribute('position').count).toBe(4);
+  });
+
+  it('keeps the averaged corner normals of a box instead of flat faces', () => {
+    const box = bucket(
+      'wall',
+      [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
+      [
+        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 2, 3, 7, 2, 7, 6, 1, 2, 6, 1, 6, 5, 0, 4,
+        7, 0, 7, 3,
+      ],
+    );
+    const built = buildViewerScene(scene([box]), 'low', true);
+    const geo = meshFor(built, 'wall').geometry;
+    expect(geo.getAttribute('position').count).toBe(8);
+    expect(geo.index!.count).toBe(36);
+  });
+});
+
 describe('ground plot', () => {
   it('is a separate mesh outside meshes with no slot identity', () => {
     const built = buildViewerScene(scene([WALL_QUAD]));
@@ -210,28 +246,42 @@ describe('ground plot', () => {
     expect(box.min.z).toBeGreaterThan(2.7);
   });
 
-  it('HIGH: grass-mapped, shadow-receiving, with a contact-shadow overlay', () => {
+  it('HIGH: grass-mapped, unlit (it covers a large share of the screen), with a contact-shadow overlay', () => {
     const built = buildViewerScene(scene([WALL_QUAD]), 'high');
     const plot = built.scene.getObjectByName('ground-plot') as Mesh;
     expect((plot.material as { map?: unknown }).map).toBeTruthy();
-    expect(plot.receiveShadow).toBe(true);
+    expect((plot.material as { isMeshBasicMaterial?: boolean }).isMeshBasicMaterial).toBe(true);
     expect(built.scene.getObjectByName('ground-contact')).toBeDefined();
   });
 
-  it('LOW: flat colour with no map of any kind and no contact overlay', () => {
+  it('HIGH: requests only the grass colour file, no normal or roughness map', () => {
+    const requested: string[] = [];
+    setTextureFetcher((url) => {
+      requested.push(url);
+      return Promise.resolve(new Texture());
+    });
+    buildViewerScene(emptyAdaptedScene(), 'high');
+    expect(requested).toEqual([setFileUrls('grass').color]);
+  });
+
+  it('LOW: no plot and no contact overlay (a full-screen fill the flat tier does not pay)', () => {
     const built = buildViewerScene(scene([WALL_QUAD]), 'low', true);
-    const plot = built.scene.getObjectByName('ground-plot') as Mesh;
-    const mat = plot.material as {
-      map?: unknown;
-      normalMap?: unknown;
-      roughnessMap?: unknown;
-      aoMap?: unknown;
-    };
-    expect(mat.map).toBeFalsy();
-    expect(mat.normalMap).toBeFalsy();
-    expect(mat.roughnessMap).toBeFalsy();
-    expect(mat.aoMap).toBeFalsy();
+    expect(built.scene.getObjectByName('ground-plot')).toBeUndefined();
     expect(built.scene.getObjectByName('ground-contact')).toBeUndefined();
+  });
+
+  it('HIGH: dims toward night with the sun and restores at noon', () => {
+    const built = buildViewerScene(scene([WALL_QUAD]), 'high');
+    const mat = (built.scene.getObjectByName('ground-plot') as Mesh).material as unknown as {
+      color: Color;
+    };
+    const noon = mat.color.getHex();
+    expect(mat.color.r).toBeCloseTo(GROUND_SHADE_NOON, 6);
+    applySunPose(built.lights, { timeHours: 22, northOffsetDeg: 0 }, BOUNDS);
+    expect(mat.color.r).toBeLessThan(GROUND_SHADE_NOON);
+    expect(mat.color.r).toBeGreaterThan(0);
+    applySunPose(built.lights, { timeHours: 12, northOffsetDeg: 0 }, BOUNDS);
+    expect(mat.color.getHex()).toBe(noon);
   });
 
   it('the empty-plan scene carries the plot too', () => {
@@ -302,48 +352,58 @@ describe('room environment', () => {
     expect(builds).toBe(1);
   });
 
-  it('reaches the glossy slots of a scene built BEFORE the renderer was configured', () => {
-    const built = buildViewerScene(scene([FLOOR_QUAD, WALL_QUAD]), 'high');
-    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
-    expect(floor.envMap).toBeNull();
+  it('reaches the glass and frames of a scene built BEFORE the renderer was configured', () => {
+    const built = buildViewerScene(scene([GLASS_QUAD, FRAME_QUAD, WALL_QUAD]), 'high');
+    const mats = [GLASS_QUAD, FRAME_QUAD].map(
+      (b) => meshFor(built, b.slot).material as MeshStandardMaterial,
+    );
+    for (const m of mats) expect(m.envMap).toBeNull();
 
     const env = new Texture();
     ensureEnvironment(fakeRenderer(), () => env);
     renderTick(built.scene);
-    expect(floor.envMap).toBe(env);
+    for (const m of mats) expect(m.envMap).toBe(env);
   });
 
   it('turns the environment Y-up to the viewer Z-up', () => {
-    const built = buildViewerScene(scene([FLOOR_QUAD]), 'high');
-    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
-    expect(floor.envMapRotation.x).toBeCloseTo(Math.PI / 2, 6);
+    const built = buildViewerScene(scene([GLASS_QUAD]), 'high');
+    const glass = meshFor(built, 'glass').material as MeshStandardMaterial;
+    expect(glass.envMapRotation.x).toBeCloseTo(Math.PI / 2, 6);
   });
 
-  it('leaves the matte architectural slots out of the environment lookup', () => {
-    const built = buildViewerScene(scene([WALL_QUAD, ROOF_QUAD]), 'high');
+  it('keeps floors, furniture and the matte slots out of the environment lookup', () => {
+    // The lookup is the costliest PBR term on software GL and these slots
+    // cover most of the screen; #179 fix round 1 measured it at ~15 ms.
+    const quad = (slot: MaterialSlotId): MaterialBucket =>
+      bucket(slot, [0, 0, 0, 2, 0, 0, 2, 0, 2.7, 0, 0, 2.7], [0, 1, 2, 0, 2, 3]);
+    const slots: MaterialSlotId[] = [
+      'wall', 'ceiling', 'roof', 'carpet', 'wood', 'tile', 'concrete',
+      'furn-wood', 'furn-porcelain', 'furn-laminate', 'furn-fabric',
+    ];
+    const built = buildViewerScene(scene(slots.map(quad)), 'high');
     ensureEnvironment(fakeRenderer(), () => new Texture());
     renderTick(built.scene);
-    for (const slot of ['wall', 'roof']) {
+    for (const slot of slots) {
       expect((meshFor(built, slot).material as MeshStandardMaterial).envMap, slot).toBeNull();
     }
   });
 
   it('LOW scenes never pick the environment up', () => {
-    const built = buildViewerScene(scene([FLOOR_QUAD]), 'low', true);
+    const built = buildViewerScene(scene([GLASS_QUAD]), 'low', true);
     ensureEnvironment(fakeRenderer(), () => new Texture());
     renderTick(built.scene);
-    expect((meshFor(built, 'wood').material as MeshStandardMaterial).envMap).toBeNull();
+    expect((meshFor(built, 'glass').material as MeshStandardMaterial).envMap).toBeNull();
   });
 
   it('applySunPose dims the environment toward night', () => {
-    const built = buildViewerScene(scene([FLOOR_QUAD]), 'high');
-    const floor = meshFor(built, 'wood').material as MeshStandardMaterial;
-    const noon = floor.envMapIntensity;
+    const built = buildViewerScene(scene([GLASS_QUAD]), 'high');
+    const glass = meshFor(built, 'glass').material as MeshStandardMaterial;
+    const noon = glass.envMapIntensity;
     applySunPose(built.lights, { timeHours: 22, northOffsetDeg: 0 }, BOUNDS);
-    const night = floor.envMapIntensity;
+    const night = glass.envMapIntensity;
     expect(night).toBeLessThan(noon);
     expect(night).toBeGreaterThan(0);
     applySunPose(built.lights, { timeHours: 12, northOffsetDeg: 0 }, BOUNDS);
-    expect(floor.envMapIntensity).toBeCloseTo(noon, 6);
+    expect(glass.envMapIntensity).toBeCloseTo(noon, 6);
   });
 });

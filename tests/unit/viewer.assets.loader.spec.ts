@@ -14,6 +14,7 @@ import {
 } from 'three';
 import {
   clearAssetCaches,
+  createMapBasicMaterial,
   createPbrMaterial,
   pendingUpgradeCount,
   setMaxAnisotropy,
@@ -197,6 +198,119 @@ describe('createPbrMaterial — ambient occlusion opt-out', () => {
 
     expect(mat.aoMap).toBeNull();
     expect(mat.roughnessMap).toBeTruthy();
+  });
+});
+
+describe('createPbrMaterial — colour-only option', () => {
+  it('requests and wires only the colour file, before and after the upgrade', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createPbrMaterial('plaster-white', {
+      color: '#e8e2d8',
+      roughness: 0.92,
+      ao: false,
+      colorOnly: true,
+    });
+    expect(requests.map((r) => r.url)).toEqual([setFileUrls('plaster-white').color]);
+    expect(mat.normalMap).toBeNull();
+    expect(mat.roughnessMap).toBeNull();
+
+    requests[0].resolve();
+    await flush();
+    expect(mat.map).toBe(requests[0].texture);
+    expect(mat.normalMap).toBeNull();
+    expect(mat.roughnessMap).toBeNull();
+    expect(mat.aoMap).toBeNull();
+    expect(mat.color.getHexString()).toBe('ffffff');
+  });
+
+  it('keeps the flat roughness scalar when no roughness map arrives', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createPbrMaterial('plaster-white', {
+      color: '#e8e2d8',
+      roughness: 0.92,
+      ao: false,
+      colorOnly: true,
+    });
+    requests[0].resolve();
+    await flush();
+    expect(mat.roughness).toBe(0.92);
+  });
+
+  it('a full material built later reuses the cached colour and fetches only the detail maps', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const lean = createPbrMaterial('plaster-white', { color: '#e8e2d8', roughness: 0.92, colorOnly: true });
+    requests[0].resolve();
+    await flush();
+    const full = createPbrMaterial('plaster-white', { color: '#e8e2d8', roughness: 0.92 });
+    expect(requests).toHaveLength(3);
+    for (const r of requests.slice(1)) r.resolve();
+    await flush();
+    expect(full.map).toBe(lean.map);
+    expect(full.normalMap).toBe(requests[1].texture);
+  });
+
+  it('a failed colour download keeps the flat colour', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createPbrMaterial('plaster-white', {
+      color: '#e8e2d8',
+      roughness: 0.92,
+      colorOnly: true,
+    });
+    const placeholder = mat.map;
+    requests[0].reject(new Error('404'));
+    await flush();
+    expect(mat.map).toBe(placeholder);
+    expect(mat.color.getHexString()).toBe('e8e2d8');
+  });
+});
+
+describe('createMapBasicMaterial (unlit, colour map only)', () => {
+  it('starts as a 1x1 flat-colour map and requests only the colour file', () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createMapBasicMaterial('grass', '#6f8a4e');
+    expect(mat.isMeshBasicMaterial).toBe(true);
+    expect(requests.map((r) => r.url)).toEqual([setFileUrls('grass').color]);
+    const px = Array.from((mat.map!.image as { data: Uint8Array }).data);
+    expect(px).toEqual([0x6f, 0x8a, 0x4e, 255]);
+    expect(mat.map!.colorSpace).toBe(SRGBColorSpace);
+  });
+
+  it('swaps the grass map in place and never touches the tint the caller owns', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const mat = createMapBasicMaterial('grass', '#6f8a4e');
+    mat.color.setScalar(0.7);
+    const id = mat.uuid;
+    requests[0].resolve();
+    await flush();
+    expect(mat.uuid).toBe(id);
+    expect(mat.map).toBe(requests[0].texture);
+    expect(mat.color.r).toBeCloseTo(0.7, 6);
+    expect(pendingUpgradeCount()).toBe(0);
+  });
+
+  it('keeps the flat map after a failed download and drops pending work on dispose', async () => {
+    const { requests, fetcher } = manualFetcher();
+    setTextureFetcher(fetcher);
+    const failed = createMapBasicMaterial('grass', '#6f8a4e');
+    const flat = failed.map;
+    requests[0].reject(new Error('404'));
+    await flush();
+    expect(failed.map).toBe(flat);
+
+    const gone = createMapBasicMaterial('grass', '#6f8a4e');
+    const flat2 = gone.map;
+    expect(pendingUpgradeCount()).toBe(1);
+    gone.dispose();
+    expect(pendingUpgradeCount()).toBe(0);
+    requests[1].resolve();
+    await flush();
+    expect(gone.map).toBe(flat2);
   });
 });
 

@@ -14,12 +14,17 @@
  * A failed download keeps the placeholders, so a surface can never go
  * black or vanish.
  *
- * One session-wide cache holds each set (fetched once, reused by every
- * rebuild). Failures are not cached, so the next build retries.
+ * One session-wide cache holds each set's colour map and its detail maps
+ * (normal + roughness) separately, each fetched once and reused by every
+ * rebuild. Colour-only materials (the matte walls, ceilings and roofs, and
+ * the unlit ground) never request the detail maps. Failures are not
+ * cached, so the next build retries.
  */
 
 import {
+  Color,
   DataTexture,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   NoColorSpace,
   RGBAFormat,
@@ -55,7 +60,7 @@ const DEFAULT_ANISOTROPY = 4;
 let maxAniso = DEFAULT_ANISOTROPY;
 
 /** Every texture a set has loaded, so a later anisotropy change reaches them. */
-const loadedSets = new Map<TextureSetId, LoadedSet>();
+const loadedTextures = new Set<Texture>();
 
 /**
  * Raise the anisotropy of every loaded texture (call once after renderer
@@ -66,11 +71,7 @@ export function setMaxAnisotropy(n: number): void {
   const sane = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
   if (sane === maxAniso) return;
   maxAniso = sane;
-  for (const set of loadedSets.values()) {
-    set.color.anisotropy = sane;
-    set.normal.anisotropy = sane;
-    set.roughness.anisotropy = sane;
-  }
+  for (const tex of loadedTextures) tex.anisotropy = sane;
 }
 
 /* ------------------------------ placeholders ----------------------------- */
@@ -103,14 +104,14 @@ function getPlaceholders(): Placeholders {
 
 /* --------------------------------- sets ---------------------------------- */
 
-interface LoadedSet {
-  color: Texture;
+interface DetailMaps {
   normal: Texture;
   roughness: Texture;
 }
 
-/** In-flight and settled loads, one entry per set. */
-const setLoads = new Map<TextureSetId, Promise<LoadedSet>>();
+/** In-flight and settled loads: one colour map and one detail pair per set. */
+const colorLoads = new Map<TextureSetId, Promise<Texture>>();
+const detailLoads = new Map<TextureSetId, Promise<DetailMaps>>();
 
 function safeFetch(url: string): Promise<Texture> {
   try {
@@ -128,36 +129,49 @@ function configure(tex: Texture, tileMeters: number, sRGB: boolean): void {
   tex.colorSpace = sRGB ? SRGBColorSpace : NoColorSpace;
   tex.anisotropy = maxAniso;
   tex.needsUpdate = true;
+  loadedTextures.add(tex);
 }
 
-function requestSet(id: TextureSetId): Promise<LoadedSet> {
-  const cached = setLoads.get(id);
+function requestColor(id: TextureSetId): Promise<Texture> {
+  const cached = colorLoads.get(id);
   if (cached) return cached;
+  const { tileMeters } = textureSetSpec(id);
+  const pending = safeFetch(setFileUrls(id).color).then(
+    (color) => {
+      configure(color, tileMeters, true);
+      return color;
+    },
+    (err: unknown) => {
+      colorLoads.delete(id); // failures are not cached: the next build retries
+      throw err;
+    },
+  );
+  colorLoads.set(id, pending);
+  return pending;
+}
 
+function requestDetail(id: TextureSetId): Promise<DetailMaps> {
+  const cached = detailLoads.get(id);
+  if (cached) return cached;
   const urls = setFileUrls(id);
   const { tileMeters } = textureSetSpec(id);
-  const pending = Promise.allSettled([
-    safeFetch(urls.color),
-    safeFetch(urls.normal),
-    safeFetch(urls.roughness),
-  ]).then((results) => {
-    const textures = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
-    if (textures.length !== results.length) {
-      // Partial sets are useless (a normal map without its colour map
-      // would mismatch): drop what arrived and let the next build retry.
-      for (const t of textures) t.dispose();
-      setLoads.delete(id);
-      throw new Error(`texture set ${id} failed to load`);
-    }
-    const [color, normal, roughness] = textures;
-    configure(color, tileMeters, true);
-    configure(normal, tileMeters, false);
-    configure(roughness, tileMeters, false);
-    const loaded: LoadedSet = { color, normal, roughness };
-    loadedSets.set(id, loaded);
-    return loaded;
-  });
-  setLoads.set(id, pending);
+  const pending = Promise.allSettled([safeFetch(urls.normal), safeFetch(urls.roughness)]).then(
+    (results) => {
+      const textures = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+      if (textures.length !== results.length) {
+        // A normal map without its roughness map is useless: drop what
+        // arrived and let the next build retry.
+        for (const t of textures) t.dispose();
+        detailLoads.delete(id);
+        throw new Error(`texture set ${id} failed to load`);
+      }
+      const [normal, roughness] = textures;
+      configure(normal, tileMeters, false);
+      configure(roughness, tileMeters, false);
+      return { normal, roughness };
+    },
+  );
+  detailLoads.set(id, pending);
   return pending;
 }
 
@@ -177,10 +191,17 @@ export interface PbrMaterialOptions {
    * the extra sampler costs real time for little visible gain.
    */
   ao?: boolean;
+  /**
+   * Colour map only: no normal, roughness or AO map is requested or
+   * wired, and the flat `roughness` stays. For matte surfaces that cover
+   * a large share of the screen, where the extra samplers cost real
+   * frame time on software GL for little visible relief.
+   */
+  colorOnly?: boolean;
 }
 
 /** Materials still waiting for their set (disposed ones are removed). */
-const pendingUpgrades = new Set<MeshStandardMaterial>();
+const pendingUpgrades = new Set<MeshStandardMaterial | MeshBasicMaterial>();
 
 /** Materials whose upgrade is queued; drives the leak assertion in tests. */
 export function pendingUpgradeCount(): number {
@@ -197,14 +218,14 @@ export function createPbrMaterial(
   options: PbrMaterialOptions,
 ): MeshStandardMaterial {
   const ph = getPlaceholders();
-  const withAo = options.ao ?? true;
+  const colorOnly = options.colorOnly === true;
+  const withAo = !colorOnly && (options.ao ?? true);
   const mat = new MeshStandardMaterial({
     color: options.color,
     roughness: options.roughness,
     metalness: 0,
     map: ph.white,
-    normalMap: ph.normal,
-    roughnessMap: ph.arm,
+    ...(colorOnly ? {} : { normalMap: ph.normal, roughnessMap: ph.arm }),
     ...(withAo ? { aoMap: ph.arm } : {}),
   });
 
@@ -214,16 +235,24 @@ export function createPbrMaterial(
   };
   mat.addEventListener('dispose', release);
 
-  requestSet(setId).then(
-    (set) => {
+  const arrival: Promise<{ color: Texture; detail: DetailMaps | null }> = colorOnly
+    ? requestColor(setId).then((color) => ({ color, detail: null }))
+    : Promise.all([requestColor(setId), requestDetail(setId)]).then(([color, detail]) => ({
+        color,
+        detail,
+      }));
+  arrival.then(
+    ({ color, detail }) => {
       if (!pendingUpgrades.has(mat)) return; // disposed while loading
       release();
-      mat.map = set.color;
-      mat.normalMap = set.normal;
-      mat.roughnessMap = set.roughness;
-      if (withAo && textureSetSpec(setId).packedArm) mat.aoMap = set.roughness;
+      mat.map = color;
+      if (detail) {
+        mat.normalMap = detail.normal;
+        mat.roughnessMap = detail.roughness;
+        if (withAo && textureSetSpec(setId).packedArm) mat.aoMap = detail.roughness;
+        mat.roughness = options.upgradedRoughness ?? 1;
+      }
       mat.color.set(options.upgradedColor ?? 0xffffff);
-      mat.roughness = options.upgradedRoughness ?? 1;
       mat.needsUpdate = true;
     },
     () => {
@@ -234,10 +263,52 @@ export function createPbrMaterial(
   return mat;
 }
 
+/**
+ * Build an UNLIT material that shows a flat colour at once and swaps the
+ * set's colour map in place. It never touches `color`: the caller owns
+ * that tint (the ground plot dims it with the sun). The flat start is a
+ * 1x1 texture of `flatColor`, so the tint can stay a neutral grey.
+ * Only the colour file is requested.
+ */
+export function createMapBasicMaterial(
+  setId: TextureSetId,
+  flatColor: ColorRepresentation,
+): MeshBasicMaterial {
+  const rgb = new Color(flatColor).convertLinearToSRGB();
+  const flat = pixel(
+    Math.round(rgb.r * 255),
+    Math.round(rgb.g * 255),
+    Math.round(rgb.b * 255),
+    true,
+  );
+  const mat = new MeshBasicMaterial({ map: flat });
+
+  pendingUpgrades.add(mat);
+  const release = (): void => {
+    pendingUpgrades.delete(mat);
+  };
+  mat.addEventListener('dispose', () => {
+    release();
+    flat.dispose();
+  });
+
+  requestColor(setId).then(
+    (color) => {
+      if (!pendingUpgrades.has(mat)) return; // disposed while loading
+      release();
+      mat.map = color;
+      mat.needsUpdate = true;
+    },
+    release, // failed download: keep the flat colour
+  );
+  return mat;
+}
+
 /** Drop every cache (test seam + hot-reload hygiene). */
 export function clearAssetCaches(): void {
-  setLoads.clear();
-  loadedSets.clear();
+  colorLoads.clear();
+  detailLoads.clear();
+  loadedTextures.clear();
   pendingUpgrades.clear();
   maxAniso = DEFAULT_ANISOTROPY;
 }

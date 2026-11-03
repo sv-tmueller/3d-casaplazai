@@ -91,19 +91,14 @@ describe('buildMaterial — quality gating', () => {
 });
 
 describe('buildGroundMaterial', () => {
-  it('LOW is a flat colour with no map of any kind and no request', () => {
-    const mat = buildGroundMaterial(false);
-    expect(mat.map).toBeFalsy();
-    expect(mat.normalMap).toBeFalsy();
-    expect(mat.roughnessMap).toBeFalsy();
-    expect(mat.aoMap).toBeFalsy();
-    expect(fetchCalls).toBe(0);
+  it('is mapped synchronously and requests only the grass colour map', () => {
+    const mat = buildGroundMaterial();
+    expect(mat.map).toBeTruthy();
+    expect(fetchCalls).toBe(1);
   });
 
-  it('HIGH is mapped synchronously and requests the grass set', () => {
-    const mat = buildGroundMaterial(true);
-    expect(mat.map).toBeTruthy();
-    expect(fetchCalls).toBe(3);
+  it('is unlit (the shade is owned by applySunPose)', () => {
+    expect(buildGroundMaterial().isMeshBasicMaterial).toBe(true);
   });
 });
 

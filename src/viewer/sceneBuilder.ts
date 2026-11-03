@@ -240,14 +240,21 @@ function projectFaceUvs(
   return { positions: outPos, indices: seq, uvs: outUv };
 }
 
-/** Build one BufferGeometry from a bucket's flat arrays. */
+/**
+ * Build one BufferGeometry from a bucket's flat arrays. The per-face
+ * metre projection (which splits shared vertices) is only for textured
+ * (HIGH) materials; flat LOW keeps the shared vertices and averaged
+ * normals of the plain merge, at its old cost and look.
+ */
 function bucketGeometry(
   slot: string,
   positions: Float32Array,
   indices: Uint32Array,
+  textured: boolean,
 ): BufferGeometry {
   const geo = new BufferGeometry();
-  const projected = PROJECTED_SLOTS.has(slot) ? projectFaceUvs(positions, indices) : null;
+  const projected =
+    textured && PROJECTED_SLOTS.has(slot) ? projectFaceUvs(positions, indices) : null;
   if (projected) {
     geo.setAttribute('position', new BufferAttribute(projected.positions, 3));
     geo.setIndex(new BufferAttribute(projected.indices, 1));
@@ -306,23 +313,23 @@ export const ENV_INTENSITY_NIGHT = 0.12;
 const ENV_ROTATION_X_RAD = Math.PI / 2;
 
 /**
- * Slots that read a specular environment: the glossy floors, glass,
- * frames and the hard-surface furniture. The matte architectural slots
- * (walls, ceilings, roofs, carpet) skip the lookup: it is the most
- * expensive part of the PBR shader on software GL and gains them
- * little, since the hemisphere and ambient lights already carry their
- * diffuse fill.
+ * Slots that read a specular environment: the glass and window frames.
+ * The lookup is the costliest PBR term under software GL (about 15 ms
+ * a frame when floors and furniture read it too, #179 fix round 1) and
+ * a polished-floor reflection of a generic room is hardly seen, while
+ * glass is where a specular environment actually shows.
  */
-const ENV_SLOTS: ReadonlySet<string> = new Set([
-  'wood',
-  'tile',
-  'concrete',
-  'glass',
-  'windowFrame',
-  'furn-wood',
-  'furn-porcelain',
-  'furn-laminate',
-]);
+const ENV_SLOTS: ReadonlySet<string> = new Set(['glass', 'windowFrame']);
+
+/**
+ * The ground plot is unlit, so its shade (a grey multiplier on the grass
+ * colour) stands in for the lighting a lit grass would receive: close to
+ * 1 at noon, where the sun, hemisphere and ambient sum to about the
+ * albedo, and dimmer toward night with the sun. Tuned against the lit
+ * plot's pixels in the overview.
+ */
+export const GROUND_SHADE_NOON = 0.98;
+export const GROUND_SHADE_NIGHT = 0.5;
 
 /** Ground plot: how far below the active floor it sits, meters (clears floor slabs). */
 export const GROUND_PLOT_DROP_M = 0.04;
@@ -335,16 +342,28 @@ const CONTACT_SHADOW_TEXELS = 128;
 /** The environment-lit materials of one built scene, keyed by its lights. */
 interface EnvBinding {
   materials: MeshStandardMaterial[];
+  /** The unlit ground plot (HIGH only). */
+  ground: { material: MeshBasicMaterial } | null;
   /** The environment texture the materials currently carry. */
   attached: Texture | null;
 }
 const envByLights = new WeakMap<ViewerLights, EnvBinding>();
 
+/** Daylight fraction for a sun intensity factor: 0 at the night floor, 1 at noon. */
+function daylight(intensityFactor: number): number {
+  const span = 1 - SUN_NIGHT_INTENSITY_FLOOR;
+  return Math.min(1, Math.max(0, (intensityFactor - SUN_NIGHT_INTENSITY_FLOOR) / span));
+}
+
 /** Environment intensity for a sun intensity factor (night floor to 1). */
 function environmentIntensityFor(intensityFactor: number): number {
-  const span = 1 - SUN_NIGHT_INTENSITY_FLOOR;
-  const t = Math.min(1, Math.max(0, (intensityFactor - SUN_NIGHT_INTENSITY_FLOOR) / span));
-  return ENV_INTENSITY_NIGHT + (ENV_INTENSITY_NOON - ENV_INTENSITY_NIGHT) * t;
+  return ENV_INTENSITY_NIGHT + (ENV_INTENSITY_NOON - ENV_INTENSITY_NIGHT) * daylight(intensityFactor);
+}
+
+/** Show the ground plot at the shade a given daylight fraction earns. */
+function shadeGround(ground: NonNullable<EnvBinding['ground']>, t: number): void {
+  const shade = GROUND_SHADE_NIGHT + (GROUND_SHADE_NOON - GROUND_SHADE_NIGHT) * t;
+  ground.material.color.setScalar(shade);
 }
 
 /** The session's one room environment (HIGH tier), tied to its renderer. */
@@ -420,6 +439,7 @@ export function applySunPose(
   if (binding) {
     const intensity = environmentIntensityFor(state.intensityFactor);
     for (const m of binding.materials) m.envMapIntensity = intensity;
+    if (binding.ground) shadeGround(binding.ground, daylight(state.intensityFactor));
   }
   return state;
 }
@@ -542,14 +562,13 @@ void main() {
  * stays inside the sun's shadow camera and leaves the viewport corners
  * to the sky. Built in world coordinates, so its UVs are meters and the
  * grass tiles at its real size. Kept out of `meshes` and slot counting
- * like the sky dome. HIGH: the grass set, receiving shadows. LOW: a
- * flat colour with no map of any kind.
+ * like the sky dome. The grass colour map, unlit (see buildGroundMaterial),
+ * so it receives no shadows. HIGH tier only: buildViewerScene skips it
+ * on LOW, where a full-screen fill is cost the flat tier does not pay.
  */
 export function buildGroundPlot(
   bounds: AdaptedScene['bounds'],
   floorElevation: number,
-  hiQuality: boolean,
-  receiveShadows: boolean,
 ): Mesh {
   const x0 = bounds.minX - SHADOW_FRUSTUM_PAD_M;
   const x1 = bounds.maxX + SHADOW_FRUSTUM_PAD_M;
@@ -571,9 +590,8 @@ export function buildGroundPlot(
   geo.computeBoundingBox();
   geo.computeBoundingSphere();
 
-  const plot = new Mesh(geo, buildGroundMaterial(hiQuality));
+  const plot = new Mesh(geo, buildGroundMaterial());
   plot.name = 'ground-plot';
-  plot.receiveShadow = receiveShadows;
   return plot;
 }
 
@@ -716,7 +734,7 @@ export function buildViewerScene(
   // makes the session's room environment, so the glossy materials
   // borrow it lazily on the first render. applySunPose retunes their
   // intensity by time of day through this binding.
-  const envBinding: EnvBinding = { materials: [], attached: null };
+  const envBinding: EnvBinding = { materials: [], ground: null, attached: null };
   envByLights.set(lights, envBinding);
   scene.onBeforeRender = () => {
     const env = sessionEnvironment?.texture;
@@ -741,7 +759,7 @@ export function buildViewerScene(
   const hiQuality = forceLowMaterials ? false : isHighQuality();
 
   for (const bucket of adapted.buckets) {
-    const geo = bucketGeometry(bucket.slot, bucket.positions, bucket.indices);
+    const geo = bucketGeometry(bucket.slot, bucket.positions, bucket.indices, hiQuality);
     const mat = buildMaterial(
       bucket.slot === 'wall' || bucket.slot === 'ceiling'
         ? bucket.slot
@@ -770,12 +788,14 @@ export function buildViewerScene(
     meshes.push(mesh);
   }
 
-  // Ground plot (#179): same material tier as every slot, so a scene
-  // never mixes grass with flat colour surfaces.
-  scene.add(
-    buildGroundPlot(adapted.bounds, adapted.activeFloorElevation, hiQuality, quality === 'high'),
-  );
+  // Ground plot and contact shadow (#179): HIGH only. On LOW the plot
+  // was a fill cost of ~3 ms a frame under software GL (a third of a
+  // flat frame), against a LOW promise of costing no more than before.
   if (hiQuality) {
+    const plot = buildGroundPlot(adapted.bounds, adapted.activeFloorElevation);
+    envBinding.ground = { material: plot.material as MeshBasicMaterial };
+    shadeGround(envBinding.ground, 1); // default pose is noon; applySunPose retunes
+    scene.add(plot);
     scene.add(buildContactShadow(adapted.bounds, adapted.activeFloorElevation));
   }
 
