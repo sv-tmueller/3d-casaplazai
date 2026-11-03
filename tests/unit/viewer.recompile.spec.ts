@@ -81,6 +81,16 @@ describe('viewer recompile pipeline', () => {
     expect(h.app.rebuildCount()).toBe(rebuilds);
   });
 
+  it('flush() applies a pending rebuild at once (a Walk request cannot wait)', () => {
+    h = bootViewer(basePlan());
+    h.plan().floors[0].rooms[0].name = 'Flushed';
+    h.notify();
+    h.app.flush();
+    expect(h.app.currentSignature()).toBe(planSignature(h.plan()));
+    h.advance(RECOMPILE_DEBOUNCE_MS);
+    expect(h.app.rebuildCount()).toBe(2);
+  });
+
   it('postpones the rebuild while a 2D gesture is in progress', () => {
     h = bootViewer(basePlan());
     h.setBusy(true);

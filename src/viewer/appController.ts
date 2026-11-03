@@ -350,6 +350,14 @@ export class ViewerApp {
     return true;
   }
 
+  /** Apply a pending debounced rebuild now (a Walk request cannot wait). */
+  public flush(): void {
+    if (this.disposed || this.rebuildTimer === null) return;
+    clearTimeout(this.rebuildTimer);
+    this.rebuildTimer = null;
+    this.refreshAdaptation(false);
+  }
+
   /** Something can be walked in and no swap is under way. */
   public canWalk(): boolean {
     return !this.disposed && this.lastGood !== null && this.phase !== 'transition';
@@ -795,8 +803,12 @@ export class ViewerApp {
     if (preservePose && this.orbitCam) this.preservedAzimuth = this.orbitCam.azimuthDegrees;
 
     // buildViewerScene(adapted, quality, forceLowMaterials) — the quality
-    // level now comes from AppState (View tab), seeded by ?quality=.
-    const rebuilt = buildViewerScene(adapted, this.quality);
+    // level now comes from AppState (View tab), seeded by ?quality=. The
+    // builder reads the material tier from the URL itself, so a runtime
+    // switch to Low forces flat materials through its existing argument
+    // (Low → High cannot upgrade past a ?quality=low URL; batch 2 moves
+    // the tier into the builder's parameters).
+    const rebuilt = buildViewerScene(adapted, this.quality, this.quality === 'low');
     paintSky(rebuilt.scene);
     if (this.sceneRoot) {
       disposeObject(this.sceneRoot.lightGroup);

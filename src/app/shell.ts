@@ -51,6 +51,8 @@ export interface ViewerPort {
   requestMode(mode: 'overview' | 'walk', opts?: { autoLock?: boolean; pose?: WalkerPose | null }): boolean;
   canWalk(): boolean;
   busy(): boolean;
+  /** Apply a pending store-driven rebuild now. */
+  flush(): void;
   gotoRoom(roomId: string): void;
   applySettings(settings: ViewerSettings): void;
   dispose(): void;
@@ -229,6 +231,11 @@ export function mountShell(opts: ShellOptions): Shell {
     return v === '3d' || viewer.canWalk();
   }
 
+  /** A Walk request first applies any rebuild still in its debounce. */
+  function prepareWalk(): void {
+    viewer?.flush();
+  }
+
   function applyView(v: ViewId): void {
     root.dataset.view = v;
     planPane.hidden = v !== 'plan';
@@ -238,6 +245,7 @@ export function mountShell(opts: ShellOptions): Shell {
   }
 
   function requestView(v: ViewId, o: { seated?: boolean; pose?: WalkerPose | null } = {}): boolean {
+    if (v === 'walk') prepareWalk();
     const cur = app.get().view;
     if (v === cur && !o.seated) return true;
     if (!canEnterView(v)) {

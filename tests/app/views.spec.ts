@@ -57,6 +57,9 @@ function mount(search = ''): void {
           return mode === 'overview' || viewer.walkable;
         },
         canWalk: () => viewer.walkable,
+        flush() {
+          viewer.calls.push('flush');
+        },
         busy: () => viewer.isBusy,
         gotoRoom(id) {
           viewer.calls.push(`goto:${id}`);
@@ -147,6 +150,8 @@ describe('place camera (G15) and go to room', () => {
   it('a placed walker seats Walk without the pointer lock, from that pose', () => {
     const pose: WalkerPose = { x: 3, y: 1, yawRad: 0.5, floorIdx: 0, mode: 'walk' };
     engine.emit('walkerPlaced', { pose, roomName: 'Living' });
+    // A pending 3D rebuild is applied before walking (no debounce race).
+    expect(viewer.calls).toContain('flush');
     expect(app.get().view).toBe('walk');
     expect(app.get().walkPose).toEqual(pose);
     expect(viewer.calls.at(-1)).toBe('mode:walk:false');
