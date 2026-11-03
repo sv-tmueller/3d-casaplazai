@@ -800,6 +800,8 @@
 
 .loading-splash.leaving {
   opacity: 0;
+  /* The exit fade must never swallow the first click on the workspace. */
+  pointer-events: none;
 }
 
 .loading-splash-title {

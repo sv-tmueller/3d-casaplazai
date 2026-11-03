@@ -981,6 +981,9 @@ export function createCanvasEngine(opts: CanvasEngineOptions): EditorEngine {
     let floorChanged = false;
     if (_s.data !== lastData) {
       lastData = _s.data;
+      // A deferred fit belonged to the previous plan; whoever swapped
+      // the plan asks again if it wants one (bridge loadPlan does not).
+      fitPending = false;
       floorChanged = _s.activeFloorIdx !== lastFloorIdx;
       lastFloorIdx = _s.activeFloorIdx;
     } else if (_s.activeFloorIdx !== lastFloorIdx) {

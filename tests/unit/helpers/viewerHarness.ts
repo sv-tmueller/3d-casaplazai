@@ -20,6 +20,7 @@ export interface RecordingSink extends ViewerUiSink {
   empty: boolean[];
   modes: ViewMode[];
   dismissed: number;
+  availability: number;
 }
 
 export function recordingSink(): RecordingSink {
@@ -32,6 +33,10 @@ export function recordingSink(): RecordingSink {
     empty: [],
     modes: [],
     dismissed: 0,
+    availability: 0,
+    availabilityChanged: () => {
+      sink.availability += 1;
+    },
     toast: (text, variant) => void sink.toasts.push({ text, variant }),
     dismissErrors: () => {
       sink.dismissed += 1;

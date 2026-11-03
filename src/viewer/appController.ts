@@ -420,6 +420,7 @@ export class ViewerApp {
   /** Swap rigs across the fade. */
   private async swapModes(next: ViewMode, autoLock: boolean, pose: WalkerPose | null): Promise<void> {
     this.phase = 'transition';
+    this.sink.availabilityChanged();
     await this.sink.fade();
     if (this.disposed) return;
 
@@ -440,6 +441,7 @@ export class ViewerApp {
       this.phase = 'overview';
       this.seatRig('overview');
       this.sink.modeChanged('overview');
+      this.sink.availabilityChanged();
       return;
     }
 
@@ -468,6 +470,7 @@ export class ViewerApp {
     }
     this.updateRoomReadout();
     this.sink.modeChanged(this.viewMode());
+    this.sink.availabilityChanged();
   }
 
   /** Leave walk without a fade (the view was hidden). */
@@ -733,6 +736,7 @@ export class ViewerApp {
         })),
       );
       this.renderScene(adapted, changedShape);
+      this.sink.availabilityChanged();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (this.lastGood === null) this.sink.toast(`Cannot render plan: ${msg}`, 'error');
@@ -768,6 +772,7 @@ export class ViewerApp {
     this.renderScene(empty, false);
     this.orbitCam = this.makeOrbitRig(empty);
     this.rig = this.orbitCam;
+    this.sink.availabilityChanged();
   }
 
   /** Leave the empty state (issue #148); true when it was active. */

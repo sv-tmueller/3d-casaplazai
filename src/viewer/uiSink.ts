@@ -27,6 +27,8 @@ export interface ViewerUiSink {
   fade(): Promise<void>;
   /** The live mode after every swap (and on the viewer's own exits). */
   modeChanged(mode: ViewMode): void;
+  /** canWalk() or busy() may have changed (the shell re-renders). */
+  availabilityChanged(): void;
   /** Mount point for the ?perf=1 overlay. */
   readonly perfHost?: HTMLElement | null;
 }
@@ -52,5 +54,6 @@ export const NULL_SINK: ViewerUiSink = {
   emptyState: () => {},
   fade: () => Promise.resolve(),
   modeChanged: () => {},
+  availabilityChanged: () => {},
   perfHost: null,
 };

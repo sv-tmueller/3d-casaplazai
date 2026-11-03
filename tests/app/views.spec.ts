@@ -112,6 +112,15 @@ describe('view segment and keys', () => {
     expect(app.get().view).toBe('plan');
   });
 
+  it('re-renders the segment when the viewer reports walkability changes', () => {
+    viewer.walkable = false;
+    shell.refresh();
+    expect(tid('ws-view-walk').getAttribute('aria-disabled')).toBe('true');
+    viewer.walkable = true;
+    viewer.sink.availabilityChanged();
+    expect(tid('ws-view-walk').hasAttribute('aria-disabled')).toBe(false);
+  });
+
   it('refuses a switch while the 3D engine is mid-transition (G3)', () => {
     press('2');
     viewer.isBusy = true;

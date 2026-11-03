@@ -382,6 +382,10 @@ export function mountShell(opts: ShellOptions): Shell {
         }
         refresh();
       },
+      availabilityChanged: () => {
+        binder.sync();
+        topBar.sync();
+      },
       perfHost,
     };
     viewer = opts.createViewer(canvas3d, sink);

@@ -81,6 +81,8 @@ describe('viewer empty-plan state (issue #148)', () => {
     expect(h.app.currentSignature()).toBe(planSignature(plan));
     expect(h.sink.empty.at(-1)).toBe(false);
     expect(h.app.canWalk()).toBe(true);
+    // The shell is told walking just became possible (segment re-render).
+    expect(h.sink.availability).toBeGreaterThan(0);
     expect(viewerStats().emptyState).toBe(false);
     expect(h.sink.toasts).toHaveLength(0);
   });

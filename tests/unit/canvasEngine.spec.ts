@@ -120,6 +120,14 @@ describe('createCanvasEngine', () => {
     expect(engine.camera()).toEqual(computeFitCamera(squarePlan(), 800, 600, { left: 0, right: 0, top: 0, bottom: 0 }));
   });
 
+  it('a wholesale swap cancels a fit deferred while the canvas was hidden (G14)', () => {
+    engine.fitPlan(); // hidden at boot: deferred
+    store.replaceAll(squarePlan()); // bridge loadPlan: must not inherit it
+    size = { width: 800, height: 600 };
+    engine.resize();
+    expect(engine.camera()).toEqual({ originX: 0, originY: 0, scale: 80 });
+  });
+
   it('fits on a floor change but not on a plan swap (bridge loadPlan, G14)', () => {
     size = { width: 800, height: 600 };
     engine.resize();
