@@ -27,9 +27,9 @@ room's edge. `SCHEMA_VERSION = 2`; `FloorplanDataV1` is the frozen v1 shape.
 
 **Migration and validation.**
 
-- `src/shared/schema/migrate.ts`: `registerTransform` throws if the same `fromVersion` is registered
-  twice, so there is exactly one 2 to 3 transform and two features cannot each claim it. The
-  `v1ToV2` wrap carries arrays by reference; byte-identical compiled output is its acceptance bar.
+- `src/shared/schema/migrate.ts`: `registerTransform` throws if a `fromVersion` is registered twice,
+  so two features cannot each claim the 2 to 3 transform. The `v1ToV2` wrap carries arrays by
+  reference; byte-identical compiled output is its acceptance bar.
 - `src/shared/schema/validate.ts`: `validateFloorplan` ignores unknown keys and returns its input,
   so a field added without a version bump would render silently wrong in an older reader; that is
   why every field addition bumps the version. Override heights must be positive (`bad-height`), so
@@ -40,9 +40,10 @@ room's edge. `SCHEMA_VERSION = 2`; `FloorplanDataV1` is the frozen v1 shape.
 
 - `src/geom/walls.ts`: `buildSlab` spans plus and minus `t/2` around the polygon edge, so the edge is
   the wall centreline. Slabs end exactly at polygon vertices with no corner joins: at a convex 90
-  degree corner each slab leaves the `t/2` by `t/2` square beyond the vertex uncovered (a notch); at
-  a reflex corner two slabs overlap in that square. The header's "duplicate slabs" limitation calls
-  them "thin", a word that has been wrong since #45.
+  degree corner has one `t/2` by `t/2` square that no slab covers and one that two slabs cover. At a
+  convex corner the notch is outside and the overlap inside; at a reflex corner it is the reverse,
+  and the notch shows from inside the room. The header's "duplicate slabs" limitation calls them
+  "thin", a word that has been wrong since #45.
 - `src/geom/compile.ts`: `buildRoomWalls` builds walls per room and per segment with
   `plan.wallThickness`. Its skip-when-absent guards (stairs, roofs, the `dz = 0` lift) are the
   pattern that has kept goldens byte-identical across v2.
@@ -53,8 +54,9 @@ room's edge. `SCHEMA_VERSION = 2`; `FloorplanDataV1` is the frozen v1 shape.
 `dedupeWalls` drops slabs with coincident centroids and `resolveCoplanarWallOverlaps` (#45) groups
 slabs by plane, keyed on the normal and both face offsets from `describeWallPrism`, and draws each
 region once. This works only because both rooms emit the same thickness; with different thickness
-the groups differ and the merge stops. `describeWallPrism` also requires a box with a constant z
-band. The adapter is frozen in batch 1.
+the groups differ and the merge stops. `describeWallPrism` checks only that a buffer holds 24
+floats, so an 8-corner trapezoid passes and, if trimmed, is re-emitted as a box; when it returns
+null for any buffer, the merge returns every buffer unmerged. The adapter is frozen in batch 1.
 
 **Pairing lives in the editor layer.** `src/editor/model/openings.ts` and `constants.ts` there hold
 `sharedWallOverlap`, `qualifyMirrorCandidate`, `mirrorCounterparts`, `derivePairRows`,
@@ -69,14 +71,14 @@ cannot reuse the predicate, which lives in `src/editor/model`.
   `addOpening` emits two rows; `moveOpening`, `updateOpening` and `deleteOpening` take `syncPair`.
   `setWallLean` and `clearWallLean` are the per-segment row commands; `setWallThickness` is
   plan-wide, bounded 0.05 to 0.6.
-- `src/editor/render.ts` draws room outlines as strokes, so thickness is invisible in 2D.
+- `src/editor/render.ts` strokes room outlines, so thickness is invisible in 2D;
   `src/editor/measures.ts` totals polygon areas for the status bar.
 - `src/editor/wire.ts`: `toLegacyWire` produces the v1 bridge from floor 0 only; #178 keeps
   `window.__casaplaza` getData, getCurrent and loadPlan.
 - `src/shared/shareLink.ts`: `SHARE_PREFIX = 'v1.'` versions the fragment format, not the schema.
   Decoding runs `migrate` then `validateFloorplan`. `SHARE_WARN_LENGTH` is 2000 and
-  `SHARE_MAX_LENGTH` is 8000; measured on the demo fixtures, an encoded plan is about 960 characters
-  (apartment) to 1250 (townhouse).
+  `SHARE_MAX_LENGTH` is 8000; measured on the demo fixtures, an encoded plan is about 960 (apartment)
+  to 1250 (townhouse) characters.
 
 **Pins.** `tests/geom/golden.spec.ts` ("13/11/7 wall slabs" per room), `apartment.identity.spec.ts`
 (SHA-256 byte identity), `townhouse.golden.spec.ts` (freeze policy), `wall-thickness.spec.ts`,
@@ -87,19 +89,18 @@ cannot reuse the predicate, which lives in `src/editor/model`.
 **A live example of the two-row failure mode.** In `demo/demo-apartment.json`, kitchen edge 2 runs
 from [8.6, 3.6] to [5.4, 3.6] and bed-nook edge 0 from [5.4, 3.6] to [8.6, 3.6]: the same wall,
 fully overlapping. `door-bedroom` and `window-kitchen-north` sit on the kitchen's row and no row on
-the bed-nook's edge 0 mirrors them. The golden's 7 slabs for the bed-nook (edges 0, 2 and 3 as one
-slab each, plus four around its skylight on edge 1) include one uncut slab across that wall. A
-scratch run at the base commit confirmed that the adapter's merge leaves a full-height slab across
-the doorway and that a straight walk through it is blocked. Recorded, not fixed: fixing it
-re-records the frozen v1 goldens, the owner's call.
+the bed-nook's edge 0 mirrors them. The golden's 7 bed-nook slabs (one each on edges 0, 2 and 3,
+four around its skylight on edge 1) include one uncut slab across that wall. A scratch run at the
+base commit confirmed that the adapter's merge leaves a full-height slab across the doorway and
+blocks a straight walk through it. Recorded, not fixed: it would re-record the frozen v1 goldens
+(the owner's call).
 
 **The user interface is being replaced.** Gestures are named by store command and by functions in
 `src/editor/model/openings.ts`; surfaces by their redesign names, the Build tab tool grid and the
 contextual inspector (design spec `docs/superpowers/specs/2026-10-20-workspace-redesign-design.md`,
-sections 6.2 and 6.3). Issue #178 retires the current rail, popovers, mini 3D inset and HUD (spec
-section 8.1), and `src/editor/glue.ts` becomes `src/editor/canvasEngine.ts` behind
-`src/editor/engine.ts`; those paths and `src/app/` are introduced by #178, which leaves the store
-and `src/geom` alone.
+sections 6.2 and 6.3). Issue #178 retires the current rail, popovers, mini 3D inset and HUD, and
+`src/editor/glue.ts` becomes `src/editor/canvasEngine.ts` behind `src/editor/engine.ts`; those paths
+and `src/app/` are introduced by #178, which leaves the store and `src/geom` alone.
 
 ### 1.2 Cases the model cannot express
 
@@ -125,10 +126,10 @@ derived from a wall loop), `03d-wall-editing.md` (`heightAtEnd`, split, join) an
 
 **Precedents in this repo.** From the #69 design comment: derived values are never stored (ridge,
 stairwell), no schema field the compiler does not consume, byte identity of the migrated apartment
-is the migration bar, and a whole-building roof outline was rejected as research-sized. From the
+is the migration bar, a whole-building roof outline was rejected as research-sized. From the
 redesign spec: wall-first is a non-goal (section 2), there is no wall tool (6.2), the inspector
-carries wall height and thickness (6.3), the interior and exterior face split is batch-2 compiler
-work (7.1, 7.3), and `src/geom` and the adapter are frozen in batch 1 (10).
+carries wall height and thickness (6.3), the face split is batch-2 compiler work (7.1, 7.3), and
+`src/geom` and the adapter are frozen in batch 1 (10).
 
 ## 2. Options
 
@@ -160,15 +161,17 @@ keep their meaning, and folding them into `segments[]` is an optional, byte-tran
   and resolves an effective thickness per row and interval. With no new field, `buildRoomWalls`
   takes the legacy path unchanged.
 - Collision: `roomCollisionPieces` reads the same resolved thickness; sloped tops stay conservative.
+- Frames: `adaptScene` takes the global `wallThickness` for `buildFrameSlabs`, so frames in a
+  thicker exterior wall keep the interior depth (section 7).
 - Validator: row bounds and positive values in `validateFloorplan`. `open` is its own flag, so
   `bad-height` is untouched. `validateGeometry` gains no checks.
 - Editor gestures: the inspector gains a thickness field per selected segment beside wall lean, and
   a `setSegmentThickness` command mirrors `setWallLean` and `clearWallLean`. `resizeRoom` and
   `moveRoom` are unchanged. No add-vertex or delete-vertex command exists, so `segmentIndex` stays
   stable; a future one must remap rows, as it must already remap `wallsOverride`, `roofs`, openings.
-- Share links: the payload grows by the rows only; old links decode through `migrate` and
-  `SHARE_PREFIX` stays. The v1 bridge passes `ground.rooms` by reference, so room rows ride along;
-  plan-level fields are lost, as stairs and upper floors already are.
+- Share links: the payload grows by the rows only; old links decode through `migrate`. The v1
+  bridge passes `ground.rooms` by reference, so room rows ride along; plan-level fields are lost,
+  as stairs and upper floors already are.
 - Goldens: absent fields mean byte identity; apartment goldens and the SHA test do not move.
   Townhouse and duplex re-record deliberately when their fixtures gain rows.
 
@@ -178,7 +181,7 @@ wall tool: no.
 
 **Package estimate.** Extract the pairing predicate (size:S). First proof, exterior thickness with
 derived classification (size:M, section 7). Per-segment `thickness` rows, sloped walls, per-side
-materials (size:M each, the last after the wall-face split). One S and three to four M.
+materials (size:M each, the last after the wall-face split). An optional S plus four to five M.
 
 **Risks.** The derived graph is new geometry code with its own tolerance policy. A staggered overlap
 splits one edge into intervals, so slab counts change for plans using the new fields. Corner joins
@@ -215,7 +218,8 @@ The owner would have to sign off an exception to the #69 byte-identity bar.
   `addOpening` stops emitting two rows, so `syncPair`, `derivePairRows` and `groupedPairs` retire.
   A wall tool becomes natural. 15 source files and 31 test and e2e files reference `segmentIndex`.
 - Share links: the payload grows by the wall table. A rough estimate (not measured): the 7-room
-  townhouse gains about 20 walls of about 110 bytes, roughly 0.8 kB of fragment, near
+  townhouse gains about 20 walls of about 110 bytes, 2.2 kB of JSON; at the townhouse's own
+  ratio (4.3 kB of JSON to about 1250 characters) that is about 0.65 kB of fragment, near
   `SHARE_WARN_LENGTH`. The v1 bridge needs a reverse projection or loses wall data.
 - Goldens: every geometry golden and the SHA identity test are re-recorded.
 
@@ -224,8 +228,8 @@ since there is one opening on one wall.
 
 **Package estimate.** Schema plus derive-and-snap migration, compiler with joins, editor command
 rewrite (size:L each, to split). Collision and validator, opening re-anchoring with pairing
-retirement, bridge and share projection, golden re-record, wall tool (size:M each). Seven or more,
-at least one L.
+retirement, bridge and share projection, golden re-record, wall tool (size:M each). Eight (seven
+without the wall tool), three of them L to split.
 
 **Risks.** A lossy, irreversible migration; every editor gesture rewritten while #178 rewrites the
 shell around the same commands; larger payloads.
@@ -234,6 +238,11 @@ shell around the same commands; larger payloads.
 
 As the issue defines it: exterior and freestanding walls become `walls[]` entities; interior walls
 stay derived.
+
+```ts
+interface Wall { id: string; a: Vec2; b: Vec2; thickness: number; height?: number; }  // non-normative
+interface Floor { /* ... */ walls?: Wall[]; }  // exterior and freestanding only; interior stays derived
+```
 
 **Migration path.** The transform derives the exterior edges (no neighbour) and stores them as wall
 entities: classification happens at migration time and its result is stored, and those room edges
@@ -250,16 +259,15 @@ stop emitting slabs.
 - Share links: the payload grows by the exterior walls; the bridge needs a projection for them.
 - Goldens: not byte-transparent, because exterior edges stop emitting from their rooms.
 
-**How the cases land.** Exterior thickness, freestanding walls and a wall tool: yes. Interior
-thickness, hinge and per-side materials on shared walls still need Option A rows, so C does not
-remove the need for A and adds a second source of truth.
+**How the cases land.** Exterior thickness and freestanding walls: yes. A wall tool: partial, for
+exterior and freestanding walls only. Interior thickness, hinge and per-side materials on shared
+walls still need Option A rows, so C needs A anyway and adds a second source of truth.
 
 **Package estimate.** Schema plus exterior derivation, collision and validator, editor
 synchronisation (size:M each); compiler dual path with joins (size:L, to split); goldens and
 fixtures (size:S). Five packages, one needing a split.
 
-**Risks.** A stored classification that goes stale; two hosting forms for openings; the merge
-problem is moved, not removed.
+**Risks.** A stale stored classification; two hosting forms for openings; the merge problem moves.
 
 ## 3. Questions this record must answer
 
@@ -269,9 +277,8 @@ The polygon edge stays the wall centreline. Extra exterior thickness grows symme
 edge, not outward, so existing data keeps its meaning, the shared-wall merge keeps one plane for
 both rows, and `buildSlab` is unchanged in kind. Net interior area is smaller than polygon area by
 half a thickness per side, and the status-bar total (`src/editor/measures.ts`, polygon area) stays
-a gross-to-centreline figure. Net area is a later derived display, not a silent change to the
-number users see. An alignment switch (inside, centre, outside), as in 3D House Planner, is
-deferred and would be a row field.
+a gross-to-centreline figure; net area is a later derived display. An alignment switch (inside,
+centre, outside), as in 3D House Planner, is deferred and would be a row field.
 
 ### 3.2 Exterior classification (question 2)
 
@@ -282,10 +289,9 @@ edge into an interior and an exterior stretch. Classification is per floor: an u
 over a lower room is still exterior to its own floor. A stored flag would go stale on `resizeRoom`
 and `moveRoom`, which split shared walls, and would put derivable state in the file, against #69.
 
-This is not the whole-building outline #69 rejected, which needs a watertight 2D union of
-overlapping polygons. Per-interval classification is a one-dimensional subtraction on each edge; it
-tolerates gaps and overlaps between rooms and fails locally. Legacy plans need derivation under
-every option, because none stores the flag.
+This is not the whole-building outline #69 rejected, which needs a watertight 2D union of polygons.
+Per-interval classification is a one-dimensional subtraction on each edge; it tolerates gaps and
+overlaps between rooms and fails locally. Legacy plans need derivation under every option.
 
 ### 3.3 Shared-wall merge rule (question 3)
 
@@ -298,8 +304,7 @@ slabs that the adapter already dedupes stay coincident.
 Where it runs: effective thickness and height are resolved in a derived wall graph in `src/geom`,
 because only the compiler sees both rows at once. The adapter's merge stays as a safety net for the
 legacy path and moves into `src/geom` once the wall-face split (spec section 7.3) needs per-face
-information the adapter cannot see. A disagreement between rows is a warning for the problems panel
-(#153), not an error.
+information. A disagreement between rows is a warning for the problems panel (#153), not an error.
 
 ### 3.4 Directional attributes under the mirror (question 4)
 
@@ -314,37 +319,35 @@ The two rows of a shared wall run in opposite directions, so direction-relative 
 `derivePairRows` and the `syncPair` paths must write flipped values to the mirror row. Per-side
 material avoids this by construction: a row's `faces.room` is the face toward its own room, so each
 side of a shared wall authors its own face; `faces.outside` is read only on exterior intervals.
-Under Option B none of this is needed (one opening on one wall), a point for B weighed in section 5.
+Option B needs none of this (one opening on one wall), a point weighed in section 5.
 
 ### 3.5 Non-room spaces (question 5)
 
 Balcony, terrace and garage are rooms. They need attributes the compiler can consume (no ceiling,
-open or parapet edges, an exterior floor material), as a `kind` or per-room toggles; #127 item 3
-overlaps, and the building package decides. A wall that bounds nothing needs a freestanding-wall
-entity, the one case room rows cannot express: the narrowed Option C of section 5.
+open or parapet edges, an exterior floor material), as a `kind` or per-room toggles; the building
+package decides. A wall that bounds nothing needs a freestanding-wall entity, the one case room rows
+cannot express: the narrowed Option C of section 5.
 
 ### 3.6 Schema versions (question 6)
 
 Every added field bumps the version. #151 (hinge and swing) and the wall follow-up both want a 2 to
-3 transform, and `registerTransform` throws on a duplicate. Each registers the version current at its
-own merge: whichever lands first takes v3 and the other rebases onto v4. They combine only if they
-land in the same pull request; the conflict on `SCHEMA_VERSION` is the safety net.
+3 transform, and `registerTransform` throws on a duplicate: whichever lands first takes v3 and the
+other rebases onto v4. The conflict on `SCHEMA_VERSION` is the safety net.
 
 ### 3.7 Golden policy per option (question 7)
 
 A: an absent field means the legacy path, guarded and byte-identical (the roofs precedent), so
 apartment goldens and `apartment.identity.spec.ts` must not move; fixtures that adopt rows re-record
-deliberately under the `townhouse.golden.spec.ts` freeze policy. B is not transparent (walls 5 mm
-apart snap, staggered walls split, mirror rows collapse): every golden and the SHA test are
-re-recorded, and the owner must sign off an exception to the #69 bar first. C is not transparent
-either, because exterior edges stop emitting from rooms.
+deliberately under the `townhouse.golden.spec.ts` freeze policy. B is not transparent (5 mm walls
+snap, staggered walls split, mirror rows collapse): every golden and the SHA test are re-recorded,
+after the owner signs off an exception to the #69 bar. C is not transparent either: exterior edges
+stop emitting from rooms.
 
 ### 3.8 The v1 bridge and `SHARE_PREFIX` (question 8)
 
-`SHARE_PREFIX` stays under every option, since decoding migrates; only an envelope change would move
-it. Bridge: A, room rows ride along by reference and plan-level fields are dropped. B, a reverse
-projection (walls to edges and `segmentIndex` openings) or wall data is lost. C, a projection for
-exterior walls.
+`SHARE_PREFIX` stays under every option, since decoding migrates. Bridge: A, room rows ride along
+by reference and plan-level fields are dropped. B, a reverse projection (walls to edges and
+`segmentIndex` openings) or wall data is lost. C, a projection for exterior walls.
 
 ## 4. Comparison
 
@@ -359,14 +362,12 @@ exterior walls.
 | Share links and v1 bridge | Rows ride along; prefix stays | Reverse projection; payload grows | Projection for exterior walls |
 | Door pairing | Stays, predicate relocated | Retired | Stays for interior |
 | Per-wall thickness | Yes | Yes | Exterior only |
-| Exterior thickness | Yes, derived | Yes | Yes |
 | Per-side materials | Yes, `faces` rows | Yes | Partial |
 | Sloped walls | Row field; trapezoid slab | Wall field; same slab work | Exterior only |
 | Hinge (#151) | Yes, with explicit flip rule | Yes, no flip needed | Interior still needs flip |
-| Non-room spaces | Rooms with open edges | Rooms with open edges | Rooms with open edges |
 | Freestanding walls | No | Yes | Yes |
 | Wall tool | No | Yes | Partial |
-| Package estimate | 1 S plus 3 to 4 M | 7 or more, at least one L | 5, one needs a split |
+| Package estimate | Optional S plus 4 to 5 M | 8, three of them L to split | 5, one needs a split |
 | Risk | Tolerance policy; corner joins | Lossy migration; editor rewrite | Stale classification |
 
 ## 5. Decision
@@ -378,8 +379,7 @@ The refined Option A has four parts: (1) per-segment rows that generalise `walls
 `roofs`, added only as a feature needs a field the compiler consumes; (2) exterior classification
 derived at compile time, per interval, never stored (3.2); (3) the shared-wall merge resolved in a
 derived wall graph in `src/geom` under the union rule of 3.3, the adapter merge retiring in stages;
-(4) the pairing predicate moved out of `src/editor/model` into a module the compiler and the editor
-can both import.
+(4) the pairing predicate moved out of `src/editor/model` into a module compiler and editor share.
 
 The narrowed Option C is a `walls[]` list only for walls that bound no room: additive, empty by
 default, and not built until a feature needs it.
@@ -387,9 +387,8 @@ default, and not built until a feature needs it.
 ### 5.1 Why not B
 
 - The migration cannot meet the #69 bar: derive-and-snap is lossy and irreversible (3.7).
-- The cost lands on the busiest code at the worst moment. The 31 store commands all need review, 15
-  source files and 31 test and e2e files carry `segmentIndex`, and #178 is rewriting the shell
-  around those same commands.
+- The cost lands on the busiest code at the worst moment: 31 store commands need review, 15 source
+  files and 31 test and e2e files carry `segmentIndex`, and #178 is rewriting the shell.
 - B's payoff is a wall tool and room detection. Neither is committed: the spec lists wall-first as
   a non-goal and has no wall tool (sections 2 and 6.2). Payloads also grow (2.2).
 
@@ -402,12 +401,15 @@ default, and not built until a feature needs it.
   defect history (nine closed issues) is genuine evidence for B. The refined A shrinks that
   subsystem to one predicate with one tolerance shared by compiler and editor; if that does not
   hold, the reopen triggers below fire.
-- The shared-door convention would become unnecessary. It stays under A, a cost accepted for the
+- The shared-door convention would become unnecessary; under A it stays, a cost accepted for the
   migration and editor savings.
 
-M3 itself derives one wall per distinct room segment and resolves `segmentIndex` openings "onto the
-derived wall at read time": a read-time derived wall graph, which is the refined A's compiler piece.
-The two differ only in whether the graph is stored.
+M3 stores one wall per distinct undirected room segment at migration, as the source of truth, with
+joins and per-side colours, and keeps room polygons and `segmentIndex` openings, which resolve onto
+the wall at read time. That is Option B's wall table with a compatibility layer for openings; the
+refined A's graph is derived and never stored. Stored walls beside unchanged rooms leave two
+sources of truth for every shared edge: a room edit must update the wall table or it goes stale, as
+with C's classification, and migration faces B's snap and split decisions (5 mm, staggered edges).
 
 ### 5.3 Reopen triggers
 
@@ -415,19 +417,19 @@ Reopen this record, by a new superseding record, if any of these happens:
 
 - The owner commits to a wall-drawing tool, or to room detection from walls.
 - Pairing defects recur: two more of the #36, #40, #41, #43, #112 or #140 class within one quarter
-  after the derived graph has landed.
+  of the derived graph landing.
 - An importer for a wall-first format (Sweet Home 3D, DXF) is committed; it arrives wall-first.
 - The derived graph cannot produce correct corners at a thickness change without stored joins.
 
 ## 6. Consequences
 
 **Positive.** No migration risk: legacy plans and apartment goldens stay byte-identical. Features
-land as small packages whose fields the compiler consumes. Shared-wall logic gets one home
-(compiler, editor, problems panel #153). Options B and the narrowed C stay open.
+land as small packages. Shared-wall logic gets one home (compiler, editor, problems panel #153).
+Options B and the narrowed C stay open.
 
 **Negative.** The two-row shared-door convention survives, with its flip rule (3.4) and defect
 class. Freestanding walls and a wall tool wait for the narrowed C. Corner joins at a thickness
-change stay open work, as does the trapezoid merge for a shared sloped wall.
+change and the trapezoid merge for a shared sloped wall stay open.
 
 **What binds once Accepted.**
 
@@ -443,18 +445,19 @@ change stay open work, as does the trapezoid merge for a shared sloped wall.
 
 **Scope.** The smallest schema delta the compiler fully consumes:
 
-- Extract the pairing predicate (`sharedWallOverlap`, `qualifyMirrorCandidate`) into a module that
-  `src/geom` and `src/editor` may both import, with no behaviour change; split it off as a size:S
-  package if it runs long.
+- Extract the pairing predicate (`sharedWallOverlap`, `qualifyMirrorCandidate`) into a module both
+  `src/geom` and `src/editor` may import, with no behaviour change (a size:S package if split off).
 - A new `src/geom` module: a derived wall graph that classifies each edge interval as shared or
   exterior, per floor, and resolves an effective thickness per row and interval.
 - Schema: optional `FloorplanData.exteriorWallThickness` (absent = `wallThickness`), validated
   positive, with the version bump and an identity transform registered in the migration registry.
   `buildRoomWalls` and `roomCollisionPieces` consume it; with it absent they take the legacy path.
-- Editor: an inspector field beside the plan wall settings and a `setExteriorWallThickness`
-  command (precedent: `setWallThickness`, bounds 0.05 to 0.6), one undo step.
-- Fixture: `demo/demo-townhouse.json` adopts the field and its goldens are re-recorded
-  deliberately. Corner joins at a thickness change are out of scope.
+- Editor: an inspector field and a `setExteriorWallThickness` command (precedent:
+  `setWallThickness`, bounds 0.05 to 0.6), one undo step.
+- Fixture: `demo/demo-townhouse.json` adopts the field; its goldens are re-recorded deliberately.
+- Out of scope: corner joins at a thickness change, and frame depth: `adaptScene` takes the global
+  `wallThickness`, so frames in a thicker exterior wall keep the interior depth until frames move to
+  `src/geom` (spec 7.3).
 
 **Acceptance criteria sketch.**
 
@@ -468,23 +471,20 @@ change stay open work, as does the trapezoid merge for a shared sloped wall.
 
 **Size.** size:M, plus an optional size:S if the predicate extraction is split off.
 
-**Blocked by.** #178 (it owns the inspector and `src/editor`, and its batch-1 ownership rules keep
-`src/geom` and the adapter frozen, spec section 10); the owner accepting this record. Sequenced
-against #151 for the schema version (3.6).
+**Blocked by.** #178 (it owns the inspector and `src/editor`; batch 1 keeps `src/geom` and the
+adapter frozen, spec section 10) and the owner accepting this record. Sequenced against #151 (3.6).
 
 ## 8. Batch 2 implications
 
-- **#151 and #127.** #151 proceeds under any option, applying the flip rule of 3.4 and taking the
-  next free schema version (3.6). #127 order: the section 7 package, sloped walls, then per-side
-  materials (9.1); ceiling toggles are independent and curved walls are not assessed.
-- **Wall-face split (spec section 7.3).** The face split and the skirting boards "along every
-  interior wall base" both need the classification of 3.2. Build the derived graph once, in the
-  section 7 package, and order it before the face-split and trim packages.
+- **#151 and #127.** #151 proceeds under any option, with the flip rule of 3.4 and the next free
+  schema version (3.6). #127 order: the section 7 package, sloped walls, then per-side materials
+  (9.1); ceiling toggles are independent and curved walls are not assessed.
+- **Wall-face split (spec section 7.3).** The face split and the skirting boards both need the
+  classification of 3.2: build the derived graph once, in the section 7 package, ahead of them.
 
 ## 9. Issue annotations
 
-Posted on #127 and #151 word for word as below; a review that changes the recommendation edits
-both comments in the same fix round.
+Posted on #127 and #151 word for word as below; a change to this section edits both comments.
 
 ### 9.1 Annotation on #127
 
@@ -498,8 +498,11 @@ does not bind until the owner flips its status to Accepted. Under the recommende
    sloped shared wall needs the merge rule extended from boxes to trapezoids, which is its own
    package. Compiler: buildSlab gets a trapezoid slab; collision keeps the higher end (an AABB, so
    conservative); the roof validator's plate-height lookup must read the tapered height so it
-   composes with RoofSpec leans; describeWallPrism in the viewer adapter assumes a box, so sloped
-   slabs bypass it. Editor: an inspector field only. One package, size:M.
+   composes with RoofSpec leans; describeWallPrism in the viewer adapter checks only the vertex
+   count, so a trapezoid passes it and would be re-emitted as a box if trimmed, and a null return
+   leaves every buffer unmerged (the #45 z-fighting on all shared walls). Sloped slabs must
+   therefore be filtered out of the input of resolveCoplanarWallOverlaps, or the merge must learn
+   trapezoids. Editor: an inspector field only. One package, size:M.
 
 2. Per-side wall materials and baseboards. A faces row on the segment: room is the face toward the
    row's own room; outside is read only on exterior intervals, which are derived, never stored.
@@ -537,10 +540,9 @@ Two requirements follow from the two-row shared-door convention.
 
 ## 10. References
 
-- Code at 91c948e: the files named in section 1.1; absent at the base commit and introduced by
-  #178: `src/editor/canvasEngine.ts`, `src/editor/engine.ts`, `src/app/`.
-- Design: the redesign spec; the #69 design comment; `docs/schema.md` (v1 only; the v2 shape is in
-  `src/shared/schema/types.ts`).
+- Code at 91c948e: the files named in section 1.1; introduced by #178 and absent at the base
+  commit: `src/editor/canvasEngine.ts`, `src/editor/engine.ts`, `src/app/`.
+- Design: the redesign spec; the #69 design comment; `docs/schema.md` (v1 only).
 - Research, under `docs/research/competitor-scan-2026-10/`: `README.md`,
   `round2/sh3d/06d-schema-gap-table.md`, `round2/sh3d/03c-room-detection.md`,
   `round2/sh3d/03d-wall-editing.md`, `round2/3dhp/03c-wall-geometry.md`.

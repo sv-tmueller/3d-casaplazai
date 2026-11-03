@@ -31,9 +31,12 @@ the old record's status changes to `Superseded by NNNN` in the same pull
 request. The orchestration agents read this folder before planning or
 reviewing work.
 
-To accept a record, the owner edits its status line to
-`Accepted (YYYY-MM-DD, owner)` in the pull request that introduces it.
-Merging without that edit leaves the record Proposed.
+The status line in the record itself is authoritative; the index row below
+only mirrors it. To accept a record, the owner edits its status line to
+`Accepted (YYYY-MM-DD, owner)` and the record's index row to match, in the
+same edit, in the pull request that introduces it. Supersession updates both
+in the same way. Merging without the edit leaves the record Proposed. If the
+two ever disagree, the record's status line wins and the index row is a bug.
 
 ## Template
 
@@ -68,4 +71,4 @@ the evidence was read at. Line numbers rot on the first refactor.
 - Schema contract: [`docs/schema.md`](../schema.md). It still describes v1;
   the v2 shape lives in `src/shared/schema/types.ts`.
 - The v2 schema decisions (floors, stairs, roofs; derived values never
-  stored): the design comment on issue #69.
+  stored): [the design comment on issue #69](https://github.com/sv-tmueller/3d-casaplazai/issues/69#issuecomment-6260107182).
