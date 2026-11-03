@@ -63,7 +63,7 @@ the evidence was read at. Line numbers rot on the first refactor.
 
 | ADR | Title | Status |
 | --- | --- | --- |
-| [0001](0001-wall-model.md) | Wall model: room-first versus wall-first | Proposed |
+| [0001](0001-wall-model.md) | Wall model: room-first versus wall-first | Accepted (2026-11-03, owner) |
 
 ## Standing rules elsewhere
 

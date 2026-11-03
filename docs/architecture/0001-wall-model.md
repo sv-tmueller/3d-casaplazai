@@ -1,6 +1,6 @@
 # 0001. Wall model: room-first versus wall-first
 
-Status: Proposed
+Status: Accepted (2026-11-03, owner)
 Date: 2026-11-03
 Deciders: project owner
 Base commit: 91c948e (main)
